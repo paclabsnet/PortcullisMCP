@@ -1,0 +1,30 @@
+keep:
+  endpoint: "https://portcullis.internal.example.com"
+  auth:
+    type: "mtls"          # or "bearer"
+    cert: "~/.portcullis/gate.crt"
+    key:  "~/.portcullis/gate.key"
+    # token: ""           # used when type is "bearer"
+
+identity:
+  source: "oidc"          # or "os" (testing/evaluation only)
+  oidc:
+    token_file: "~/.portcullis/oidc-token"  # refreshed by enterprise SSO tooling
+
+sandbox:
+  directory: "~/.portcullis/sandbox"
+
+protected_paths:
+  - "~/.ssh"
+  - "~/.portcullis"
+  - "/etc"
+
+management_api:
+  port: 7777              # localhost only
+  # shared_secret: ""    # optional; leave empty to disable auth on management API
+
+token_store: "~/.portcullis/tokens.json"
+
+log_batching:
+  flush_interval_seconds: 30  # seconds between sending logs to Keep (default: 30)
+  max_batch_size: 100         # max entries per batch (default: 100)

@@ -1,0 +1,44 @@
+listen:
+  address: "0.0.0.0:8443"
+  tls:
+    cert: "/etc/portcullis/keep.crt"
+    key:  "/etc/portcullis/keep.key"
+    client_ca: "/etc/portcullis/client-ca.crt"   # for mTLS gate auth; omit to use bearer only
+
+pdp:
+  type: "opa"
+  endpoint: "http://opa.internal.example.com:8181/v1/data/portcullis/decision"
+
+backends:
+  filesystem:
+    type: "stdio"
+    command: "npx"
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"]
+  github:
+    type: "stdio"
+    command: "npx"
+    args: ["-y", "@modelcontextprotocol/server-github"]
+    env:
+      GITHUB_TOKEN: "${GITHUB_TOKEN}"
+
+escalation:
+  workflow:
+    type: "servicenow"    # or "webhook"
+    servicenow:
+      instance: "example.service-now.com"
+      credential_env: "SNOW_CREDENTIALS"
+    # webhook:
+    #   url: "https://hooks.internal.example.com/portcullis"
+    #   headers:
+    #     Authorization: "Bearer ${WEBHOOK_TOKEN}"
+
+decision_log:
+  enabled: true
+  buffer_size: 10000           # channel buffer size (default: 10000)
+  flush_interval: 5            # seconds between flushes (default: 5)
+  max_batch_size: 1000         # max entries per batch (default: 1000) 
+  console: false               # also log to console (default: false)
+  url: "https://siem.internal.example.com/api/v1/logs"
+  headers:
+    Authorization: "Bearer ${SIEM_API_TOKEN}"
+    X-Source: "portcullis-keep"

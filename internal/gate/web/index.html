@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Portcullis Gate</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #f5f5f5;
+      color: #1a1a1a;
+      padding: 2rem;
+      max-width: 800px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      font-size: 1.4rem;
+      font-weight: 600;
+      margin-bottom: 0.25rem;
+    }
+    .subtitle { font-size: 0.875rem; color: #666; margin-bottom: 2rem; }
+
+    section {
+      background: #fff;
+      border: 1px solid #e0e0e0;
+      border-radius: 8px;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+    section h2 {
+      font-size: 1rem;
+      font-weight: 600;
+      margin-bottom: 1rem;
+    }
+
+    /* Token list */
+    #token-list { list-style: none; }
+    #token-list li {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      padding: 0.6rem 0;
+      border-bottom: 1px solid #f0f0f0;
+    }
+    #token-list li:last-child { border-bottom: none; }
+    .token-meta { flex: 1; min-width: 0; }
+    .token-id   { font-family: monospace; font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .token-by   { font-size: 0.8rem; color: #888; margin-top: 0.1rem; }
+    .empty      { color: #999; font-size: 0.9rem; padding: 0.5rem 0; }
+
+    /* Shared secret field */
+    #secret-row {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-bottom: 1.25rem;
+    }
+    #secret-row label { font-size: 0.875rem; color: #555; white-space: nowrap; }
+    #secret-row input {
+      flex: 1;
+      padding: 0.4rem 0.6rem;
+      border: 1px solid #ccc;
+      border-radius: 5px;
+      font-size: 0.875rem;
+    }
+
+    /* Add token form */
+    textarea {
+      width: 100%;
+      height: 110px;
+      font-family: monospace;
+      font-size: 0.8rem;
+      padding: 0.6rem;
+      border: 1px solid #ccc;
+      border-radius: 5px;
+      resize: vertical;
+    }
+    textarea:focus, input:focus { outline: 2px solid #0066cc; outline-offset: 1px; border-color: transparent; }
+
+    .actions { display: flex; gap: 0.75rem; margin-top: 0.75rem; align-items: center; }
+
+    button {
+      padding: 0.45rem 1rem;
+      border: none;
+      border-radius: 5px;
+      font-size: 0.875rem;
+      cursor: pointer;
+      font-weight: 500;
+    }
+    .btn-primary   { background: #0066cc; color: #fff; }
+    .btn-primary:hover { background: #0052a3; }
+    .btn-danger    { background: transparent; border: 1px solid #cc3300; color: #cc3300; padding: 0.3rem 0.6rem; font-size: 0.8rem; }
+    .btn-danger:hover  { background: #cc3300; color: #fff; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .msg {
+      font-size: 0.875rem;
+      padding: 0.5rem 0.75rem;
+      border-radius: 5px;
+      display: none;
+    }
+    .msg.ok    { background: #e6f4ea; color: #1e7e34; display: block; }
+    .msg.error { background: #fce8e6; color: #c5221f; display: block; }
+  </style>
+</head>
+<body>
+
+<h1>Portcullis Gate</h1>
+<p class="subtitle">Manage escalation tokens for this session.</p>
+
+<section>
+  <h2>API Authentication</h2>
+  <div id="secret-row">
+    <label for="secret">Shared secret (if required):</label>
+    <input type="password" id="secret" placeholder="leave blank if not configured" autocomplete="off">
+  </div>
+</section>
+
+<section>
+  <h2>Active Tokens</h2>
+  <ul id="token-list"><li class="empty">Loading…</li></ul>
+</section>
+
+<section>
+  <h2>Add Token</h2>
+  <textarea id="jwt-input" placeholder="Paste the JWT you received from your approver here…" spellcheck="false"></textarea>
+  <div class="actions">
+    <button class="btn-primary" id="add-btn" onclick="addToken()">Add Token</button>
+    <span class="msg" id="add-msg"></span>
+  </div>
+</section>
+
+<script>
+  const BASE = window.location.origin; // http://localhost:7777
+
+  function headers() {
+    const h = { 'Content-Type': 'application/json' };
+    const s = document.getElementById('secret').value.trim();
+    if (s) h['Authorization'] = 'Bearer ' + s;
+    return h;
+  }
+
+  async function loadTokens() {
+    const list = document.getElementById('token-list');
+    try {
+      const r = await fetch(BASE + '/tokens', { headers: headers() });
+      if (!r.ok) throw new Error(await errorText(r));
+      const tokens = await r.json();
+      if (!tokens || tokens.length === 0) {
+        list.innerHTML = '<li class="empty">No active tokens.</li>';
+        return;
+      }
+      list.innerHTML = tokens.map(t => `
+        <li>
+          <div class="token-meta">
+            <div class="token-id" title="${esc(t.token_id)}">${esc(t.token_id)}</div>
+            ${t.granted_by ? `<div class="token-by">Granted by ${esc(t.granted_by)}</div>` : ''}
+          </div>
+          <button class="btn-danger" onclick="deleteToken('${esc(t.token_id)}')">Remove</button>
+        </li>`).join('');
+    } catch (e) {
+      list.innerHTML = `<li class="empty" style="color:#c5221f">${esc(e.message)}</li>`;
+    }
+  }
+
+  async function addToken() {
+    const btn = document.getElementById('add-btn');
+    const msg = document.getElementById('add-msg');
+    const jwt = document.getElementById('jwt-input').value.trim();
+    msg.className = 'msg';
+
+    if (!jwt) { showMsg(msg, 'error', 'Paste a JWT first.'); return; }
+
+    btn.disabled = true;
+    try {
+      const r = await fetch(BASE + '/tokens', {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify({ token: jwt }),
+      });
+      if (!r.ok) throw new Error(await errorText(r));
+      const t = await r.json();
+      document.getElementById('jwt-input').value = '';
+      showMsg(msg, 'ok', `Token ${t.token_id} added.`);
+      await loadTokens();
+    } catch (e) {
+      showMsg(msg, 'error', e.message);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function deleteToken(id) {
+    try {
+      const r = await fetch(BASE + '/tokens/' + encodeURIComponent(id), {
+        method: 'DELETE',
+        headers: headers(),
+      });
+      if (!r.ok) throw new Error(await errorText(r));
+      await loadTokens();
+    } catch (e) {
+      alert('Remove failed: ' + e.message);
+    }
+  }
+
+  async function errorText(r) {
+    try { return (await r.json()).error || `HTTP ${r.status}`; }
+    catch { return `HTTP ${r.status}`; }
+  }
+
+  function showMsg(el, type, text) {
+    el.textContent = text;
+    el.className = 'msg ' + type;
+    setTimeout(() => { el.className = 'msg'; }, 4000);
+  }
+
+  function esc(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  // Reload token list when secret field changes (user may have just entered it).
+  document.getElementById('secret').addEventListener('change', loadTokens);
+
+  loadTokens();
+</script>
+</body>
+</html>
