@@ -133,6 +133,13 @@ func buildBackendTransport(cfg BackendConfig) (mcp.Transport, error) {
 			cmd.Env = append(cmd.Env, k+"="+v)
 		}
 		return &mcp.CommandTransport{Command: cmd}, nil
+	case "http":
+		if cfg.URL == "" {
+			return nil, fmt.Errorf("http backend requires a URL")
+		}
+		return &mcp.SSEClientTransport{
+			Endpoint: cfg.URL,
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported backend type %q", cfg.Type)
 	}

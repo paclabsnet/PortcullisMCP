@@ -238,13 +238,13 @@ func (g *Gate) logWorker() {
 	defer g.logWg.Done()
 
 	flushInterval := 30 * time.Second // default
-	if g.cfg.LogBatching.FlushIntervalSeconds > 0 {
-		flushInterval = time.Duration(g.cfg.LogBatching.FlushIntervalSeconds) * time.Second
+	if g.cfg.DecisionLogs.FlushInterval > 0 {
+		flushInterval = time.Duration(g.cfg.DecisionLogs.FlushInterval) * time.Second
 	}
 
 	maxBatchSize := 100 // default
-	if g.cfg.LogBatching.MaxBatchSize > 0 {
-		maxBatchSize = g.cfg.LogBatching.MaxBatchSize
+	if g.cfg.DecisionLogs.MaxBatchSize > 0 {
+		maxBatchSize = g.cfg.DecisionLogs.MaxBatchSize
 	}
 
 	ticker := time.NewTicker(flushInterval)

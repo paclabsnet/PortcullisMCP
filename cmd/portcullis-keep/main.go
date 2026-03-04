@@ -43,6 +43,12 @@ func loadConfig(path string) (keep.Config, error) {
 	if err != nil {
 		return keep.Config{}, err
 	}
+	// Expand environment variables in the YAML
+	data = expandEnvVars(data)
 	var cfg keep.Config
 	return cfg, yaml.Unmarshal(data, &cfg)
+}
+
+func expandEnvVars(data []byte) []byte {
+	return []byte(os.Expand(string(data), os.Getenv))
 }

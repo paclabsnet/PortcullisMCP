@@ -65,15 +65,15 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("POST /tools", s.handleListTools)
 	mux.HandleFunc("POST /log", s.handleLog)
 
-	tlsCfg, err := buildServerTLS(s.cfg.Listen.TLS)
-	if err != nil {
-		return fmt.Errorf("build tls config: %w", err)
+	// Wrap with authentication middleware if bearer token is configured
+	var handler http.Handler = mux
+	if s.cfg.Listen.Auth.BearerToken != "" {
+		handler = s.authMiddleware(mux)
 	}
 
 	srv := &http.Server{
-		Addr:      s.cfg.Listen.Address,
-		Handler:   mux,
-		TLSConfig: tlsCfg,
+		Addr:    s.cfg.Listen.Address,
+		Handler: handler,
 	}
 
 	go func() {
@@ -82,8 +82,21 @@ func (s *Server) Run(ctx context.Context) error {
 		_ = srv.Shutdown(context.Background())
 	}()
 
-	slog.Info("portcullis-keep listening", "addr", s.cfg.Listen.Address)
-	return srv.ListenAndServeTLS("", "")
+	// Check if TLS is configured
+	useTLS := s.cfg.Listen.TLS.Cert != "" && s.cfg.Listen.TLS.Key != ""
+
+	if useTLS {
+		tlsCfg, err := buildServerTLS(s.cfg.Listen.TLS)
+		if err != nil {
+			return fmt.Errorf("build tls config: %w", err)
+		}
+		srv.TLSConfig = tlsCfg
+		slog.Info("portcullis-keep listening (HTTPS)", "addr", s.cfg.Listen.Address)
+		return srv.ListenAndServeTLS("", "")
+	} else {
+		slog.Warn("portcullis-keep listening (HTTP - no TLS)", "addr", s.cfg.Listen.Address)
+		return srv.ListenAndServe()
+	}
 }
 
 // handleCall processes an enriched MCP tool call request from gate.
@@ -222,4 +235,24 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+// authMiddleware validates the bearer token if configured.
+func (s *Server) authMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		expected := "Bearer " + s.cfg.Listen.Auth.BearerToken
+
+		if auth != expected {
+			slog.Warn("unauthorized request",
+				"remote_addr", r.RemoteAddr,
+				"path", r.URL.Path,
+				"has_auth", auth != "",
+			)
+			writeError(w, http.StatusUnauthorized, "invalid or missing bearer token")
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }

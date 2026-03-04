@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  opa:
+    image: openpolicyagent/opa:latest
+    container_name: portcullis-opa
+    ports:
+      - "8181:8181"
+    volumes:
+      - ./policies:/policies
+    command:
+      - "run"
+      - "--server"
+      - "--addr=0.0.0.0:8181"
+      - "--log-level=debug"
+      - "/policies"
+    networks:
+      - portcullis
+
+networks:
+  portcullis:
+    driver: bridge

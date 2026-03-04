@@ -47,8 +47,14 @@ func loadConfig(path string) (gate.Config, error) {
 	if err != nil {
 		return gate.Config{}, err
 	}
+	// Expand environment variables in the YAML
+	data = expandEnvVarsInYAML(data)
 	var cfg gate.Config
 	return cfg, yaml.Unmarshal(data, &cfg)
+}
+
+func expandEnvVarsInYAML(data []byte) []byte {
+	return []byte(os.Expand(string(data), os.Getenv))
 }
 
 func expandHome(path string) (string, error) {

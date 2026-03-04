@@ -29,6 +29,8 @@ go.work
 /cmd/portcullis-gate/portcullis-gate.exe
 /cmd/portcullis-keep/portcullis-keep
 /cmd/portcullis-keep/portcullis-keep.exe
+bin/
+build/
 
 # Configuration files (may contain secrets)
 gate.yaml
@@ -48,6 +50,7 @@ keep.yaml
 # IDE and Editor directories
 .vscode/
 .idea/
+.claude/
 *.swp
 *.swo
 *~

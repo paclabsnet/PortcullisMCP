@@ -1,0 +1,31 @@
+listen:
+  address: "127.0.0.1:8080"
+  # TLS disabled for local testing - uncomment to enable
+  # tls:
+  #   cert: "/etc/portcullis/keep.crt"
+  #   key:  "/etc/portcullis/keep.key"
+  #   client_ca: "/etc/portcullis/client-ca.crt"
+  auth:
+    bearer_token: "dev-secret-token"  # shared secret for local testing
+
+pdp:
+  type: "opa"
+  endpoint: "http://localhost:8181/v1/data/portcullis/decision"
+
+backends:
+  # HTTP MCP backend for demo - run the mock server with:
+  #   go run ./examples/mock-enterprise-api
+  mock-enterprise-api:
+    type: "http"
+    url: "http://localhost:3000/mcp"
+
+escalation:
+  workflow:
+    type: "noop"  # No escalation for local testing
+
+decision_log:
+  enabled: true
+  console: true  # Log to console for development
+  buffer_size: 100
+  flush_interval: 5
+  max_batch_size: 50

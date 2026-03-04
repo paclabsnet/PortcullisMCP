@@ -6,9 +6,9 @@ type Config struct {
 	Identity       IdentityConfig   `yaml:"identity"`
 	Sandbox        SandboxConfig    `yaml:"sandbox"`
 	ProtectedPaths []string         `yaml:"protected_paths"`
-	ManagementAPI  MgmtAPIConfig    `yaml:"management_api"`
-	TokenStore     string           `yaml:"token_store"`
-	LogBatching    LogBatchingConfig `yaml:"log_batching"`
+	ManagementAPI  MgmtAPIConfig          `yaml:"management_api"`
+	TokenStore     string                `yaml:"token_store"`
+	DecisionLogs   DecisionLogBatchConfig `yaml:"decision_logs"`
 }
 
 type KeepConfig struct {
@@ -41,7 +41,7 @@ type MgmtAPIConfig struct {
 	SharedSecret string `yaml:"shared_secret"` // optional; empty = no auth
 }
 
-type LogBatchingConfig struct {
-	FlushIntervalSeconds int `yaml:"flush_interval_seconds"` // seconds between flushes (default: 30)
-	MaxBatchSize         int `yaml:"max_batch_size"`         // max entries per batch (default: 100)
+type DecisionLogBatchConfig struct {
+	FlushInterval int `yaml:"flush_interval"` // seconds between flushes (default: 30)
+	MaxBatchSize  int `yaml:"max_batch_size"` // max entries per batch (default: 100)
 }

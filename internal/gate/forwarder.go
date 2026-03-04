@@ -107,6 +107,9 @@ func (f *Forwarder) post(ctx context.Context, path string, body, out any) error 
 func buildTransport(auth KeepAuth) (http.RoundTripper, error) {
 	base := http.DefaultTransport.(*http.Transport).Clone()
 	if auth.Type == "mtls" {
+		if auth.Cert == "" || auth.Key == "" {
+			return nil, fmt.Errorf("mtls auth requires cert and key")
+		}
 		cert, err := tls.LoadX509KeyPair(auth.Cert, auth.Key)
 		if err != nil {
 			return nil, fmt.Errorf("load mtls keypair: %w", err)
@@ -115,5 +118,6 @@ func buildTransport(auth KeepAuth) (http.RoundTripper, error) {
 			Certificates: []tls.Certificate{cert},
 		}
 	}
+	// If auth.Type is not "mtls" or is empty, use default transport (plain HTTP or HTTPS)
 	return base, nil
 }

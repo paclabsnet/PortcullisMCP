@@ -87,3 +87,36 @@ func TestRouter_ListAllTools_EmptyBackends(t *testing.T) {
 		t.Errorf("expected empty tools list, got %d tools", len(tools))
 	}
 }
+
+func TestRouter_BuildBackendTransport_HTTP(t *testing.T) {
+	cfg := BackendConfig{
+		Type: "http",
+		URL:  "https://mcp-server.example.com/mcp",
+	}
+
+	transport, err := buildBackendTransport(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if transport == nil {
+		t.Fatal("expected non-nil transport")
+	}
+}
+
+func TestRouter_BuildBackendTransport_HTTPMissingURL(t *testing.T) {
+	cfg := BackendConfig{
+		Type: "http",
+		// URL is missing
+	}
+
+	_, err := buildBackendTransport(cfg)
+	if err == nil {
+		t.Fatal("expected error for http backend without URL, got nil")
+	}
+
+	expectedMsg := "requires a URL"
+	if err.Error()[len(err.Error())-len(expectedMsg):] != expectedMsg {
+		t.Errorf("error message = %q, want suffix %q", err.Error(), expectedMsg)
+	}
+}

@@ -25,6 +25,6 @@ management_api:
 
 token_store: "~/.portcullis/tokens.json"
 
-log_batching:
-  flush_interval_seconds: 30  # seconds between sending logs to Keep (default: 30)
-  max_batch_size: 100         # max entries per batch (default: 100)
+decision_logs:
+  flush_interval: 30  # seconds between sending logs to Keep (default: 30)
+  max_batch_size: 100 # max entries per batch (default: 100)

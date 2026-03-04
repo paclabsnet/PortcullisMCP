@@ -1,0 +1,24 @@
+keep:
+  endpoint: "http://localhost:8080"
+  auth:
+    type: "bearer"
+    token: "dev-secret-token"  # must match keep's bearer_token
+
+identity:
+  source: "os"  # Use OS username for local testing
+
+sandbox:
+  directory: "."  # Current directory as sandbox
+
+protected_paths:
+  - ".git"
+  - ".portcullis"
+
+management_api:
+  port: 7777
+
+token_store: ".portcullis/tokens.json"
+
+decision_logs:
+  flush_interval: 30  # seconds between sending logs to Keep (default: 30)
+  max_batch_size: 100

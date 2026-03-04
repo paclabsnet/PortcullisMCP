@@ -573,8 +573,8 @@ pdp:
 Portcullis-keep will:
 1. Wrap the `EnrichedMCPRequest` in `{"input": {...}}`
 2. POST to the OPA endpoint
-3. Parse the `result.decision`, `result.reason`, and `result.audit_id`
-4. Execute the appropriate action (allow → route to backend, deny → reject, escalate → submit to workflow)
+3. Parse the `result.decision` and `result.reason`
+4. Execute the appropriate action (allow → route to MCP server, deny → send rejection notice back to Portcullis-gate, escalate → submit request to workflow and send escalation notice back to Portcullis-gate)
 
 ---
 
@@ -582,13 +582,13 @@ Portcullis-keep will:
 
 1. **Default Deny**: Always start with `default decision := {"decision": "deny", ...}`
 2. **Explicit Allow**: Write specific rules for allowed operations
-3. **Escalation for Uncertainty**: When in doubt, escalate rather than deny
-4. **Audit Everything**: Always include descriptive reasons and audit IDs
+3. **Escalation for Uncertainty**: There should be clear, well-defined scenarios for when escalation is allowed
+4. **Audit Everything**: Always include descriptive reasons for deny and escalate
 5. **Test Thoroughly**: Use `opa test` to validate your policies
 6. **Group-Based**: Leverage `userIdentity.groups` for role-based access
 7. **Context Matters**: Use `serverName`, `toolName`, and `arguments` together
 8. **Validate Tokens**: In production, validate escalation token signatures and expiration
-
+9. **Traceability**: Portcullis uses `requestID` for audit trails, so you don't need to generate separate audit IDs
 ---
 
 ## Additional Resources
@@ -597,9 +597,3 @@ Portcullis-keep will:
 - [Rego Language Guide](https://www.openpolicyagent.org/docs/latest/policy-language/)
 - [OPA Playground](https://play.openpolicyagent.org/) - Test policies online
 - [OPA Best Practices](https://www.openpolicyagent.org/docs/latest/policy-performance/)
-Descriptive Reasons**: Always include clear, actionable reasons in your decisions
-5. **Test Thoroughly**: Use `opa test` to validate your policies
-6. **Group-Based**: Leverage `userIdentity.groups` for role-based access
-7. **Context Matters**: Use `serverName`, `toolName`, and `arguments` together
-8. **Validate Tokens**: In production, validate escalation token signatures and expiration
-9. **Traceability**: Portcullis uses `requestID` for audit trails, so you don't need to generate separate audit IDs

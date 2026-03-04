@@ -10,14 +10,19 @@ type Config struct {
 }
 
 type ListenConfig struct {
-	Address string    `yaml:"address"`
-	TLS     TLSConfig `yaml:"tls"`
+	Address string     `yaml:"address"`
+	TLS     TLSConfig  `yaml:"tls"`
+	Auth    AuthConfig `yaml:"auth"`
 }
 
 type TLSConfig struct {
 	Cert     string `yaml:"cert"`
 	Key      string `yaml:"key"`
 	ClientCA string `yaml:"client_ca"` // non-empty = require mTLS from gate
+}
+
+type AuthConfig struct {
+	BearerToken string `yaml:"bearer_token"` // optional shared secret for bearer auth
 }
 
 type PDPConfig struct {
