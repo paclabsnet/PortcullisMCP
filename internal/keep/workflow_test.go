@@ -51,11 +51,11 @@ func TestServiceNowHandler_Submit(t *testing.T) {
 	defer os.Unsetenv("TEST_SNOW_CREDS")
 
 	tests := []struct {
-		name           string
-		statusCode     int
-		responseBody   map[string]any
-		expectError    bool
-		expectedReqID  string
+		name          string
+		statusCode    int
+		responseBody  map[string]any
+		expectError   bool
+		expectedReqID string
 	}{
 		{
 			name:       "successful creation",

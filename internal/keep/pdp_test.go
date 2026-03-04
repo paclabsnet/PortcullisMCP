@@ -12,12 +12,12 @@ import (
 
 func TestOPAClient_Evaluate(t *testing.T) {
 	tests := []struct {
-		name           string
-		opaResponse    map[string]any
-		opaStatusCode  int
+		name             string
+		opaResponse      map[string]any
+		opaStatusCode    int
 		expectedDecision string
-		expectedReason string
-		expectError    bool
+		expectedReason   string
+		expectError      bool
 	}{
 		{
 			name: "allow decision",
@@ -25,7 +25,6 @@ func TestOPAClient_Evaluate(t *testing.T) {
 				"result": map[string]any{
 					"decision": "allow",
 					"reason":   "user has permissions",
-					"audit_id": "audit-123",
 				},
 			},
 			opaStatusCode:    http.StatusOK,
@@ -38,7 +37,6 @@ func TestOPAClient_Evaluate(t *testing.T) {
 				"result": map[string]any{
 					"decision": "deny",
 					"reason":   "insufficient permissions",
-					"audit_id": "audit-456",
 				},
 			},
 			opaStatusCode:    http.StatusOK,
@@ -51,7 +49,6 @@ func TestOPAClient_Evaluate(t *testing.T) {
 				"result": map[string]any{
 					"decision": "escalate",
 					"reason":   "requires manager approval",
-					"audit_id": "audit-789",
 				},
 			},
 			opaStatusCode:    http.StatusOK,
@@ -68,10 +65,10 @@ func TestOPAClient_Evaluate(t *testing.T) {
 			expectedReason:   "",
 		},
 		{
-			name:           "opa server error",
-			opaResponse:    nil,
-			opaStatusCode:  http.StatusInternalServerError,
-			expectError:    true,
+			name:          "opa server error",
+			opaResponse:   nil,
+			opaStatusCode: http.StatusInternalServerError,
+			expectError:   true,
 		},
 	}
 

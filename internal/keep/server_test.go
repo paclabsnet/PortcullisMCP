@@ -16,7 +16,6 @@ import (
 type mockPDP struct {
 	decision string
 	reason   string
-	auditID  string
 	err      error
 }
 
@@ -27,7 +26,6 @@ func (m *mockPDP) Evaluate(ctx context.Context, req shared.EnrichedMCPRequest) (
 	return shared.PDPResponse{
 		Decision: m.decision,
 		Reason:   m.reason,
-		AuditID:  m.auditID,
 	}, nil
 }
 
@@ -70,7 +68,6 @@ func TestServer_HandleCall_Allow(t *testing.T) {
 	pdp := &mockPDP{
 		decision: "allow",
 		reason:   "user has permission",
-		auditID:  "audit-123",
 	}
 
 	router := &mockRouter{
@@ -124,7 +121,6 @@ func TestServer_HandleCall_Deny(t *testing.T) {
 	pdp := &mockPDP{
 		decision: "deny",
 		reason:   "insufficient permissions",
-		auditID:  "audit-456",
 	}
 
 	srv := &Server{
@@ -174,7 +170,6 @@ func TestServer_HandleCall_Escalate(t *testing.T) {
 	pdp := &mockPDP{
 		decision: "escalate",
 		reason:   "requires manager approval",
-		auditID:  "audit-789",
 	}
 
 	workflow := &mockWorkflow{

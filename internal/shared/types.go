@@ -6,7 +6,7 @@ import "errors"
 // SourceType indicates how the identity was obtained; "os" is provided for
 // testing/evaluation only — portcullis-keep may be configured to reject it.
 type UserIdentity struct {
-	UserID      string   // stable enterprise identifier (UPN, email, etc.)
+	UserID      string // stable enterprise identifier (UPN, email, etc.)
 	DisplayName string
 	Groups      []string // for PDP group-based policy
 	SourceType  string   // "oidc" | "os"
@@ -37,7 +37,6 @@ type EnrichedMCPRequest struct {
 type PDPResponse struct {
 	Decision string // "allow" | "deny" | "escalate"
 	Reason   string
-	AuditID  string
 }
 
 // Sentinel errors for known failure modes.

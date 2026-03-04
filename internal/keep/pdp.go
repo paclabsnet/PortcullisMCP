@@ -43,7 +43,6 @@ type opaResponse struct {
 	Result struct {
 		Decision string `json:"decision"`
 		Reason   string `json:"reason"`
-		AuditID  string `json:"audit_id"`
 	} `json:"result"`
 }
 
@@ -84,6 +83,5 @@ func (c *opaClient) Evaluate(ctx context.Context, req shared.EnrichedMCPRequest)
 	return shared.PDPResponse{
 		Decision: decision,
 		Reason:   opaResp.Result.Reason,
-		AuditID:  opaResp.Result.AuditID,
 	}, nil
 }

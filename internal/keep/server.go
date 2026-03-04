@@ -26,11 +26,11 @@ type MCPRouter interface {
 // PDP, and either routes the call to a backend MCP server, returns a deny, or
 // submits an escalation to the enterprise workflow system.
 type Server struct {
-	cfg          Config
-	pdp          PolicyDecisionPoint
-	router       MCPRouter
-	workflow     WorkflowHandler
-	decisionLog  *DecisionLogger
+	cfg         Config
+	pdp         PolicyDecisionPoint
+	router      MCPRouter
+	workflow    WorkflowHandler
+	decisionLog *DecisionLogger
 	// pending holds in-progress escalation request IDs. The actual approval
 	// flow is async and out-of-band; this map is informational only.
 	pendingMu sync.RWMutex
@@ -106,7 +106,6 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		"tool", req.ToolName,
 		"user", req.UserIdentity.UserID,
 		"request_id", req.RequestID,
-		"audit_id", pdpResp.AuditID,
 	)
 
 	// Log the decision
@@ -118,7 +117,6 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		ToolName:   req.ToolName,
 		Decision:   pdpResp.Decision,
 		Reason:     pdpResp.Reason,
-		AuditID:    pdpResp.AuditID,
 		Source:     "pdp",
 		Arguments:  req.Arguments,
 	})
