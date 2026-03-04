@@ -1,0 +1,128 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Go workspace file
+go.work
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Go build cache
+.cache/
+
+# Compiled binaries
+/portcullis-gate
+/portcullis-gate.exe
+/portcullis-keep
+/portcullis-keep.exe
+/cmd/portcullis-gate/portcullis-gate
+/cmd/portcullis-gate/portcullis-gate.exe
+/cmd/portcullis-keep/portcullis-keep
+/cmd/portcullis-keep/portcullis-keep.exe
+
+# Configuration files (may contain secrets)
+gate.yaml
+keep.yaml
+/config/gate.yaml
+/config/keep.yaml
+
+# User-specific portcullis data
+.portcullis/
+~/.portcullis/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# IDE and Editor directories
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Visual Studio Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
+# JetBrains IDEs
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# Eclipse
+.classpath
+.project
+.settings/
+
+# OS-specific files
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+.directory
+.Trash-*
+
+# Logs
+*.log
+logs/
+*.log.*
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
+*.swp
+*.swo
+
+# TLS certificates and keys (security)
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# Backup files
+*.backup
+*.old
+
+# Test coverage
+coverage.txt
+coverage.html
+coverage.out
+*.cover
+
+# Debug files
+__debug_bin
+
+# Air live reload
+tmp/
