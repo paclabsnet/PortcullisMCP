@@ -15,6 +15,7 @@
 package portcullis.tabular
 
 import rego.v1
+import data.portcullis.util as util
 
 # ============================================================================
 # DEFAULT — fail-safe deny
@@ -23,7 +24,7 @@ import rego.v1
 default decision := {
 	"decision":   "deny",
 	"reason":     "no policy matched, default deny",
-	"request_id": input.request_id,
+	"request_id": 0
 }
 
 # ============================================================================

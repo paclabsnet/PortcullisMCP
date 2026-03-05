@@ -129,3 +129,8 @@ __debug_bin
 
 # Air live reload
 tmp/
+
+
+# bundles
+bundle.tar.gz
+

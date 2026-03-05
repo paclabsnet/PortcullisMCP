@@ -23,7 +23,7 @@ import rego.v1
 default decision := {
 	"decision":   "deny",
 	"reason":     "policy processing error, default deny",
-	"request_id": input.request_id,
+	"request_id": 0
 }
 
 # ============================================================================
