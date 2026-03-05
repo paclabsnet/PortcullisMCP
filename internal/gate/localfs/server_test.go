@@ -2,6 +2,7 @@ package localfs
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -121,17 +122,28 @@ func TestReadTextFile(t *testing.T) {
 	}
 }
 
-func TestReadFile_DeprecatedAlias(t *testing.T) {
+func TestReadTextFile_HeadTailEdgeCases(t *testing.T) {
 	session, sandbox, _ := setup(t)
-	f := filepath.Join(sandbox, "data.txt")
-	if err := os.WriteFile(f, []byte("data"), 0640); err != nil {
+	f := filepath.Join(sandbox, "short.txt")
+	if err := os.WriteFile(f, []byte("a\nb\nc"), 0640); err != nil {
 		t.Fatal(err)
 	}
-	result := call(t, session, "read_file", map[string]any{"path": f})
-	assertAllowed(t, result)
-	if !strings.Contains(resultText(t, result), "data") {
-		t.Error("deprecated read_file alias should return file contents")
-	}
+
+	t.Run("head larger than file returns whole file", func(t *testing.T) {
+		result := call(t, session, "read_text_file", map[string]any{"path": f, "head": 100})
+		assertAllowed(t, result)
+		if !strings.Contains(resultText(t, result), "a") {
+			t.Error("expected file content")
+		}
+	})
+
+	t.Run("tail larger than file returns whole file", func(t *testing.T) {
+		result := call(t, session, "read_text_file", map[string]any{"path": f, "tail": 100})
+		assertAllowed(t, result)
+		if !strings.Contains(resultText(t, result), "c") {
+			t.Error("expected file content")
+		}
+	})
 }
 
 func TestReadMultipleFiles(t *testing.T) {
@@ -796,5 +808,354 @@ func TestSearchWithinFiles(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestReadMediaFile(t *testing.T) {
+	session, sandbox, outside := setup(t)
+
+	// Minimal 1x1 white PNG (valid file, not just magic bytes).
+	pngB64 := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwADhQGAWjR9awAAAABJRU5ErkJggg=="
+	pngData, _ := base64.StdEncoding.DecodeString(pngB64)
+
+	pngFile := filepath.Join(sandbox, "pixel.png")
+	if err := os.WriteFile(pngFile, pngData, 0640); err != nil {
+		t.Fatal(err)
+	}
+
+	// A tiny fake SVG (also an image type).
+	svgFile := filepath.Join(sandbox, "icon.svg")
+	if err := os.WriteFile(svgFile, []byte(`<svg xmlns="http://www.w3.org/2000/svg"/>`), 0640); err != nil {
+		t.Fatal(err)
+	}
+
+	// A fake MP3 (non-image media: returned as data URI).
+	mp3File := filepath.Join(sandbox, "sound.mp3")
+	if err := os.WriteFile(mp3File, []byte("ID3fake"), 0640); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("PNG returns ImageContent", func(t *testing.T) {
+		result := call(t, session, "read_media_file", map[string]any{"path": pngFile})
+		assertAllowed(t, result)
+		if len(result.Content) == 0 {
+			t.Fatal("expected content")
+		}
+		img, ok := result.Content[0].(*mcp.ImageContent)
+		if !ok {
+			t.Fatalf("expected *mcp.ImageContent for PNG, got %T", result.Content[0])
+		}
+		if img.MIMEType != "image/png" {
+			t.Errorf("MIMEType = %q, want image/png", img.MIMEType)
+		}
+	})
+
+	t.Run("SVG returns ImageContent", func(t *testing.T) {
+		result := call(t, session, "read_media_file", map[string]any{"path": svgFile})
+		assertAllowed(t, result)
+		img, ok := result.Content[0].(*mcp.ImageContent)
+		if !ok {
+			t.Fatalf("expected *mcp.ImageContent for SVG, got %T", result.Content[0])
+		}
+		if img.MIMEType != "image/svg+xml" {
+			t.Errorf("MIMEType = %q, want image/svg+xml", img.MIMEType)
+		}
+	})
+
+	t.Run("MP3 returns data URI text", func(t *testing.T) {
+		result := call(t, session, "read_media_file", map[string]any{"path": mp3File})
+		assertAllowed(t, result)
+		text := resultText(t, result)
+		if !strings.HasPrefix(text, "data:audio/mpeg;base64,") {
+			t.Errorf("expected data URI, got: %s", text)
+		}
+	})
+
+	t.Run("denied outside sandbox", func(t *testing.T) {
+		assertDenied(t, call(t, session, "read_media_file", map[string]any{
+			"path": filepath.Join(outside, "img.png"),
+		}))
+	})
+}
+
+func TestListDirectoryWithSizes_SortBySize(t *testing.T) {
+	session, sandbox, _ := setup(t)
+
+	// Write two files with very different sizes.
+	small := filepath.Join(sandbox, "small.txt")
+	large := filepath.Join(sandbox, "large.txt")
+	if err := os.WriteFile(small, []byte("hi"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(large, []byte(strings.Repeat("x", 10000)), 0640); err != nil {
+		t.Fatal(err)
+	}
+
+	result := call(t, session, "list_directory_with_sizes", map[string]any{
+		"path":   sandbox,
+		"sortBy": "size",
+	})
+	assertAllowed(t, result)
+	text := resultText(t, result)
+
+	largeIdx := strings.Index(text, "large.txt")
+	smallIdx := strings.Index(text, "small.txt")
+	if largeIdx == -1 || smallIdx == -1 {
+		t.Fatalf("expected both files in output, got: %s", text)
+	}
+	if largeIdx > smallIdx {
+		t.Errorf("sortBy=size: large.txt should appear before small.txt\nGot:\n%s", text)
+	}
+}
+
+func TestSearchFiles_Recursive(t *testing.T) {
+	session, sandbox, _ := setup(t)
+
+	// Create a nested structure.
+	if err := os.MkdirAll(filepath.Join(sandbox, "a", "b"), 0750); err != nil {
+		t.Fatal(err)
+	}
+	files := []string{
+		filepath.Join(sandbox, "root.go"),
+		filepath.Join(sandbox, "a", "mid.go"),
+		filepath.Join(sandbox, "a", "b", "deep.go"),
+		filepath.Join(sandbox, "a", "other.txt"),
+	}
+	for _, f := range files {
+		if err := os.WriteFile(f, []byte("x"), 0640); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("recursive **/*.go finds files at all depths", func(t *testing.T) {
+		result := call(t, session, "search_files", map[string]any{
+			"path":    sandbox,
+			"pattern": "**/*.go",
+		})
+		assertAllowed(t, result)
+		text := resultText(t, result)
+		for _, want := range []string{"root.go", "mid.go", "deep.go"} {
+			if !strings.Contains(text, want) {
+				t.Errorf("expected %q in recursive results, got:\n%s", want, text)
+			}
+		}
+		if strings.Contains(text, "other.txt") {
+			t.Error("other.txt should not match *.go pattern")
+		}
+	})
+
+	t.Run("non-recursive *.go finds only root-level files", func(t *testing.T) {
+		result := call(t, session, "search_files", map[string]any{
+			"path":    sandbox,
+			"pattern": "*.go",
+		})
+		assertAllowed(t, result)
+		text := resultText(t, result)
+		if !strings.Contains(text, "root.go") {
+			t.Errorf("expected root.go in results, got:\n%s", text)
+		}
+		if strings.Contains(text, "mid.go") || strings.Contains(text, "deep.go") {
+			t.Errorf("non-recursive search should not return files in subdirs, got:\n%s", text)
+		}
+	})
+}
+
+func TestCopyFile_SourceIsDirectory(t *testing.T) {
+	session, sandbox, _ := setup(t)
+
+	dir := filepath.Join(sandbox, "mydir")
+	if err := os.MkdirAll(dir, 0750); err != nil {
+		t.Fatal(err)
+	}
+	result := call(t, session, "copy_file", map[string]any{
+		"source":      dir,
+		"destination": filepath.Join(sandbox, "mydir-copy"),
+	})
+	assertDenied(t, result)
+	if !strings.Contains(resultText(t, result), "directory") {
+		t.Errorf("expected 'directory' in error message, got: %s", resultText(t, result))
+	}
+}
+
+func TestWriteFile_CreatesIntermediateDirs(t *testing.T) {
+	session, sandbox, _ := setup(t)
+
+	target := filepath.Join(sandbox, "a", "b", "c", "new.txt")
+	result := call(t, session, "write_file", map[string]any{"path": target, "content": "nested"})
+	assertAllowed(t, result)
+	data, err := os.ReadFile(target)
+	if err != nil || string(data) != "nested" {
+		t.Errorf("file not written at nested path: %v %q", err, data)
+	}
+}
+
+func TestGetFileInfo_Directory(t *testing.T) {
+	session, sandbox, _ := setup(t)
+
+	dir := filepath.Join(sandbox, "somedir")
+	if err := os.MkdirAll(dir, 0750); err != nil {
+		t.Fatal(err)
+	}
+	result := call(t, session, "get_file_info", map[string]any{"path": dir})
+	assertAllowed(t, result)
+	text := resultText(t, result)
+	if !strings.Contains(text, "type: directory") {
+		t.Errorf("expected 'type: directory', got: %s", text)
+	}
+}
+
+// --- unit tests for helper functions (same package, no round-trip needed) ---
+
+func TestMediaMIMEType(t *testing.T) {
+	tests := []struct {
+		ext       string
+		wantMIME  string
+		wantImage bool
+	}{
+		{"png", "image/png", true},
+		{"jpg", "image/jpeg", true},
+		{"jpeg", "image/jpeg", true},
+		{"gif", "image/gif", true},
+		{"webp", "image/webp", true},
+		{"bmp", "image/bmp", true},
+		{"svg", "image/svg+xml", true},
+		{"mp3", "audio/mpeg", false},
+		{"wav", "audio/wav", false},
+		{"ogg", "audio/ogg", false},
+		{"flac", "audio/flac", false},
+		{"xyz", "application/octet-stream", false}, // unknown → default
+		{"", "application/octet-stream", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.ext, func(t *testing.T) {
+			mime, isImage := mediaMIMEType(tt.ext)
+			if mime != tt.wantMIME {
+				t.Errorf("mediaMIMEType(%q) MIME = %q, want %q", tt.ext, mime, tt.wantMIME)
+			}
+			if isImage != tt.wantImage {
+				t.Errorf("mediaMIMEType(%q) isImage = %v, want %v", tt.ext, isImage, tt.wantImage)
+			}
+		})
+	}
+}
+
+func TestHumanSize(t *testing.T) {
+	tests := []struct {
+		bytes int64
+		want  string
+	}{
+		{0, "0 bytes"},
+		{512, "512 bytes"},
+		{1023, "1023 bytes"},
+		{1024, "1.0 KB"},
+		{2560, "2.5 KB"},
+		{1024 * 1024, "1.0 MB"},
+		{int64(1.5 * 1024 * 1024), "1.5 MB"},
+		{1024 * 1024 * 1024, "1.0 GB"},
+		{int64(2.5 * 1024 * 1024 * 1024), "2.5 GB"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			got := humanSize(tt.bytes)
+			if got != tt.want {
+				t.Errorf("humanSize(%d) = %q, want %q", tt.bytes, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsBinary(t *testing.T) {
+	tests := []struct {
+		name string
+		data []byte
+		want bool
+	}{
+		{"empty", []byte{}, false},
+		{"plain text", []byte("hello world"), false},
+		{"null byte at start", []byte{0x00, 0x01, 0x02}, true},
+		{"null byte in middle", []byte("abc\x00def"), true},
+		{"large text no nulls", []byte(strings.Repeat("a", 1024)), false},
+		{"large with null past 512", append([]byte(strings.Repeat("a", 513)), 0x00), false},
+		{"null byte within first 512 of large", append([]byte(strings.Repeat("a", 100)), append([]byte{0x00}, []byte(strings.Repeat("b", 900))...)...), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isBinary(tt.data)
+			if got != tt.want {
+				t.Errorf("isBinary(%d bytes) = %v, want %v", len(tt.data), got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMoveFile_SourceOutsideSandbox(t *testing.T) {
+	session, sandbox, outside := setup(t)
+
+	outsideFile := filepath.Join(outside, "secret.txt")
+	if err := os.WriteFile(outsideFile, []byte("secret"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	result := call(t, session, "move_file", map[string]any{
+		"source":      outsideFile,
+		"destination": filepath.Join(sandbox, "stolen.txt"),
+	})
+	assertDenied(t, result)
+	if _, err := os.Stat(filepath.Join(sandbox, "stolen.txt")); !os.IsNotExist(err) {
+		t.Error("file must not have been moved into sandbox")
+	}
+}
+
+func TestListDirectoryWithSizes_ContainsDirectories(t *testing.T) {
+	session, sandbox, _ := setup(t)
+
+	if err := os.MkdirAll(filepath.Join(sandbox, "subdir"), 0750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sandbox, "file.txt"), []byte("hello"), 0640); err != nil {
+		t.Fatal(err)
+	}
+
+	result := call(t, session, "list_directory_with_sizes", map[string]any{"path": sandbox})
+	assertAllowed(t, result)
+	text := resultText(t, result)
+	if !strings.Contains(text, "[DIR] subdir/") {
+		t.Errorf("expected [DIR] subdir/ in output, got:\n%s", text)
+	}
+	if !strings.Contains(text, "[FILE] file.txt") {
+		t.Errorf("expected [FILE] file.txt in output, got:\n%s", text)
+	}
+	// Dir count should be included in total.
+	if !strings.Contains(text, "1 dirs") {
+		t.Errorf("expected '1 dirs' in total line, got:\n%s", text)
+	}
+}
+
+func TestSearchWithinFiles_BinaryContentSkipped(t *testing.T) {
+	session, sandbox, _ := setup(t)
+
+	// A .txt file containing null bytes — not caught by extension check,
+	// so isBinary() must detect and skip it.
+	binaryTxt := filepath.Join(sandbox, "looks-like-text.txt")
+	if err := os.WriteFile(binaryTxt, []byte("some\x00binary\x00content"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	// A real text file that contains the same printable text without nulls.
+	realTxt := filepath.Join(sandbox, "real.txt")
+	if err := os.WriteFile(realTxt, []byte("some normal content"), 0640); err != nil {
+		t.Fatal(err)
+	}
+
+	result := call(t, session, "search_within_files", map[string]any{
+		"path":    sandbox,
+		"pattern": "some",
+	})
+	assertAllowed(t, result)
+	text := resultText(t, result)
+	// Binary file must be skipped; real text file must match.
+	if strings.Contains(text, "looks-like-text.txt") {
+		t.Error("binary-content file should be skipped by isBinary check")
+	}
+	if !strings.Contains(text, "real.txt") {
+		t.Errorf("real text file should match, got:\n%s", text)
 	}
 }
