@@ -41,8 +41,9 @@ type opaRequest struct {
 // opaResponse is the envelope OPA returns: {"result": <decision>}.
 type opaResponse struct {
 	Result struct {
-		Decision string `json:"decision"`
-		Reason   string `json:"reason"`
+		Decision  string `json:"decision"`
+		Reason    string `json:"reason"`
+		RequestID string `json:"request_id"` // optionally echoed by the PDP
 	} `json:"result"`
 }
 
@@ -81,7 +82,8 @@ func (c *opaClient) Evaluate(ctx context.Context, req shared.EnrichedMCPRequest)
 	}
 
 	return shared.PDPResponse{
-		Decision: decision,
-		Reason:   opaResp.Result.Reason,
+		Decision:  decision,
+		Reason:    opaResp.Result.Reason,
+		RequestID: opaResp.Result.RequestID,
 	}, nil
 }

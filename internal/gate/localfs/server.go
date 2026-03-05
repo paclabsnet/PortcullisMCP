@@ -43,12 +43,6 @@ func NewServer(sandboxDir string) (*mcp.Server, error) {
 		Description: "Read the complete contents of a file from the file system as text. Handles various text encodings and provides detailed error messages if the file cannot be read. Use this tool when you need to examine the contents of a single file. Use the 'head' parameter to read only the first N lines of a file, or the 'tail' parameter to read only the last N lines of a file. Operates on the file as text regardless of extension. Only works within allowed directories.",
 	}, s.readTextFile)
 
-	// Deprecated alias kept for backwards compatibility.
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "read_file",
-		Description: "Read the complete contents of a file as text. DEPRECATED: Use read_text_file instead.",
-	}, s.readTextFile)
-
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "read_media_file",
 		Description: "Read an image or audio file. Returns the base64 encoded data and MIME type. Only works within allowed directories.",
@@ -121,7 +115,7 @@ func NewServer(sandboxDir string) (*mcp.Server, error) {
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "list_allowed_directories",
-		Description: "Returns the list of directories that this server is allowed to access. Subdirectories within these allowed directories are also accessible. Use this to understand which directories and their nested paths are available before trying to access files.",
+		Description: "Returns the list of directories that this agent is allowed to access. Subdirectories within these allowed directories are also accessible. Use this to understand which directories and their nested paths are available before trying to access files.",
 	}, s.listAllowedDirectories)
 
 	return srv, nil
@@ -279,7 +273,7 @@ type deleteInput struct {
 
 type searchWithinFilesInput struct {
 	Path            string    `json:"path"`
-	Pattern         string    `json:"pattern"`         // text pattern to search for
+	Pattern         string    `json:"pattern"` // text pattern to search for
 	ExcludePatterns *[]string `json:"excludePatterns,omitempty"`
 	CaseSensitive   *bool     `json:"caseSensitive,omitempty"` // default: true
 }
@@ -305,6 +299,26 @@ func jsonInt(m map[string]any, key string) int64 {
 	default:
 		return 0
 	}
+}
+
+// jsonStringSlice extracts a []string from a map value that may be
+// []interface{} (JSON array decoded by encoding/json).
+func jsonStringSlice(m map[string]any, key string) []string {
+	v, ok := m[key]
+	if !ok {
+		return nil
+	}
+	raw, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, elem := range raw {
+		if s, ok := elem.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // --- tool handlers ---
@@ -501,8 +515,9 @@ func (s *fsServer) listDirectory(_ context.Context, _ *mcp.CallToolRequest, in p
 	return textResult(strings.Join(lines, "\n")), nil, nil
 }
 
-func (s *fsServer) listDirectoryWithSizes(_ context.Context, _ *mcp.CallToolRequest, in listDirWithSizesInput) (*mcp.CallToolResult, any, error) {
-	resolved, err := s.resolve(in.Path)
+func (s *fsServer) listDirectoryWithSizes(_ context.Context, _ *mcp.CallToolRequest, in map[string]any) (*mcp.CallToolResult, any, error) {
+	path, _ := in["path"].(string)
+	resolved, err := s.resolve(path)
 	if err != nil {
 		return errResult(err), nil, nil
 	}
@@ -512,8 +527,8 @@ func (s *fsServer) listDirectoryWithSizes(_ context.Context, _ *mcp.CallToolRequ
 	}
 
 	sortBy := "name"
-	if in.SortBy != nil && *in.SortBy != "" {
-		sortBy = *in.SortBy
+	if v, _ := in["sortBy"].(string); v != "" {
+		sortBy = v
 	}
 
 	type entry struct {
@@ -578,20 +593,18 @@ func humanSize(b int64) string {
 
 // treeEntry mirrors the JSON structure returned by directory_tree.
 type treeEntry struct {
-	Name     string       `json:"name"`
-	Type     string       `json:"type"`
+	Name     string        `json:"name"`
+	Type     string        `json:"type"`
 	Children *[]*treeEntry `json:"children,omitempty"` // pointer so empty dirs serialize as []
 }
 
-func (s *fsServer) directoryTree(_ context.Context, _ *mcp.CallToolRequest, in directoryTreeInput) (*mcp.CallToolResult, any, error) {
-	resolved, err := s.resolve(in.Path)
+func (s *fsServer) directoryTree(_ context.Context, _ *mcp.CallToolRequest, in map[string]any) (*mcp.CallToolResult, any, error) {
+	path, _ := in["path"].(string)
+	resolved, err := s.resolve(path)
 	if err != nil {
 		return errResult(err), nil, nil
 	}
-	var excludePatterns []string
-	if in.ExcludePatterns != nil {
-		excludePatterns = *in.ExcludePatterns
-	}
+	excludePatterns := jsonStringSlice(in, "excludePatterns")
 	tree, err := s.buildTree(resolved, excludePatterns)
 	if err != nil {
 		return errResult(err), nil, nil
@@ -644,25 +657,24 @@ func (s *fsServer) moveFile(_ context.Context, _ *mcp.CallToolRequest, in moveIn
 	return textResult(fmt.Sprintf("Successfully moved %s to %s", src, dst)), nil, nil
 }
 
-func (s *fsServer) searchFiles(_ context.Context, _ *mcp.CallToolRequest, in searchInput) (*mcp.CallToolResult, any, error) {
-	root, err := s.resolve(in.Path)
+func (s *fsServer) searchFiles(_ context.Context, _ *mcp.CallToolRequest, in map[string]any) (*mcp.CallToolResult, any, error) {
+	path, _ := in["path"].(string)
+	root, err := s.resolve(path)
 	if err != nil {
 		return errResult(err), nil, nil
 	}
-	if in.Pattern == "" {
+	pattern, _ := in["pattern"].(string)
+	if pattern == "" {
 		return errResult(fmt.Errorf("pattern is required")), nil, nil
 	}
 
-	var excludePatterns []string
-	if in.ExcludePatterns != nil {
-		excludePatterns = *in.ExcludePatterns
-	}
+	excludePatterns := jsonStringSlice(in, "excludePatterns")
 
-	recursive := strings.Contains(in.Pattern, "**")
-	basePattern := in.Pattern
+	recursive := strings.Contains(pattern, "**")
+	basePattern := pattern
 	if recursive {
 		// Strip the **/ prefix so we can match the base name.
-		basePattern = filepath.Base(strings.TrimPrefix(in.Pattern, "**/"))
+		basePattern = filepath.Base(strings.TrimPrefix(pattern, "**/"))
 	}
 
 	var matches []string
@@ -680,13 +692,13 @@ func (s *fsServer) searchFiles(_ context.Context, _ *mcp.CallToolRequest, in sea
 			return nil
 		}
 		rel, _ := filepath.Rel(root, path)
-		matched := false
+		var matched bool
 		if recursive {
 			matched, _ = filepath.Match(basePattern, d.Name())
 		} else {
 			// Non-recursive: only match directly under root.
 			if filepath.Dir(path) == root {
-				matched, _ = filepath.Match(in.Pattern, d.Name())
+				matched, _ = filepath.Match(pattern, d.Name())
 			}
 		}
 		if matched {
@@ -762,26 +774,29 @@ func (s *fsServer) copyFile(_ context.Context, _ *mcp.CallToolRequest, in copyIn
 		return errResult(fmt.Errorf("create destination directory: %w", err)), nil, nil
 	}
 
-	// Copy the file
+	// Open source before creating destination to avoid leaving an empty file
+	// if the source is unreadable.
 	srcFile, err := os.Open(src)
 	if err != nil {
 		return errResult(err), nil, nil
 	}
 	defer srcFile.Close()
 
-	dstFile, err := os.Create(dst)
+	// Create destination with source permissions atomically (no world-readable
+	// window between create and chmod).
+	dstFile, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, srcInfo.Mode())
 	if err != nil {
 		return errResult(err), nil, nil
 	}
-	defer dstFile.Close()
 
 	if _, err := dstFile.ReadFrom(srcFile); err != nil {
+		dstFile.Close()
+		os.Remove(dst) // clean up partial file
 		return errResult(err), nil, nil
 	}
-
-	// Preserve permissions
-	if err := dstFile.Chmod(srcInfo.Mode()); err != nil {
-		// Non-fatal; the copy succeeded
+	if err := dstFile.Close(); err != nil {
+		os.Remove(dst)
+		return errResult(err), nil, nil
 	}
 
 	return textResult(fmt.Sprintf("Successfully copied %s to %s", src, dst)), nil, nil
@@ -819,27 +834,26 @@ func (s *fsServer) deleteFile(_ context.Context, _ *mcp.CallToolRequest, in dele
 	return textResult(fmt.Sprintf("Successfully deleted file %s", resolved)), nil, nil
 }
 
-func (s *fsServer) searchWithinFiles(_ context.Context, _ *mcp.CallToolRequest, in searchWithinFilesInput) (*mcp.CallToolResult, any, error) {
-	root, err := s.resolve(in.Path)
+func (s *fsServer) searchWithinFiles(_ context.Context, _ *mcp.CallToolRequest, in map[string]any) (*mcp.CallToolResult, any, error) {
+	path, _ := in["path"].(string)
+	root, err := s.resolve(path)
 	if err != nil {
 		return errResult(err), nil, nil
 	}
 
-	if in.Pattern == "" {
+	pattern, _ := in["pattern"].(string)
+	if pattern == "" {
 		return errResult(fmt.Errorf("pattern is required")), nil, nil
 	}
 
-	var excludePatterns []string
-	if in.ExcludePatterns != nil {
-		excludePatterns = *in.ExcludePatterns
-	}
+	excludePatterns := jsonStringSlice(in, "excludePatterns")
 
 	caseSensitive := true
-	if in.CaseSensitive != nil {
-		caseSensitive = *in.CaseSensitive
+	if v, ok := in["caseSensitive"].(bool); ok {
+		caseSensitive = v
 	}
 
-	searchPattern := in.Pattern
+	searchPattern := pattern
 	if !caseSensitive {
 		searchPattern = strings.ToLower(searchPattern)
 	}

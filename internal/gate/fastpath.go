@@ -24,55 +24,102 @@ const (
 //
 // Rules (evaluated in order):
 //  1. Any resolved path that matches a protected path → deny immediately.
-//  2. Any resolved path that is entirely within the sandbox directory → allow immediately.
+//  2. All resolved paths entirely within the sandbox directory → allow immediately.
 //  3. Everything else → forward to Keep.
 //
 // Both rules resolve symlinks and clean the path before comparison to prevent
 // path traversal and symlink attacks.
+//
+// Multi-path tools (copy_file, move_file) extract all path arguments; all
+// paths must pass both rules for an allow decision.
 func (g *Gate) FastPath(_ context.Context, toolName string, args map[string]any) (FastPathResult, error) {
-	path, ok := extractPath(args)
-	if !ok {
+	paths := extractPaths(args)
+	if len(paths) == 0 {
 		// Not a filesystem operation we recognise; forward to Keep.
 		return FastPathForward, nil
 	}
 
-	resolved, err := resolvePath(path)
-	if err != nil {
-		// Cannot resolve the path — deny to be safe.
-		return FastPathDeny, nil
+	var resolved []string
+	for _, p := range paths {
+		r, err := resolvePath(p)
+		if err != nil {
+			// Cannot resolve a path — deny to be safe.
+			return FastPathDeny, nil
+		}
+		resolved = append(resolved, r)
 	}
 
 	// Rule 1: protected paths take priority over the sandbox.
-	for _, p := range g.cfg.ProtectedPaths {
-		protected, err := resolvePath(p)
-		if err != nil {
-			continue
-		}
-		if isContainedIn(resolved, protected) {
-			return FastPathDeny, nil
+	for _, r := range resolved {
+		for _, p := range g.cfg.ProtectedPaths {
+			protected, err := resolvePath(p)
+			if err != nil {
+				continue
+			}
+			if isContainedIn(r, protected) {
+				return FastPathDeny, nil
+			}
 		}
 	}
 
-	// Rule 2: sandbox allow.
+	// Rule 2: all paths must be within the sandbox for a local allow.
 	if g.cfg.Sandbox.Directory != "" {
 		sandbox, err := resolvePath(g.cfg.Sandbox.Directory)
-		if err == nil && isContainedIn(resolved, sandbox) {
-			return FastPathAllow, nil
+		if err == nil {
+			allInSandbox := true
+			for _, r := range resolved {
+				if !isContainedIn(r, sandbox) {
+					allInSandbox = false
+					break
+				}
+			}
+			if allInSandbox {
+				return FastPathAllow, nil
+			}
 		}
 	}
 
 	return FastPathForward, nil
 }
 
-// extractPath returns the path argument from a tool call's argument map.
-// MCP filesystem servers use "path" as the canonical argument name.
-func extractPath(args map[string]any) (string, bool) {
-	v, ok := args["path"]
-	if !ok {
-		return "", false
+// extractPaths returns all filesystem path arguments from a tool call's
+// argument map. It handles three argument conventions:
+//   - "path": single path (most tools)
+//   - "source" + "destination": two-path tools (copy_file, move_file)
+//   - "paths": slice of paths (read_multiple_files)
+//
+// Returns nil if no recognised path arguments are found.
+func extractPaths(args map[string]any) []string {
+	var out []string
+
+	if v, ok := args["path"]; ok {
+		if s, ok := v.(string); ok && s != "" {
+			out = append(out, s)
+		}
 	}
-	s, ok := v.(string)
-	return s, ok && s != ""
+
+	if v, ok := args["source"]; ok {
+		if s, ok := v.(string); ok && s != "" {
+			out = append(out, s)
+		}
+	}
+	if v, ok := args["destination"]; ok {
+		if s, ok := v.(string); ok && s != "" {
+			out = append(out, s)
+		}
+	}
+
+	if v, ok := args["paths"]; ok {
+		if slice, ok := v.([]any); ok {
+			for _, elem := range slice {
+				if s, ok := elem.(string); ok && s != "" {
+					out = append(out, s)
+				}
+			}
+		}
+	}
+
+	return out
 }
 
 // resolvePath cleans and evaluates symlinks on the given path.
@@ -117,7 +164,8 @@ func isFastPathTool(toolName string) bool {
 	case "read_text_file", "read_file", "read_media_file", "read_multiple_files",
 		"write_file", "edit_file",
 		"list_directory", "list_directory_with_sizes", "directory_tree",
-		"create_directory", "move_file", "search_files", "get_file_info",
+		"create_directory", "move_file", "copy_file", "delete_file",
+		"search_files", "search_within_files", "get_file_info",
 		"list_allowed_directories":
 		return true
 	}

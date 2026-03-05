@@ -1,42 +1,61 @@
 # OPA Policy Examples for Portcullis
 
-This document provides example OPA requests and policy rules for the Portcullis MCP gateway.
+Portcullis enforces that every MCP tool call is evaluated by a Policy Decision
+Point (PDP) before execution. **How you write that policy is entirely up to your
+organization.** Portcullis ships two example Rego implementations to illustrate
+the options — operators are expected to write their own policy suited to their
+environment, groups, and tools.
+
+| Example file | Approach |
+|---|---|
+| `policies/decision-handwritten.rego` | Explicit Rego rules — readable, auditable, easily reviewed by security teams |
+| `policies/decision.rego` | Table-driven — rules read from `data.portcullis.policies`; populate via Data API, S3 bundles, LDAP, or any OPA data source |
+
+Neither is "the right answer." Most organizations will start with hand-written rules
+and migrate to table-driven as policy scope grows and an authoritative group/role
+store becomes available.
 
 ## Table of Contents
 - [What Portcullis Sends to OPA](#what-portcullis-sends-to-opa)
-- [Example OPA Requests](#example-opa-requests)
-- [Example OPA Policy Rules](#example-opa-policy-rules)
+- [Example: Hand-written Rego Rules](#example-hand-written-rego-rules)
+- [Example: Table-driven Policy](#example-table-driven-policy)
+- [Loading Policy Data into OPA](#loading-policy-data-into-opa)
+- [Escalation Token JWT Design](#escalation-token-jwt-design)
+- [Example Requests and Expected Decisions](#example-requests-and-expected-decisions)
 - [Testing Policies with OPA](#testing-policies-with-opa)
+
+---
 
 ## What Portcullis Sends to OPA
 
-Portcullis-keep sends an `EnrichedMCPRequest` to OPA wrapped in an `input` envelope:
+Portcullis-keep sends an `EnrichedMCPRequest` to OPA wrapped in an `input` envelope.
+All field names use **snake_case**.
 
 ```json
 {
   "input": {
-    "serverName": "filesystem",
-    "toolName": "write_file",
+    "server_name": "filesystem",
+    "tool_name": "write_file",
     "arguments": {
       "path": "/workspace/src/main.go",
       "content": "package main\n..."
     },
-    "userIdentity": {
-      "userID": "alice@example.com",
-      "displayName": "Alice Developer",
+    "user_identity": {
+      "user_id": "alice@example.com",
+      "display_name": "Alice Developer",
       "groups": ["developers", "team-backend"],
-      "sourceType": "oidc",
-      "rawToken": "eyJhbGc..."
+      "source_type": "oidc",
+      "raw_token": "eyJhbGc..."
     },
-    "escalationTokens": [
+    "escalation_tokens": [
       {
-        "tokenID": "esc-12345",
+        "token_id": "esc-12345",
         "raw": "eyJhbGc...",
-        "grantedBy": "bob.manager@example.com"
+        "granted_by": "bob.manager@example.com"
       }
     ],
-    "sessionID": "session-abc123",
-    "requestID": "req-xyz789"
+    "session_id": "session-abc123",
+    "request_id": "req-xyz789"
   }
 }
 ```
@@ -46,554 +65,577 @@ OPA must return a response in this format:
 ```json
 {
   "result": {
-    "decision": "allow",  // or "deny" or "escalate"
-    "reason": "User is in developers group",
-    "requestID": "req-xyz789"
-  }
-}
-```
-
-Note: Portcullis uses the `requestID` from the original request for audit tracing, so there's no need for OPA to generate a separate audit identifier.
-
----
-
-## Example OPA Requests
-
-### Example 1: Filesystem Read (should allow for developers)
-
-**Request to OPA:**
-```json
-{
-  "input": {
-    "serverName": "filesystem",
-    "toolName": "read_file",
-    "arguments": {
-      "path": "/workspace/README.md"
-    },
-    "userIdentity": {
-      "userID": "alice@example.com",
-      "displayName": "Alice Developer",
-      "groups": ["developers", "team-backend"],
-      "sourceType": "oidc"
-    },
-    "escalationTokens": [],
-    "sessionID": "session-001",
-    "requestID": "req-001"
-  }
-}
-```
-
-**Expected OPA Response:**
-```json
-{
-  "result": {
     "decision": "allow",
-    "reason": "Read access allowed for developers",
-    "requestID": "req-001"
+    "reason": "user is authorized to perform this action",
+    "request_id": "req-xyz789"
   }
 }
 ```
 
----
-
-### Example 2: Filesystem Write (requires escalation for junior devs)
-
-**Request to OPA:**
-```json
-{
-  "input": {
-    "serverName": "filesystem",
-    "toolName": "write_file",
-    "arguments": {
-      "path": "/workspace/src/critical.go",
-      "content": "package main\n// Modified code"
-    },
-    "userIdentity": {
-      "userID": "charlie@example.com",
-      "displayName": "Charlie Junior",
-      "groups": ["developers", "junior"],
-      "sourceType": "oidc"
-    },
-    "escalationTokens": [],
-    "sessionID": "session-002",
-    "requestID": "req-002"
-  }
-}
-```
-
-**Expected OPA Response:**
-```json
-{
-  "result": {
-    "decision": "escalate",
-    "reason": "Junior developers require manager approval for write operations",
-    "requestID": "req-002"
-}
-```
+The `request_id` is echoed from the input for audit correlation.
 
 ---
 
-### Example 3: GitHub PR Creation (allowed with escalation token)
+## Example: Hand-written Rego Rules
 
-**Request to OPA:**
+`policies/decision-handwritten.rego` shows policy written as explicit Rego rules.
+This approach is easy to read, diff, and audit — a security reviewer can read the
+file and understand exactly what is permitted without knowing OPA internals.
+
+The pattern is straightforward:
+- `deny contains reason if { ... }` — accumulate deny reasons; any match = deny
+- `escalate contains reason if { ... not valid_escalation_for_request }` — fire unless a valid escalation token covers the request
+- `allow_matched if { ... }` — at least one must be true for allow to fire
+- Decision priority: deny > escalate > allow > default deny
+
+Snippet from the example:
+
+```rego
+# Contractors may not access the database at all.
+deny contains "contractors may not access the database" if {
+    input.server_name == "database"
+    "contractors" in input.user_identity.groups
+}
+
+# Filesystem writes require manager approval (non-admins, no escalation token).
+escalate contains "write operations require manager approval" if {
+    input.tool_name in ["write_file", "edit_file", "delete_file", "move_file", "copy_file"]
+    input.server_name == "filesystem"
+    not "admin" in input.user_identity.groups
+    not valid_escalation_for_request
+}
+
+# Developers and analysts may read from the filesystem.
+allow_matched if {
+    input.server_name == "filesystem"
+    input.tool_name in ["read_text_file", "list_directory", "directory_tree",
+                        "search_files", "search_within_files"]
+    some group in ["developers", "analysts", "contractors"]
+    group in input.user_identity.groups
+}
+```
+
+Because `deny` and `escalate` are incremental rules (sets), you can split policy
+across multiple files in the same OPA package — useful when different teams own
+different server policies.
+
+---
+
+## Example: Table-driven Policy
+
+`policies/decision.rego` shows policy written as a **generic table evaluator**.
+It reads policy rules from `data.portcullis.policies` — an array of rule objects.
+The Rego itself never changes; only the data changes — which means policy can be
+managed by any system that can write to OPA's data document.
+
+### Rule Object
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `id` | string | yes | Unique identifier for audit and debugging |
+| `server` | string | yes | MCP server name, or `"*"` for any server |
+| `tools` | [string] | no | Tool names this rule applies to; omit for any tool |
+| `groups` | [string] | yes | User must be in at least one group |
+| `action` | string | yes | `"allow"`, `"deny"`, or `"escalate"` |
+| `reason` | string | yes | Returned to the caller on deny or escalate |
+| `path_prefix` | string | no | Restrict to paths starting with this prefix |
+
+### Evaluation semantics
+
+1. All matching `deny` rules accumulate into a deny set — any match → `deny`
+2. All matching `escalate` rules accumulate (suppressed by a valid escalation token) — any match → `escalate`
+3. Any matching `allow` rule → `allow`
+4. No match → default `deny`
+
+### Example policy table
+
 ```json
 {
-  "input": {
-    "serverName": "github",
-    "toolName": "create_pull_request",
-    "arguments": {
-      "repo": "example-corp/production-app",
-      "title": "Feature: Add new API endpoint",
-      "base": "main",
-      "head": "feature-123"
-    },
-    "userIdentity": {
-      "userID": "charlie@example.com",
-      "displayName": "Charlie Junior",
-      "groups": ["developers", "junior"],
-      "sourceType": "oidc"
-    },
-    "escalationTokens": [
+  "portcullis": {
+    "escalation_secret": "change-in-production",
+    "policies": [
       {
-        "tokenID": "esc-pr-456",
+        "id": "fs-reads",
+        "server": "filesystem",
+        "tools": ["read_text_file", "list_directory", "directory_tree",
+                  "search_files", "search_within_files"],
+        "groups": ["developers", "contractors", "analysts"],
+        "action": "allow",
+        "reason": "read access is permitted"
+      },
+      {
+        "id": "fs-writes-admin",
+        "server": "filesystem",
+        "tools": ["write_file", "edit_file", "delete_file",
+                  "copy_file", "move_file"],
+        "groups": ["admin"],
+        "action": "allow",
+        "reason": "admin write access is permitted"
+      },
+      {
+        "id": "fs-writes-developers",
+        "server": "filesystem",
+        "tools": ["write_file", "edit_file", "delete_file",
+                  "copy_file", "move_file"],
+        "groups": ["developers"],
+        "action": "escalate",
+        "reason": "write operations require manager approval"
+      },
+      {
+        "id": "db-deny-contractors",
+        "server": "database",
+        "groups": ["contractors"],
+        "action": "deny",
+        "reason": "contractors may not access the database"
+      },
+      {
+        "id": "db-reads",
+        "server": "database",
+        "tools": ["execute_query"],
+        "groups": ["developers", "analysts"],
+        "action": "allow",
+        "reason": "database read access is permitted"
+      },
+      {
+        "id": "enterprise-api-orders",
+        "server": "mock-enterprise-api",
+        "tools": ["update_order_status"],
+        "groups": ["developers"],
+        "action": "escalate",
+        "reason": "order updates require manager approval"
+      },
+      {
+        "id": "enterprise-api-delete-orders",
+        "server": "mock-enterprise-api",
+        "tools": ["delete_order"],
+        "groups": ["admin"],
+        "action": "allow",
+        "reason": "admin can delete orders"
+      }
+    ]
+  }
+}
+```
+
+---
+
+## Loading Policy Data into OPA
+
+### Option A — OPA Data API (push)
+
+Push the full data document at startup or whenever policy changes:
+
+```bash
+curl -X PUT http://localhost:8181/v1/data/portcullis \
+  -H 'Content-Type: application/json' \
+  -d @policy-data.json
+```
+
+Push only the policies array (leaves other `portcullis` keys intact):
+
+```bash
+curl -X PUT http://localhost:8181/v1/data/portcullis/policies \
+  -H 'Content-Type: application/json' \
+  -d @policies.json
+```
+
+Push revoked escalation token JTIs:
+
+```bash
+curl -X PUT http://localhost:8181/v1/data/portcullis/revoked_token_ids \
+  -H 'Content-Type: application/json' \
+  -d '["jti-to-revoke-1", "jti-to-revoke-2"]'
+```
+
+OPA re-evaluates on every request, so updates take effect immediately.
+
+### Option B — OPA Bundles (pull from S3, GCS, HTTP, etc.)
+
+OPA bundles let you store policy data in object storage and have OPA pull and
+cache it automatically. Add to your OPA configuration:
+
+```yaml
+# opa-config.yaml
+bundles:
+  portcullis-policy:
+    resource: "/v1/policies/portcullis"
+    service: policy-server
+    polling:
+      min_delay_seconds: 60
+      max_delay_seconds: 120
+
+services:
+  policy-server:
+    url: "https://policy.internal.example.com"
+    credentials:
+      bearer:
+        token_path: /var/run/secrets/policy-token
+```
+
+The bundle can contain both the Rego (from `policies/decision.rego`) and the
+data document — operators update only the data file in the bundle.
+
+### Option C — External data source plugins
+
+OPA has community plugins for LDAP, databases, Consul, and other sources.
+These can populate `data.portcullis.policies` from your authoritative group
+and policy store without a separate ETL pipeline.
+
+---
+
+## Escalation Token JWT Design
+
+Escalation tokens are signed JWTs that an approver (manager or workflow system)
+sends to a user out-of-band (email, Slack DM) after approving an elevated action.
+The user adds the JWT to their Portcullis Gate token store via the management UI;
+the gate attaches it to every subsequent request until it expires.
+
+The PDP is the sole authority on whether a token is valid and covers the request.
+The gate only prunes expired tokens on load.
+
+### Required claims
+
+```json
+{
+  "sub": "alice@example.com",
+  "jti": "550e8400-e29b-41d4-a716-446655440000",
+  "iss": "portcullis-approver",
+  "iat": 1700000000,
+  "exp": 1700086400,
+  "granted_by": "bob.manager@example.com",
+  "portcullis": {
+    "tools":       ["write_file", "edit_file"],
+    "servers":     ["filesystem"],
+    "path_prefix": "/workspace/feature-x/",
+    "reason":      "Sprint 42 feature branch work"
+  }
+}
+```
+
+| Claim | Description |
+|---|---|
+| `sub` | User the grant is for — must match `input.user_identity.user_id` |
+| `jti` | Unique token ID — enables revocation via OPA data |
+| `exp` | Hard expiry — enforced automatically by `io.jwt.decode_verify` |
+| `portcullis.tools` | Permitted tool names, or `["*"]` for any tool |
+| `portcullis.servers` | Permitted server names, or `["*"]` for any server |
+| `portcullis.path_prefix` | *(optional)* Restrict write access to a path subtree |
+
+When a valid escalation token covers the request, any `escalate` rules that
+would otherwise fire are suppressed, and the request is permitted directly.
+
+### Signature verification
+
+Configure exactly one of the following in your OPA data document:
+
+**Option A — HMAC shared secret (HS256, development/simple deployments):**
+```json
+{ "portcullis": { "escalation_secret": "your-shared-secret-here" } }
+```
+
+**Option B — Asymmetric keys via JWKS (RS256/ES256, production-recommended):**
+```json
+{ "portcullis": { "escalation_jwks_url": "https://keys.internal.example.com/.well-known/jwks.json" } }
+```
+
+With Option B, OPA fetches and caches the public keys from the JWKS endpoint.
+The token issuer (approval workflow) holds the corresponding private key.
+
+### Revocation
+
+Load revoked JTIs into OPA via the Data API; revocation takes effect immediately:
+
+```bash
+curl -X PUT http://localhost:8181/v1/data/portcullis/revoked_token_ids \
+  -H 'Content-Type: application/json' \
+  -d '["550e8400-e29b-41d4-a716-446655440000"]'
+```
+
+To check revocation in policy, add to `valid_escalation_for_request` in your
+local Rego override:
+
+```rego
+not payload.jti in data.portcullis.revoked_token_ids
+```
+
+---
+
+## Example Requests and Expected Decisions
+
+### Example 1: Filesystem read (developer)
+
+```json
+{
+  "input": {
+    "server_name": "filesystem",
+    "tool_name": "read_text_file",
+    "arguments": { "path": "/workspace/README.md" },
+    "user_identity": {
+      "user_id": "alice@example.com",
+      "groups": ["developers", "team-backend"],
+      "source_type": "oidc"
+    },
+    "escalation_tokens": [],
+    "session_id": "session-001",
+    "request_id": "req-001"
+  }
+}
+```
+
+**Expected:** `allow` — matches rule `fs-reads` (developer in allowed groups)
+
+---
+
+### Example 2: Filesystem write without escalation token (developer, non-admin)
+
+```json
+{
+  "input": {
+    "server_name": "filesystem",
+    "tool_name": "write_file",
+    "arguments": { "path": "/workspace/src/critical.go", "content": "..." },
+    "user_identity": {
+      "user_id": "charlie@example.com",
+      "groups": ["developers"],
+      "source_type": "oidc"
+    },
+    "escalation_tokens": [],
+    "session_id": "session-002",
+    "request_id": "req-002"
+  }
+}
+```
+
+**Expected:** `escalate` — matches rule `fs-writes-developers`; no escalation token present
+
+---
+
+### Example 3: Filesystem write with a valid escalation token
+
+The token covers `write_file` on `filesystem` for `charlie@example.com` within `/workspace/feature-x/`.
+OPA verifies the signature, checks `sub`, `servers`, `tools`, and `path_prefix`.
+
+```json
+{
+  "input": {
+    "server_name": "filesystem",
+    "tool_name": "write_file",
+    "arguments": { "path": "/workspace/feature-x/handler.go", "content": "..." },
+    "user_identity": {
+      "user_id": "charlie@example.com",
+      "groups": ["developers"],
+      "source_type": "oidc"
+    },
+    "escalation_tokens": [
+      {
+        "token_id": "550e8400-e29b-41d4-a716-446655440000",
         "raw": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-        "grantedBy": "bob.manager@example.com"
+        "granted_by": "bob.manager@example.com"
       }
     ],
-    "sessionID": "session-003",
-    "requestID": "req-003"
+    "session_id": "session-003",
+    "request_id": "req-003"
   }
 }
 ```
 
-**Expected OPA Response:**
-```json
-{
-  "result": {
-    "decision": "allow",
-    "reason": "Escalation token validated for PR creation",
-    "requestID": "req-003"
-}
-```
+**Expected:** `allow` — `valid_escalation_for_request` is true; escalation rule suppressed
 
 ---
 
-### Example 4: Database Access (deny for non-privileged users)
+### Example 4: Escalation token for wrong user
 
-**Request to OPA:**
+Token `sub` is `dave@example.com` but requesting user is `charlie@example.com`.
+`valid_escalation_for_request` is false; escalate rule still fires.
+
+**Expected:** `escalate`
+
+---
+
+### Example 5: Database access by contractor
+
 ```json
 {
   "input": {
-    "serverName": "database",
-    "toolName": "execute_query",
-    "arguments": {
-      "query": "SELECT * FROM users WHERE admin = true"
-    },
-    "userIdentity": {
-      "userID": "eve@example.com",
-      "displayName": "Eve External",
+    "server_name": "database",
+    "tool_name": "execute_query",
+    "arguments": { "query": "SELECT * FROM users" },
+    "user_identity": {
+      "user_id": "eve@example.com",
       "groups": ["contractors"],
-      "sourceType": "oidc"
+      "source_type": "oidc"
     },
-    "escalationTokens": [],
-    "sessionID": "session-004",
-    "requestID": "req-004"
+    "escalation_tokens": [],
+    "session_id": "session-004",
+    "request_id": "req-004"
   }
 }
 ```
 
-**Expected OPA Response:**
-```json
-{
-  "result": {
-    "decision": "deny",
-    "reason": "Database access not allowed for contractors",
-    "requestID": "req-004"
-  }
-```
+**Expected:** `deny` — matches rule `db-deny-contractors`
 
 ---
 
-### Example 5: File Delete (requires specific path approval)
+### Example 6: No matching rule (unknown server)
 
-**Request to OPA:**
-```json
-{
-  "input": {
-    "serverName": "filesystem",
-    "toolName": "delete_file",
-    "arguments": {
-      "path": "/workspace/config/production.yaml",
-      "recursive": false
-    },
-    "userIdentity": {
-      "userID": "alice@example.com",
-      "displayName": "Alice Developer",
-      "groups": ["developers", "senior"],
-      "sourceType": "oidc"
-    },
-    "escalationTokens": [],
-    "sessionID": "session-005",
-    "requestID": "req-005"
-  }
-}
-```
+A request for a server/tool combination not covered by any policy rule returns
+the default deny.
 
-**Expected OPA Response:**
-```json
-{
-  "result": {
-    "decision": "escalate",
-    "reason": "Deletion of production config requires DevOps approval",
-    "requestID": "req-005"
-  }
-```
-
----
-
-## Example OPA Policy Rules
-
-Here are example Rego policies that implement the scenarios above.
-
-### Basic Policy Structure
-
-**File: `portcullis/policy.rego`**
-
-```rego
-package portcullis
-
-import future.keywords.if
-import future.keywords.in
-
-# Default decision is deny (fail-safe)
-default decision := {
-    "decision": "deny",
-    "reason": "No policy matched",
-    "requestID": input.requestID
-}
-
-}
-
-# Allow read access for developers
-decision := {
-    "decision": "allow",
-    "reason": "Read access allowed for developers"
-} if {
-    input.toolName == "read_file"
-    "developers" in input.userIdentity.groups
-}
-
-# Allow read_multiple_files for developers
-decision := {
-    "decision": "allow",
-    "reason": "Read access allowed for developers"
-} if {
-    input.toolName == "read_multiple_files"
-    "developers" in input.userIdentity.groups
-}
-
-# Allow list operations for developers
-decision := {
-    "decision": "allow",
-    "reason": "List operations allowed for developers"
-} if {
-    input.toolName in ["list_directory", "list_allowed_directories", "directory_tree"]
-    "developers" in input.userIdentity.groups
-}
-
-# Allow write for senior developers
-decision := {
-    "decision": "allow",
-    "reason": "Write access granted to senior developers"
-} if {
-    input.toolName == "write_file"
-    "senior" in input.userIdentity.groups
-    "developers" in input.userIdentity.groups
-}
-
-# Junior developers need escalation for writes
-decision := {
-    "decision": "escalate",
-    "reason": "Junior developers require manager approval for write operations"
-} if {
-    input.toolName == "write_file"
-    "junior" in input.userIdentity.groups
-    count(input.escalationTokens) == 0
-}
-
-# Allow writes if escalation token is present
-decision := {
-    "decision": "allow",
-    "reason": "Escalation token validated for write operation"
-} if {
-    input.toolName == "write_file"
-    "junior" in input.userIdentity.groups
-    count(input.escalationTokens) > 0
-    valid_escalation_token
-}
-
-# Deny database access for contractors
-decision := {
-    "decision": "deny",
-    "reason": "Database access not allowed for contractors"
-} if {
-    input.serverName == "database"
-    "contractors" in input.userIdentity.groups
-}
-
-# Allow database read for employees
-decision := {
-    "decision": "allow",
-    "reason": "Database read access granted to employees"
-} if {
-    input.serverName == "database"
-    input.toolName in ["query_read", "get_schema"]
-    "employees" in input.userIdentity.groups
-}
-
-# Escalate for production config changes
-decision := {
-    "decision": "escalate",
-    "reason": "Deletion of production config requires DevOps approval"
-} if {
-    input.toolName in ["delete_file", "move_file"]
-    contains(input.arguments.path, "production")
-    count(input.escalationTokens) == 0
-}
-
-# GitHub PR creation requires senior or escalation
-decision := {
-    "decision": "escalate",
-    "reason": "Pull request creation requires manager approval"
-} if {
-    input.serverName == "github"
-    input.toolName == "create_pull_request"
-    not "senior" in input.userIdentity.groups
-    count(input.escalationTokens) == 0
-}
-
-# Helper: Check if escalation token is valid
-valid_escalation_token if {
-    some token in input.escalationTokens
-    # In production, validate JWT signature and expiration
-    token.raw != ""
-}
-
-### Path-Based Policy
-
-```rego
-package portcullis
-
-# Allow edits to docs by all developers
-decision := {
-    "decision": "allow",
-    "reason": "Documentation edits allowed",
-    "requestID": input.requestID
-} if {
-    input.toolName in ["write_file", "edit_file"]
-    "developers" in input.userIdentity.groups
-    startswith(input.arguments.path, "/workspace/docs/")
-}
-
-# Deny edits to .git directory
-decision := {
-    "decision": "deny",
-    "reason": "Direct .git manipulation not allowed",
-    "requestID": input.requestID
-} if {
-    input.toolName in ["write_file", "delete_file", "move_file"]
-    contains(input.arguments.path, ".git/")
-}
-} if {
-    input.toolName in ["write_file", "edit_file"]
-    "developers" in input.userIdentity.groups
-    startswith(input.arguments.path, "/workspace/docs/")
-}
-
-# Deny edits to .git directory
-decision := {
-    "decision": "deny",
-    "reason": "Direct .git manipulation not allowed"
-} if {
-    input.toolName in ["write_file", "delete_file", "move_file"]
-    contains(input.arguments.path, ".git/")
-}
-
-# Escalate for infrastructure changes
-decision := {
-    "decision": "escalate",
-    "reason": "Infrastructure changes require SRE approval"
-# Deny destructive operations outside business hours
-decision := {
-    "decision": "escalate",
-    "reason": "Destructive operations outside business hours require approval",
-    "requestID": input.requestID
-} if {
-    input.toolName in ["delete_file", "drop_table", "delete_resource"]
-    not business_hours
-}
-
-business_hours if {
-    # Get current hour (0-23) and day of week (0-6, 0=Sunday)
-    now := time.now_ns()
-    [_, hour, _] := time.clock([now, "America/New_York"])
-    [_, _, day] := time.date([now, "America/New_York"])
-    
-    # Monday-Friday (1-5)
-    day >= 1
-    day <= 5
-    
-    # 9 AM - 5 PM
-    hour >= 9
-}
-```
+**Expected:** `deny` — "no policy matched, default deny"
 
 ---
 
 ## Testing Policies with OPA
 
-### Running OPA Locally
+### Running OPA locally
 
 ```bash
-# Install OPA
-# macOS: brew install opa
-# Linux: see https://www.openpolicyagent.org/docs/latest/#running-opa
-
-# Start OPA server
-opa run --server --addr localhost:8181
-
-# Load policy
-curl -X PUT http://localhost:8181/v1/policies/portcullis \
-  --data-binary @policy.rego
+# Start OPA with the policy Rego and initial data
+opa run --server --addr localhost:8181 \
+  policies/decision.rego \
+  --data policy-data.json
 
 # Test a decision
-curl -X POST http://localhost:8181/v1/data/portcullis/decision \
+curl -s -X POST http://localhost:8181/v1/data/portcullis/decision \
   -H 'Content-Type: application/json' \
-  -d @test-request.json
+  -d @test-request.json | jq .
 ```
 
-### Example Test Request File
+### Unit testing with rego test
 
-**File: `test-request.json`**
+```rego
+package portcullis_test
 
-```json
-{
-  "input": {
-    "serverName": "filesystem",
-    "toolName": "write_file",
-    "arguments": {
-      "path": "/workspace/src/main.go",
-      "content": "package main"
-    },
-    "userIdentity": {
-      "userID": "alice@example.com",
-      "displayName": "Alice Developer",
-      "groups": ["developers", "senior"],
-      "sourceType": "oidc"
-    },
-    "escalationTokens": [],
-    "sessionID": "test-session-001",
-    "requestID": "test-req-001"
-  }
+import rego.v1
+
+# Shared mock data for tests
+mock_data := {
+    "portcullis": {
+        "escalation_secret": "test-secret",
+        "policies": [
+            {
+                "id": "fs-reads",
+                "server": "filesystem",
+                "tools": ["read_text_file"],
+                "groups": ["developers"],
+                "action": "allow",
+                "reason": "read access permitted"
+            },
+            {
+                "id": "fs-writes",
+                "server": "filesystem",
+                "tools": ["write_file"],
+                "groups": ["developers"],
+                "action": "escalate",
+                "reason": "write operations require manager approval"
+            },
+            {
+                "id": "fs-admin-writes",
+                "server": "filesystem",
+                "tools": ["write_file"],
+                "groups": ["admin"],
+                "action": "allow",
+                "reason": "admin write permitted"
+            }
+        ]
+    }
+}
+
+test_read_allowed if {
+    result := data.portcullis.decision with input as {
+        "tool_name": "read_text_file",
+        "server_name": "filesystem",
+        "user_identity": {"user_id": "alice@example.com", "groups": ["developers"]},
+        "escalation_tokens": [],
+        "arguments": {},
+        "request_id": "req-test-1"
+    } with data as mock_data
+    result.decision == "allow"
+}
+
+test_write_escalates_without_token if {
+    result := data.portcullis.decision with input as {
+        "tool_name": "write_file",
+        "server_name": "filesystem",
+        "user_identity": {"user_id": "charlie@example.com", "groups": ["developers"]},
+        "escalation_tokens": [],
+        "arguments": {"path": "/workspace/x.go"},
+        "request_id": "req-test-2"
+    } with data as mock_data
+    result.decision == "escalate"
+}
+
+test_admin_write_allowed if {
+    result := data.portcullis.decision with input as {
+        "tool_name": "write_file",
+        "server_name": "filesystem",
+        "user_identity": {"user_id": "alice@example.com", "groups": ["developers", "admin"]},
+        "escalation_tokens": [],
+        "arguments": {"path": "/workspace/x.go"},
+        "request_id": "req-test-3"
+    } with data as mock_data
+    result.decision == "allow"
+}
+
+test_unknown_server_denied if {
+    result := data.portcullis.decision with input as {
+        "tool_name": "some_tool",
+        "server_name": "unknown-server",
+        "user_identity": {"user_id": "alice@example.com", "groups": ["developers"]},
+        "escalation_tokens": [],
+        "arguments": {},
+        "request_id": "req-test-4"
+    } with data as mock_data
+    result.decision == "deny"
+    result.reason == "no policy matched, default deny"
+}
+
+test_request_id_echoed if {
+    result := data.portcullis.decision with input as {
+        "tool_name": "read_text_file",
+        "server_name": "filesystem",
+        "user_identity": {"user_id": "alice@example.com", "groups": ["developers"]},
+        "escalation_tokens": [],
+        "arguments": {},
+        "request_id": "req-echo-test"
+    } with data as mock_data
+    result.request_id == "req-echo-test"
 }
 ```
 
-### Unit Testing Policies
+Run tests:
+```bash
+opa test policies/ -v
+```
 
-**File: `policy_test.rego`**
+---
+
+## Extending Either Example
+
+Because `deny`, `escalate`, and `allow_matched` are incremental rules (sets or
+booleans contributed to by multiple definitions), any file in the same OPA package
+can add to them without modifying the base policy file. This works with both the
+hand-written and table-driven examples.
+
+For example, to add a business-hours restriction across all policies, create a
+separate file in the same package:
 
 ```rego
 package portcullis
 
-test_read_allowed_for_developers if {
-    result := decision with input as {
-        "toolName": "read_file",
-        "userIdentity": {"groups": ["developers"]},
-        "escalationTokens": [],
-        "sessionID": "test-1",
-        "requestID": "req-1"
-    }
-    result.decision == "allow"
-}
+import rego.v1
 
-test_write_denied_for_contractors if {
-    result := decision with input as {
-        "toolName": "write_file",
-        "serverName": "filesystem",
-        "userIdentity": {"groups": ["contractors"]},
-        "escalationTokens": [],
-        "sessionID": "test-2",
-        "requestID": "req-2"
-    }
-    result.decision == "deny"
-}
-
-test_junior_needs_escalation if {
-    result := decision with input as {
-        "toolName": "write_file",
-        "userIdentity": {"groups": ["developers", "junior"]},
-        "escalationTokens": [],
-        "sessionID": "test-3",
-        "requestID": "req-3"
-    }
-    result.decision == "escalate"
-}
-
-test_escalation_token_allows_junior if {
-    result := decision with input as {
-        "toolName": "write_file",
-        "userIdentity": {"groups": ["developers", "junior"]},
-        "escalationTokens": [
-            {"tokenID": "esc-1", "raw": "valid-token", "grantedBy": "manager"}
-        ],
-        "sessionID": "test-4",
-        "requestID": "req-4"
-    }
-    result.decision == "allow"
+# Contributes to the deny set regardless of which base policy file is loaded.
+deny contains "access is only permitted during business hours (Mon–Fri 08:00–18:00 UTC)" if {
+    now := time.now_ns()
+    day  := time.weekday(now)   # 0=Sunday, 6=Saturday
+    hour := time.clock(now)[0]
+    any([day == 0, day == 6, hour < 8, hour >= 18])
 }
 ```
 
-Run tests with:
+Load both files together:
+
 ```bash
-opa test policy.rego policy_test.rego -v
+opa run --server policies/decision-handwritten.rego policies/business-hours.rego --data ...
 ```
-
----
-
-## Integration with Portcullis-Keep
-
-In your `keep.yaml` config:
-
-```yaml
-pdp:
-  type: "opa"
-  endpoint: "http://localhost:8181/v1/data/portcullis/decision"
-```
-
-Portcullis-keep will:
-1. Wrap the `EnrichedMCPRequest` in `{"input": {...}}`
-2. POST to the OPA endpoint
-3. Parse the `result.decision` and `result.reason`
-4. Execute the appropriate action (allow → route to MCP server, deny → send rejection notice back to Portcullis-gate, escalate → submit request to workflow and send escalation notice back to Portcullis-gate)
-
----
-
-## Policy Design Tips
-
-1. **Default Deny**: Always start with `default decision := {"decision": "deny", ...}`
-2. **Explicit Allow**: Write specific rules for allowed operations
-3. **Escalation for Uncertainty**: There should be clear, well-defined scenarios for when escalation is allowed
-4. **Audit Everything**: Always include descriptive reasons for deny and escalate
-5. **Test Thoroughly**: Use `opa test` to validate your policies
-6. **Group-Based**: Leverage `userIdentity.groups` for role-based access
-7. **Context Matters**: Use `serverName`, `toolName`, and `arguments` together
-8. **Validate Tokens**: In production, validate escalation token signatures and expiration
-9. **Traceability**: Portcullis uses `requestID` for audit trails, so you don't need to generate separate audit IDs
----
-
-## Additional Resources
-
-- [OPA Documentation](https://www.openpolicyagent.org/docs/latest/)
-- [Rego Language Guide](https://www.openpolicyagent.org/docs/latest/policy-language/)
-- [OPA Playground](https://play.openpolicyagent.org/) - Test policies online
-- [OPA Best Practices](https://www.openpolicyagent.org/docs/latest/policy-performance/)

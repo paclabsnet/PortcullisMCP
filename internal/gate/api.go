@@ -2,6 +2,7 @@ package gate
 
 import (
 	"context"
+	"crypto/subtle"
 	_ "embed"
 	"encoding/json"
 	"fmt"
@@ -12,19 +13,20 @@ import (
 //go:embed web/index.html
 var uiHTML []byte
 
-// ManagementServer is a localhost-only HTTP server for escalation token CRUD
-// and serves the management UI at GET /.
+// ManagementServer is a localhost-only HTTP server for escalation token CRUD,
+// OIDC token updates, and the management UI at GET /.
 // By default no authentication is required; set cfg.SharedSecret to require
 // a bearer token on all API requests (the UI itself is always served without auth).
 type ManagementServer struct {
-	store  *TokenStore
-	cfg    MgmtAPIConfig
-	server *http.Server
+	store    *TokenStore
+	identity *IdentityCache
+	cfg      MgmtAPIConfig
+	server   *http.Server
 }
 
 // NewManagementServer creates a ManagementServer but does not start it.
-func NewManagementServer(store *TokenStore, cfg MgmtAPIConfig) *ManagementServer {
-	ms := &ManagementServer{store: store, cfg: cfg}
+func NewManagementServer(store *TokenStore, identity *IdentityCache, cfg MgmtAPIConfig) *ManagementServer {
+	ms := &ManagementServer{store: store, identity: identity, cfg: cfg}
 	mux := http.NewServeMux()
 
 	// UI — always served without auth so the browser can load it.
@@ -35,6 +37,8 @@ func NewManagementServer(store *TokenStore, cfg MgmtAPIConfig) *ManagementServer
 	apiMux.HandleFunc("GET /tokens", ms.handleList)
 	apiMux.HandleFunc("POST /tokens", ms.handleAdd)
 	apiMux.HandleFunc("DELETE /tokens/{id}", ms.handleDelete)
+	apiMux.HandleFunc("GET /identity", ms.handleIdentityGet)
+	apiMux.HandleFunc("PUT /identity/token", ms.handleIdentityTokenUpdate)
 
 	var apiHandler http.Handler = apiMux
 	if cfg.SharedSecret != "" {
@@ -42,6 +46,8 @@ func NewManagementServer(store *TokenStore, cfg MgmtAPIConfig) *ManagementServer
 	}
 	mux.Handle("/tokens", apiHandler)
 	mux.Handle("/tokens/", apiHandler)
+	mux.Handle("/identity", apiHandler)
+	mux.Handle("/identity/", apiHandler)
 
 	ms.server = &http.Server{
 		Addr:    fmt.Sprintf("127.0.0.1:%d", cfg.Port),
@@ -110,11 +116,38 @@ func (ms *ManagementServer) handleDelete(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (ms *ManagementServer) handleIdentityGet(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, ms.identity.Info())
+}
+
+func (ms *ManagementServer) handleIdentityTokenUpdate(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if body.Token == "" {
+		writeError(w, http.StatusBadRequest, "token is required")
+		return
+	}
+	id, err := ms.identity.UpdateToken(body.Token)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{
+		"user_id":     id.UserID,
+		"source_type": id.SourceType,
+	})
+}
+
 func (ms *ManagementServer) requireSecret(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth := r.Header.Get("Authorization")
 		expected := "Bearer " + ms.cfg.SharedSecret
-		if auth != expected {
+		if subtle.ConstantTimeCompare([]byte(auth), []byte(expected)) != 1 {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}

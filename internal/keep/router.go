@@ -3,6 +3,7 @@ package keep
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"sync"
 
@@ -129,8 +130,13 @@ func buildBackendTransport(cfg BackendConfig) (mcp.Transport, error) {
 			return nil, fmt.Errorf("stdio backend requires a command")
 		}
 		cmd := exec.Command(cfg.Command, cfg.Args...)
-		for k, v := range cfg.Env {
-			cmd.Env = append(cmd.Env, k+"="+v)
+		if len(cfg.Env) > 0 {
+			// Start from the parent environment so PATH and other essentials
+			// are inherited, then overlay the per-backend overrides.
+			cmd.Env = os.Environ()
+			for k, v := range cfg.Env {
+				cmd.Env = append(cmd.Env, k+"="+v)
+			}
 		}
 		return &mcp.CommandTransport{Command: cmd}, nil
 	case "http":

@@ -36,6 +36,19 @@
       margin-bottom: 1rem;
     }
 
+    /* Identity info */
+    .identity-grid {
+      display: grid;
+      grid-template-columns: max-content 1fr;
+      gap: 0.3rem 1rem;
+      font-size: 0.875rem;
+      margin-bottom: 1.25rem;
+    }
+    .identity-grid .label { color: #666; }
+    .identity-grid .value { font-family: monospace; }
+    .expiry-warn { color: #b45309; }
+    .expiry-expired { color: #c5221f; font-weight: 600; }
+
     /* Token list */
     #token-list { list-style: none; }
     #token-list li {
@@ -67,7 +80,7 @@
       font-size: 0.875rem;
     }
 
-    /* Add token form */
+    /* Textareas */
     textarea {
       width: 100%;
       height: 110px;
@@ -109,7 +122,7 @@
 <body>
 
 <h1>Portcullis Gate</h1>
-<p class="subtitle">Manage escalation tokens for this session.</p>
+<p class="subtitle">Manage identity and escalation tokens for this session.</p>
 
 <section>
   <h2>API Authentication</h2>
@@ -120,12 +133,30 @@
 </section>
 
 <section>
-  <h2>Active Tokens</h2>
+  <h2>Identity</h2>
+  <div class="identity-grid" id="identity-grid">
+    <span class="label">User ID</span><span class="value" id="id-userid">—</span>
+    <span class="label">Display name</span><span class="value" id="id-display">—</span>
+    <span class="label">Source</span><span class="value" id="id-source">—</span>
+    <span class="label">Token expiry</span><span class="value" id="id-expiry">—</span>
+  </div>
+  <div id="oidc-update-section">
+    <p style="font-size:0.875rem;color:#555;margin-bottom:0.75rem;">Paste a new OIDC token to update your identity without restarting the gate.</p>
+    <textarea id="oidc-input" placeholder="Paste your OIDC JWT here…" spellcheck="false"></textarea>
+    <div class="actions">
+      <button class="btn-primary" id="oidc-btn" onclick="updateOIDCToken()">Update Token</button>
+      <span class="msg" id="oidc-msg"></span>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Active Escalation Tokens</h2>
   <ul id="token-list"><li class="empty">Loading…</li></ul>
 </section>
 
 <section>
-  <h2>Add Token</h2>
+  <h2>Add Escalation Token</h2>
   <textarea id="jwt-input" placeholder="Paste the JWT you received from your approver here…" spellcheck="false"></textarea>
   <div class="actions">
     <button class="btn-primary" id="add-btn" onclick="addToken()">Add Token</button>
@@ -142,6 +173,72 @@
     if (s) h['Authorization'] = 'Bearer ' + s;
     return h;
   }
+
+  // ── Identity ────────────────────────────────────────────────────────────────
+
+  async function loadIdentity() {
+    try {
+      const r = await fetch(BASE + '/identity', { headers: headers() });
+      if (!r.ok) throw new Error(await errorText(r));
+      const info = await r.json();
+
+      document.getElementById('id-userid').textContent  = info.user_id      || '—';
+      document.getElementById('id-display').textContent = info.display_name || '—';
+      document.getElementById('id-source').textContent  = info.source_type  || '—';
+
+      // Token expiry
+      const expiryEl = document.getElementById('id-expiry');
+      if (info.token_expiry) {
+        const exp = new Date(info.token_expiry);
+        const remaining = exp - Date.now();
+        const fmt = exp.toLocaleString();
+        if (remaining < 0) {
+          expiryEl.innerHTML = `<span class="expiry-expired">${esc(fmt)} (EXPIRED)</span>`;
+        } else if (remaining < 5 * 60 * 1000) {
+          expiryEl.innerHTML = `<span class="expiry-warn">${esc(fmt)} (expiring soon)</span>`;
+        } else {
+          expiryEl.textContent = fmt;
+        }
+      } else {
+        expiryEl.textContent = info.source_type === 'oidc' ? 'unknown' : 'n/a';
+      }
+
+      // Hide the OIDC update form when source is not oidc
+      document.getElementById('oidc-update-section').style.display =
+        info.source_type === 'oidc' ? '' : 'none';
+    } catch (e) {
+      document.getElementById('id-userid').textContent = 'Error: ' + e.message;
+    }
+  }
+
+  async function updateOIDCToken() {
+    const btn = document.getElementById('oidc-btn');
+    const msg = document.getElementById('oidc-msg');
+    const jwt = document.getElementById('oidc-input').value.trim();
+    msg.className = 'msg';
+
+    if (!jwt) { showMsg(msg, 'error', 'Paste a JWT first.'); return; }
+
+    btn.disabled = true;
+    try {
+      const r = await fetch(BASE + '/identity/token', {
+        method: 'PUT',
+        headers: headers(),
+        body: JSON.stringify({ token: jwt }),
+      });
+      if (!r.ok) throw new Error(await errorText(r));
+      const result = await r.json();
+      document.getElementById('oidc-input').value = '';
+      showMsg(msg, 'ok', `Identity updated: ${result.user_id}`);
+      await loadIdentity();
+    } catch (e) {
+      showMsg(msg, 'error', e.message);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  // ── Escalation tokens ────────────────────────────────────────────────────────
 
   async function loadTokens() {
     const list = document.getElementById('token-list');
@@ -206,6 +303,8 @@
     }
   }
 
+  // ── Utilities ────────────────────────────────────────────────────────────────
+
   async function errorText(r) {
     try { return (await r.json()).error || `HTTP ${r.status}`; }
     catch { return `HTTP ${r.status}`; }
@@ -221,9 +320,13 @@
     return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
-  // Reload token list when secret field changes (user may have just entered it).
-  document.getElementById('secret').addEventListener('change', loadTokens);
+  // Reload when secret field changes (user may have just entered it).
+  document.getElementById('secret').addEventListener('change', () => {
+    loadIdentity();
+    loadTokens();
+  });
 
+  loadIdentity();
   loadTokens();
 </script>
 </body>

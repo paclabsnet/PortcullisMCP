@@ -23,7 +23,7 @@ type DecisionLogEntry struct {
 	ToolName   string         `json:"tool_name"`
 	Decision   string         `json:"decision"` // "allow" | "deny" | "escalate"
 	Reason     string         `json:"reason,omitempty"`
-	AuditID    string         `json:"audit_id,omitempty"` // PDP audit ID
+	PDPRequestID string       `json:"pdp_request_id,omitempty"` // request_id echoed by the PDP, if any
 	Source     string         `json:"source"`             // "gate-fastpath" | "pdp"
 	Arguments  map[string]any `json:"arguments,omitempty"`
 	Result     string         `json:"result,omitempty"` // summary of tool result
@@ -40,6 +40,7 @@ type DecisionLogger struct {
 	client        *http.Client
 	done          chan struct{}
 	wg            sync.WaitGroup
+	shutdownOnce  sync.Once
 	flushInterval time.Duration
 	maxBatchSize  int
 	droppedCount  int64 // Atomic counter for dropped entries
@@ -250,21 +251,18 @@ func (dl *DecisionLogger) sendToRemote(ctx context.Context, entries []*DecisionL
 }
 
 // Shutdown gracefully shuts down the decision logger.
+// It is safe to call Shutdown more than once.
 func (dl *DecisionLogger) Shutdown() error {
 	if !dl.cfg.Enabled {
 		return nil
 	}
 
-	slog.Debug("shutting down decision logger")
-
-	// Signal worker to stop
-	close(dl.done)
-
-	// Wait for worker to finish (it will drain the channel)
-	dl.wg.Wait()
-
-	// Close the entry channel
-	close(dl.entryChan)
+	dl.shutdownOnce.Do(func() {
+		slog.Debug("shutting down decision logger")
+		close(dl.done)
+		dl.wg.Wait()
+		close(dl.entryChan)
+	})
 
 	// Close HTTP client
 	dl.client.CloseIdleConnections()

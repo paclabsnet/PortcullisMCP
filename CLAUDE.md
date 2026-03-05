@@ -118,7 +118,7 @@ type EnrichedMCPRequest struct {
 type PDPResponse struct {
     Decision  string    // "allow" | "deny" | "escalate"
     Reason    string
-    AuditID   string
+    RequestID string    // optionally echoed from the input request by the PDP
 }
 
 // MCPToolSchema and MCPResult are not defined here — use *mcp.Tool and

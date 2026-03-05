@@ -6,6 +6,12 @@ keep:
 
 identity:
   source: "os"  # Use OS username for local testing
+  # Optional overrides for testing different user scenarios:
+  user_id: "alice@example.com"      # Override OS username
+  display_name: "Alice Developer"   # Override display name
+  groups:                            # Specify groups for policy testing
+    - "developers"
+    - "qa-team"
 
 sandbox:
   directory: "."  # Current directory as sandbox

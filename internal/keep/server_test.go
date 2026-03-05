@@ -83,7 +83,6 @@ func TestServer_HandleCall_Allow(t *testing.T) {
 		router:      router,
 		workflow:    &mockWorkflow{},
 		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
-		pending:     make(map[string]shared.EnrichedMCPRequest),
 	}
 
 	reqBody := shared.EnrichedMCPRequest{
@@ -128,7 +127,6 @@ func TestServer_HandleCall_Deny(t *testing.T) {
 		router:      &mockRouter{},
 		workflow:    &mockWorkflow{},
 		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
-		pending:     make(map[string]shared.EnrichedMCPRequest),
 	}
 
 	reqBody := shared.EnrichedMCPRequest{
@@ -181,7 +179,6 @@ func TestServer_HandleCall_Escalate(t *testing.T) {
 		router:      &mockRouter{},
 		workflow:    workflow,
 		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
-		pending:     make(map[string]shared.EnrichedMCPRequest),
 	}
 
 	reqBody := shared.EnrichedMCPRequest{
@@ -213,14 +210,6 @@ func TestServer_HandleCall_Escalate(t *testing.T) {
 		t.Errorf("workflow_request_id = %q, want %q", result["workflow_request_id"], "workflow-123")
 	}
 
-	// Verify the request was added to pending map
-	srv.pendingMu.RLock()
-	_, exists := srv.pending["req-123"]
-	srv.pendingMu.RUnlock()
-
-	if !exists {
-		t.Error("expected request to be added to pending map")
-	}
 }
 
 func TestServer_HandleCall_PDPError(t *testing.T) {
@@ -233,7 +222,6 @@ func TestServer_HandleCall_PDPError(t *testing.T) {
 		router:      &mockRouter{},
 		workflow:    &mockWorkflow{},
 		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
-		pending:     make(map[string]shared.EnrichedMCPRequest),
 	}
 
 	reqBody := shared.EnrichedMCPRequest{
@@ -259,7 +247,6 @@ func TestServer_HandleCall_InvalidJSON(t *testing.T) {
 		router:      &mockRouter{},
 		workflow:    &mockWorkflow{},
 		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
-		pending:     make(map[string]shared.EnrichedMCPRequest),
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/call", bytes.NewReader([]byte("invalid json")))

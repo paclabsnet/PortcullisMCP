@@ -2,6 +2,7 @@ package keep
 
 import (
 	"context"
+	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -9,7 +10,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"sync"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
@@ -31,10 +31,6 @@ type Server struct {
 	router      MCPRouter
 	workflow    WorkflowHandler
 	decisionLog *DecisionLogger
-	// pending holds in-progress escalation request IDs. The actual approval
-	// flow is async and out-of-band; this map is informational only.
-	pendingMu sync.RWMutex
-	pending   map[string]shared.EnrichedMCPRequest
 }
 
 // NewServer creates a Keep server. All dependencies are injected.
@@ -54,7 +50,6 @@ func NewServer(cfg Config) (*Server, error) {
 		router:      router,
 		workflow:    wf,
 		decisionLog: NewDecisionLogger(cfg.DecisionLog),
-		pending:     make(map[string]shared.EnrichedMCPRequest),
 	}, nil
 }
 
@@ -123,15 +118,16 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 
 	// Log the decision
 	s.decisionLog.Log(&DecisionLogEntry{
-		SessionID:  req.SessionID,
-		RequestID:  req.RequestID,
-		UserID:     req.UserIdentity.UserID,
-		ServerName: req.ServerName,
-		ToolName:   req.ToolName,
-		Decision:   pdpResp.Decision,
-		Reason:     pdpResp.Reason,
-		Source:     "pdp",
-		Arguments:  req.Arguments,
+		SessionID:    req.SessionID,
+		RequestID:    req.RequestID,
+		UserID:       req.UserIdentity.UserID,
+		ServerName:   req.ServerName,
+		ToolName:     req.ToolName,
+		Decision:     pdpResp.Decision,
+		Reason:       pdpResp.Reason,
+		PDPRequestID: pdpResp.RequestID,
+		Source:       "pdp",
+		Arguments:    req.Arguments,
 	})
 
 	switch pdpResp.Decision {
@@ -153,10 +149,6 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "escalation submission failed")
 			return
 		}
-		s.pendingMu.Lock()
-		s.pending[req.RequestID] = req
-		s.pendingMu.Unlock()
-
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(w).Encode(map[string]string{
@@ -243,7 +235,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		auth := r.Header.Get("Authorization")
 		expected := "Bearer " + s.cfg.Listen.Auth.BearerToken
 
-		if auth != expected {
+		if subtle.ConstantTimeCompare([]byte(auth), []byte(expected)) != 1 {
 			slog.Warn("unauthorized request",
 				"remote_addr", r.RemoteAddr,
 				"path", r.URL.Path,

@@ -25,7 +25,6 @@ func TestAuthMiddleware_ValidToken(t *testing.T) {
 		router:      &mockRouter{},
 		workflow:    &mockWorkflow{},
 		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
-		pending:     make(map[string]shared.EnrichedMCPRequest),
 	}
 
 	mux := http.NewServeMux()
@@ -65,7 +64,6 @@ func TestAuthMiddleware_InvalidToken(t *testing.T) {
 		router:      &mockRouter{},
 		workflow:    &mockWorkflow{},
 		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
-		pending:     make(map[string]shared.EnrichedMCPRequest),
 	}
 
 	mux := http.NewServeMux()
@@ -138,7 +136,6 @@ func TestAuthMiddleware_Disabled(t *testing.T) {
 		router:      &mockRouter{},
 		workflow:    &mockWorkflow{},
 		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
-		pending:     make(map[string]shared.EnrichedMCPRequest),
 	}
 
 	mux := http.NewServeMux()

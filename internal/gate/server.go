@@ -30,9 +30,9 @@ type DecisionLogEntry struct {
 // It presents itself to the agent as an MCP server, applies the local
 // fast-path for filesystem operations, and forwards everything else to Keep.
 type Gate struct {
-	cfg       Config
-	identity  shared.UserIdentity
-	store     *TokenStore
+	cfg      Config
+	identity *IdentityCache
+	store    *TokenStore
 	forwarder *Forwarder
 	server    *mcp.Server
 	localFS   *mcp.ClientSession // in-process filesystem backend
@@ -44,7 +44,7 @@ type Gate struct {
 
 // New creates a Gate from the given config. Call Run to start serving.
 func New(ctx context.Context, cfg Config) (*Gate, error) {
-	identity, err := resolveIdentity(ctx, cfg.Identity)
+	identity, err := NewIdentityCache(ctx, cfg.Identity)
 	if err != nil {
 		return nil, fmt.Errorf("resolve identity: %w", err)
 	}
@@ -108,7 +108,7 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 		}
 	}
 
-	keepTools, err := fwd.ListTools(ctx, identity, store.All())
+	keepTools, err := fwd.ListTools(ctx, identity.Get(ctx), store.All())
 	if err != nil {
 		// Non-fatal: gate can still serve local filesystem tools if Keep is
 		// temporarily unavailable at startup.
@@ -124,7 +124,7 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 // Run starts the MCP server on stdio transport and blocks until ctx is
 // cancelled or the transport closes.
 func (g *Gate) Run(ctx context.Context) error {
-	mgmt := NewManagementServer(g.store, g.cfg.ManagementAPI)
+	mgmt := NewManagementServer(g.store, g.identity, g.cfg.ManagementAPI)
 	if err := mgmt.Start(ctx); err != nil {
 		return fmt.Errorf("start management api: %w", err)
 	}
@@ -157,7 +157,11 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 		return nil, err
 	}
 
-	path, _ := extractPath(args)
+	paths := extractPaths(args)
+	path := ""
+	if len(paths) > 0 {
+		path = paths[0]
+	}
 
 	switch fpResult {
 	case FastPathAllow:
@@ -169,7 +173,7 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 			Timestamp: time.Now().UTC(),
 			SessionID: g.sessionID,
 			RequestID: requestID,
-			UserID:    g.identity.UserID,
+			UserID:    g.identity.Get(ctx).UserID,
 			ToolName:  toolName,
 			Decision:  "allow",
 			Reason:    "sandbox",
@@ -197,7 +201,7 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 			Timestamp: time.Now().UTC(),
 			SessionID: g.sessionID,
 			RequestID: requestID,
-			UserID:    g.identity.UserID,
+			UserID:    g.identity.Get(ctx).UserID,
 			ToolName:  toolName,
 			Decision:  "deny",
 			Reason:    "protected path",
@@ -212,11 +216,12 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 	}
 
 	// Forward to Keep.
+	currentIdentity := g.identity.Get(ctx)
 	enriched := shared.EnrichedMCPRequest{
 		ServerName:       inferServerName(toolName),
 		ToolName:         toolName,
 		Arguments:        args,
-		UserIdentity:     g.identity,
+		UserIdentity:     currentIdentity,
 		EscalationTokens: g.store.All(),
 		SessionID:        g.sessionID,
 		RequestID:        requestID,

@@ -102,6 +102,19 @@ The Gate exposes an MCP server on stdio. You can test it by connecting an MCP cl
 - `config/gate-config.minimal.yaml` - Local testing without TLS
 - `config/keep-config.minimal.yaml` - Local testing without TLS
 
+**Testing Group-Based Policies:**
+When using OS identity source (for local testing), you can override user identity fields:
+```yaml
+identity:
+  source: "os"
+  user_id: "alice@example.com"      # Override OS username
+  display_name: "Alice Developer"   # Override display name
+  groups:
+    - "developers"
+    - "admin"
+```
+This allows testing different user scenarios and group-based OPA policies without OIDC infrastructure. If `user_id` is not specified, it defaults to the OS username.
+
 ### Full (for production)
 - `config/gate-config.example.yaml` - Full configuration with mTLS
 - `config/keep-config.example.yaml` - Full configuration with mTLS and all features

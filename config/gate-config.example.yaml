@@ -5,11 +5,16 @@ keep:
     cert: "~/.portcullis/gate.crt"
     key:  "~/.portcullis/gate.key"
     # token: ""           # used when type is "bearer"
+    # server_ca: ""       # path to CA cert for verifying Keep's TLS certificate (required for private/enterprise CAs)
 
 identity:
   source: "oidc"          # or "os" (testing/evaluation only)
   oidc:
     token_file: "~/.portcullis/oidc-token"  # refreshed by enterprise SSO tooling
+  # When source is "os", these optional fields allow testing different user scenarios:
+  # user_id: "alice@example.com"      # override OS username
+  # display_name: "Alice Developer"   # override display name
+  # groups: ["developers", "admin"]   # assign groups for policy testing
 
 sandbox:
   directory: "~/.portcullis/sandbox"

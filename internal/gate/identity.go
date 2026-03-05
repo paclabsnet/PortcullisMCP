@@ -5,42 +5,162 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/user"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 )
 
-// resolveIdentity builds a UserIdentity for the current session.
-// It tries sources in priority order: OIDC token file, then OS username fallback.
-func resolveIdentity(ctx context.Context, cfg IdentityConfig) (shared.UserIdentity, error) {
-	if cfg.Source == "oidc" {
-		id, err := resolveOIDCIdentity(ctx, cfg.OIDC)
-		if err == nil {
-			return id, nil
-		}
-		// Fall through to OS fallback on error.
-	}
-	return resolveOSIdentity()
+const identityRefreshTTL = 60 * time.Second
+
+// IdentityInfo is the public view of the current identity, safe to return via the management API.
+type IdentityInfo struct {
+	UserID      string     `json:"user_id"`
+	DisplayName string     `json:"display_name,omitempty"`
+	SourceType  string     `json:"source_type"`
+	TokenExpiry *time.Time `json:"token_expiry,omitempty"` // nil if not OIDC or exp claim absent
 }
 
-// resolveOIDCIdentity reads the OIDC token from the configured file and
-// extracts identity claims from the JWT payload.
-// It does NOT verify the token signature — that is the PDP's responsibility.
-func resolveOIDCIdentity(_ context.Context, cfg OIDCConfig) (shared.UserIdentity, error) {
-	raw, err := os.ReadFile(cfg.TokenFile)
-	if err != nil {
-		return shared.UserIdentity{}, fmt.Errorf("read oidc token file: %w", err)
-	}
-	token := strings.TrimSpace(string(raw))
-	if token == "" {
-		return shared.UserIdentity{}, fmt.Errorf("oidc token file is empty")
-	}
+// IdentityCache resolves and caches the user identity with a short TTL so that
+// OIDC token refreshes by enterprise SSO tooling are picked up automatically
+// without restarting the gate.
+type IdentityCache struct {
+	mu          sync.Mutex
+	cfg         IdentityConfig
+	identity    shared.UserIdentity
+	tokenExpiry time.Time // from JWT exp claim; zero if unavailable
+	refreshAt   time.Time // when the cache entry should be re-read
+}
 
+// NewIdentityCache creates an IdentityCache and performs the initial identity
+// resolution. Returns an error if the initial resolution fails.
+func NewIdentityCache(ctx context.Context, cfg IdentityConfig) (*IdentityCache, error) {
+	c := &IdentityCache{cfg: cfg}
+	if err := c.refresh(ctx); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+// Get returns the current identity, refreshing from source if the TTL has elapsed.
+// On refresh failure it returns the previously cached identity and logs a warning.
+func (c *IdentityCache) Get(ctx context.Context) shared.UserIdentity {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if time.Now().Before(c.refreshAt) {
+		return c.identity
+	}
+	if err := c.refresh(ctx); err != nil {
+		slog.Warn("identity refresh failed, using cached identity", "error", err)
+		c.refreshAt = time.Now().Add(10 * time.Second) // back off to avoid log spam
+	}
+	return c.identity
+}
+
+// Info returns public metadata about the current cached identity.
+func (c *IdentityCache) Info() IdentityInfo {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	info := IdentityInfo{
+		UserID:      c.identity.UserID,
+		DisplayName: c.identity.DisplayName,
+		SourceType:  c.identity.SourceType,
+	}
+	if !c.tokenExpiry.IsZero() {
+		t := c.tokenExpiry
+		info.TokenExpiry = &t
+	}
+	return info
+}
+
+// UpdateToken validates a raw OIDC JWT, writes it to the configured token file,
+// and immediately updates the cache. Returns the new identity on success.
+// Returns an error if the identity source is not "oidc", the token is invalid,
+// or the file cannot be written.
+func (c *IdentityCache) UpdateToken(rawJWT string) (shared.UserIdentity, error) {
+	if c.cfg.Source != "oidc" {
+		return shared.UserIdentity{}, fmt.Errorf("identity source is %q, not oidc; token update not applicable", c.cfg.Source)
+	}
+	rawJWT = strings.TrimSpace(rawJWT)
+	id, expiry, err := identityFromJWT(rawJWT)
+	if err != nil {
+		return shared.UserIdentity{}, fmt.Errorf("invalid token: %w", err)
+	}
+	tokenFile, err := expandHome(c.cfg.OIDC.TokenFile)
+	if err != nil {
+		return shared.UserIdentity{}, fmt.Errorf("expand token file path: %w", err)
+	}
+	if err := os.WriteFile(tokenFile, []byte(rawJWT+"\n"), 0600); err != nil {
+		return shared.UserIdentity{}, fmt.Errorf("write token file: %w", err)
+	}
+	c.mu.Lock()
+	c.identity = id
+	c.tokenExpiry = expiry
+	c.refreshAt = time.Now().Add(identityRefreshTTL)
+	c.mu.Unlock()
+	slog.Info("OIDC token updated via management API", "user_id", id.UserID)
+	return id, nil
+}
+
+// refresh re-resolves the identity from the configured source.
+// Must be called with c.mu held.
+func (c *IdentityCache) refresh(ctx context.Context) error {
+	id, expiry, err := resolveIdentityWithExpiry(ctx, c.cfg)
+	if err != nil {
+		return err
+	}
+	c.identity = id
+	c.tokenExpiry = expiry
+	c.refreshAt = time.Now().Add(identityRefreshTTL)
+	return nil
+}
+
+// resolveIdentityWithExpiry resolves the identity and returns the JWT expiry
+// time (zero if not OIDC or exp claim absent).
+func resolveIdentityWithExpiry(ctx context.Context, cfg IdentityConfig) (shared.UserIdentity, time.Time, error) {
+	if cfg.Source == "oidc" {
+		raw, err := os.ReadFile(cfg.OIDC.TokenFile)
+		if err == nil {
+			token := strings.TrimSpace(string(raw))
+			if token != "" {
+				id, expiry, err := identityFromJWT(token)
+				if err == nil {
+					return id, expiry, nil
+				}
+				slog.Warn("OIDC identity resolution failed; falling back to OS identity — policy enforcement may be weaker",
+					"error", err)
+			} else {
+				slog.Warn("OIDC token file is empty; falling back to OS identity — policy enforcement may be weaker")
+			}
+		} else {
+			slog.Warn("OIDC identity resolution failed; falling back to OS identity — policy enforcement may be weaker",
+				"error", err)
+		}
+	}
+	id, err := resolveOSIdentity(cfg)
+	return id, time.Time{}, err
+}
+
+// resolveIdentity is kept for compatibility; prefer NewIdentityCache for new code.
+func resolveIdentity(ctx context.Context, cfg IdentityConfig) (shared.UserIdentity, error) {
+	id, _, err := resolveIdentityWithExpiry(ctx, cfg)
+	return id, err
+}
+
+// identityFromJWT parses a raw OIDC JWT string, extracts identity claims, and
+// returns the token expiry time. It does NOT verify the signature — that is the
+// PDP's responsibility.
+//
+// Warns if the token is already expired or expiring within 5 minutes, but
+// still returns the identity so the PDP can make the authoritative decision.
+func identityFromJWT(token string) (shared.UserIdentity, time.Time, error) {
 	claims, err := unsafeParseJWTClaims(token)
 	if err != nil {
-		return shared.UserIdentity{}, fmt.Errorf("parse oidc token claims: %w", err)
+		return shared.UserIdentity{}, time.Time{}, fmt.Errorf("parse jwt claims: %w", err)
 	}
 
 	id := shared.UserIdentity{
@@ -69,16 +189,54 @@ func resolveOIDCIdentity(_ context.Context, cfg OIDCConfig) (shared.UserIdentity
 			}
 		}
 	}
-
 	if id.UserID == "" {
-		return shared.UserIdentity{}, fmt.Errorf("oidc token missing subject claim")
+		return shared.UserIdentity{}, time.Time{}, fmt.Errorf("oidc token missing subject claim")
 	}
-	return id, nil
+
+	// Check expiry claim and warn; the PDP is the authority on token validity.
+	var expiry time.Time
+	if exp, ok := claims["exp"].(float64); ok {
+		expiry = time.Unix(int64(exp), 0)
+		remaining := time.Until(expiry)
+		switch {
+		case remaining < 0:
+			slog.Warn("OIDC token is expired; requests will likely be denied by the PDP",
+				"user_id", id.UserID, "expired_at", expiry.UTC().Format(time.RFC3339))
+		case remaining < 5*time.Minute:
+			slog.Warn("OIDC token expires soon",
+				"user_id", id.UserID, "expires_in", remaining.Round(time.Second).String())
+		}
+	}
+
+	return id, expiry, nil
+}
+
+// resolveOIDCIdentity reads the OIDC token from the configured file.
+// Kept for use by tests; production code should use identityFromJWT or IdentityCache.
+func resolveOIDCIdentity(_ context.Context, cfg OIDCConfig) (shared.UserIdentity, error) {
+	raw, err := os.ReadFile(cfg.TokenFile)
+	if err != nil {
+		return shared.UserIdentity{}, fmt.Errorf("read oidc token file: %w", err)
+	}
+	token := strings.TrimSpace(string(raw))
+	if token == "" {
+		return shared.UserIdentity{}, fmt.Errorf("oidc token file is empty")
+	}
+	id, _, err := identityFromJWT(token)
+	return id, err
 }
 
 // resolveOSIdentity builds a UserIdentity from the OS user. Provided for
 // testing/evaluation only; portcullis-keep may be configured to reject it.
-func resolveOSIdentity() (shared.UserIdentity, error) {
+func resolveOSIdentity(cfg IdentityConfig) (shared.UserIdentity, error) {
+	if cfg.UserID != "" {
+		return shared.UserIdentity{
+			UserID:      cfg.UserID,
+			DisplayName: cfg.DisplayName,
+			Groups:      cfg.Groups,
+			SourceType:  "os",
+		}, nil
+	}
 	u, err := user.Current()
 	if err != nil {
 		return shared.UserIdentity{}, fmt.Errorf("resolve os user: %w", err)
@@ -88,9 +246,14 @@ func resolveOSIdentity() (shared.UserIdentity, error) {
 	if hostname != "" {
 		userID = u.Username + "@" + hostname
 	}
+	displayName := u.Name
+	if cfg.DisplayName != "" {
+		displayName = cfg.DisplayName
+	}
 	return shared.UserIdentity{
 		UserID:      userID,
-		DisplayName: u.Name,
+		DisplayName: displayName,
+		Groups:      cfg.Groups,
 		SourceType:  "os",
 	}, nil
 }

@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
@@ -106,6 +108,24 @@ func (f *Forwarder) post(ctx context.Context, path string, body, out any) error 
 // buildTransport constructs an http.RoundTripper based on the auth config.
 func buildTransport(auth KeepAuth) (http.RoundTripper, error) {
 	base := http.DefaultTransport.(*http.Transport).Clone()
+	if base.TLSClientConfig == nil {
+		base.TLSClientConfig = &tls.Config{}
+	}
+
+	// Load a custom server CA for verifying Keep's TLS certificate.
+	// Required when Keep uses a private or enterprise CA not in the system pool.
+	if auth.ServerCA != "" {
+		caData, err := os.ReadFile(auth.ServerCA)
+		if err != nil {
+			return nil, fmt.Errorf("read keep server CA: %w", err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(caData) {
+			return nil, fmt.Errorf("parse keep server CA: no valid certificates found")
+		}
+		base.TLSClientConfig.RootCAs = pool
+	}
+
 	if auth.Type == "mtls" {
 		if auth.Cert == "" || auth.Key == "" {
 			return nil, fmt.Errorf("mtls auth requires cert and key")
@@ -114,10 +134,8 @@ func buildTransport(auth KeepAuth) (http.RoundTripper, error) {
 		if err != nil {
 			return nil, fmt.Errorf("load mtls keypair: %w", err)
 		}
-		base.TLSClientConfig = &tls.Config{
-			Certificates: []tls.Certificate{cert},
-		}
+		base.TLSClientConfig.Certificates = []tls.Certificate{cert}
 	}
-	// If auth.Type is not "mtls" or is empty, use default transport (plain HTTP or HTTPS)
+
 	return base, nil
 }

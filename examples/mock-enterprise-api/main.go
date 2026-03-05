@@ -38,6 +38,11 @@ func main() {
 		Description: "Query product inventory levels",
 	}, api.handleQueryInventory)
 
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "delete_order",
+		Description: "Delete an order (admin only)",
+	}, api.handleDeleteOrder)
+
 	// HTTP handler for SSE transport
 	http.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("MCP connection from %s", r.RemoteAddr)
@@ -55,7 +60,7 @@ func main() {
 
 	addr := ":3000"
 	log.Printf("Mock HTTP MCP Server listening on http://localhost%s/mcp", addr)
-	log.Printf("Available tools: get_customer, update_order_status, query_inventory")
+	log.Printf("Available tools: get_customer, update_order_status, query_inventory, delete_order")
 	log.Printf("Health check: http://localhost%s/health", addr)
 
 	if err := http.ListenAndServe(addr, nil); err != nil {
@@ -76,6 +81,10 @@ type orderInput struct {
 
 type inventoryInput struct {
 	ProductSKU string `json:"product_sku"`
+}
+
+type deleteOrderInput struct {
+	OrderID string `json:"order_id"`
 }
 
 func (a *apiServer) handleGetCustomer(_ context.Context, _ *mcp.CallToolRequest, in customerInput) (*mcp.CallToolResult, any, error) {
@@ -134,6 +143,26 @@ func (a *apiServer) handleQueryInventory(_ context.Context, _ *mcp.CallToolReque
 		"reserved":     8,
 		"warehouse":    "WH-001",
 		"last_updated": time.Now().Format(time.RFC3339),
+	}
+
+	data, _ := json.MarshalIndent(result, "", "  ")
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: string(data)},
+		},
+	}, nil, nil
+}
+
+func (a *apiServer) handleDeleteOrder(_ context.Context, _ *mcp.CallToolRequest, in deleteOrderInput) (*mcp.CallToolResult, any, error) {
+	if in.OrderID == "" {
+		return nil, nil, fmt.Errorf("order_id is required")
+	}
+
+	result := map[string]interface{}{
+		"order_id":   in.OrderID,
+		"status":     "deleted",
+		"deleted_at": time.Now().Format(time.RFC3339),
+		"message":    fmt.Sprintf("Order %s has been permanently deleted", in.OrderID),
 	}
 
 	data, _ := json.MarshalIndent(result, "", "  ")

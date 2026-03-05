@@ -17,15 +17,19 @@ type KeepConfig struct {
 }
 
 type KeepAuth struct {
-	Type string `yaml:"type"` // "mtls" | "bearer"
-	Cert string `yaml:"cert"`
-	Key  string `yaml:"key"`
-	Token string `yaml:"token"`
+	Type     string `yaml:"type"`      // "mtls" | "bearer"
+	Cert     string `yaml:"cert"`      // client certificate for mTLS
+	Key      string `yaml:"key"`       // client key for mTLS
+	Token    string `yaml:"token"`     // bearer token
+	ServerCA string `yaml:"server_ca"` // CA cert for verifying Keep's TLS certificate (enterprise/private CA)
 }
 
 type IdentityConfig struct {
-	Source string     `yaml:"source"` // "oidc" | "os"
-	OIDC   OIDCConfig `yaml:"oidc"`
+	Source      string     `yaml:"source"`       // "oidc" | "os"
+	OIDC        OIDCConfig `yaml:"oidc"`
+	UserID      string     `yaml:"user_id"`      // optional: override user ID when source is "os" (for testing)
+	DisplayName string     `yaml:"display_name"` // optional: override display name when source is "os" (for testing)
+	Groups      []string   `yaml:"groups"`       // optional: groups to assign when source is "os" (for testing)
 }
 
 type OIDCConfig struct {

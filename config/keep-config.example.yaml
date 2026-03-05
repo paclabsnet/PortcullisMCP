@@ -37,7 +37,7 @@ escalation:
     type: "servicenow"    # or "webhook"
     servicenow:
       instance: "example.service-now.com"
-      credential_env: "SNOW_CREDENTIALS"
+      credential_env: "${SNOW_CREDENTIALS}"
     # webhook:
     #   url: "https://hooks.internal.example.com/portcullis"
     #   headers:
