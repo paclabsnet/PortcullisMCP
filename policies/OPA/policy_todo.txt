@@ -1,0 +1,22 @@
+Things to do
+
+
+
+1. We should include a deny table rule that uses the arg_restriction thing we just built
+
+2. we need the primary scaffold that parses any escalation_tokens and converts the valid ones
+   into escalation_data elements in an array
+
+
+3. write some Raygun tests to verify that the rules are working as expected
+
+
+4. finish up the tabular example to include all of the scenarios (allow, escalate, deny)
+
+
+5. Implement the same rules in custom rego.  take advantage of the util functions
+
+
+6. those same raygun tests should work for custom rules if the logic is the same
+
+
