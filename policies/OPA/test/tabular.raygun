@@ -1,0 +1,32 @@
+suite: verify the functionality of the tabular decision matrix
+description: we'll send a variety of inputs to simulate various requests from an AI agent wishing to use a MCP
+opa:
+  bundle-path: ../bundle.tar.gz 
+
+tests:
+  - name: anyone can read a file
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"allow"'
+    input:
+      type: inline
+      value: >
+        {
+          "service": "portcullis-localfs",
+          "tool_name": "read_file",
+          "arguments": {
+            "path": "/workspace/src/main.go",
+            "content": "package main\n"
+          },
+          "user_identity": {
+            "user_id": "alice@example.com",
+            "display_name": "Alice Developer",
+            "groups": ["developers", "team-backend"]
+          },
+          "escalation_tokens":[
+
+          ],
+          "session_id": "tbd123",
+          "request_id": "req-abc123"
+        }
+

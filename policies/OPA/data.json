@@ -1,4 +1,7 @@
 {
+        "config" : {
+                "escalation_secret": "a-string-secret-at-least-256-bits-long"
+        },
   "portcullis": {
 	"mcp" : {
 
@@ -6,102 +9,121 @@
 
 			"read_file" : {
 				"allow" : {
-					"roles" : [ "*" ]
+					"groups" : [ "*" ]
 				}
 			},
 			"read_text_file" : {
                                 "allow" : {
-                                        "roles" : [ "*" ]
+                                        "groups" : [ "*" ]
                                 }
 
 			},
                         "read_media_file" : {
                                 "allow" : {
-                                        "roles" : [ "*" ]
+                                        "groups" : [ "*" ]
                                 }
 
                         },
                         "read_multiple_files" : {
                                 "allow" : {
-                                        "roles" : [ "*" ]
+                                        "groups" : [ "*" ]
                                 }
 
                         },
                         "write_file" : {
                                 "allow" : {
-                                        "roles" : [ "*" ]
+                                        "groups" : [ "*" ]
+                                },
+                                "escalate" : {
+                                        "arg_restrictions" :[
+                                                { "type":"prefix", "key_path": "path", "data": "C:\\Program Files" },
+                                                { "type":"prefix", "key_path": "path", "data": "C:\\Program Files (x86)" }
+                                        ]
+                                },
+                                "deny" : {
+                                        "arg_restrictions" :[
+                                                { "type":"prefix", "key_path": "path", "data": "C:\\Windows" },
+                                                { "type":"prefix", "key_path": "path", "data": "C:\\ProgramData" },
+                                                { "type":"prefix", "key_path": "path", "data": "/boot" },
+                                                { "type":"prefix", "key_path": "path", "data": "/proc" },
+                                                { "type":"prefix", "key_path": "path", "data": "/sys" },
+                                                { "type":"prefix", "key_path": "path", "data": "/etc" },
+                                                { "type":"prefix", "key_path": "path", "data": "/lib" },
+                                                { "type":"prefix", "key_path": "path", "data": "~/.ssh" },
+                                                { "type":"prefix", "key_path": "path", "data": "~/.gnupg" }
+                                        ]
                                 }
 
                         },
                         "edit_file" : {
                                 "allow" : {
-                                        "roles" : [ "*" ]
+                                        "groups" : [ "*" ]
                                 }
 
                         },
                         "create_directory" : {
                                 "allow" : {
-                                        "roles" : [ "*" ]
+                                        "groups" : [ "*" ]
                                 }
 
                         },
                         "list_directory" : {
                                 "allow" : {
-                                        "roles" : [ "*" ]
+                                        "groups" : [ "*" ]
                                 }
 
                         },
                         "list_directory_with_sizes" : {
                                 "allow" : {
-                                        "roles" : [ "*" ]
+                                        "groups" : [ "*" ]
                                 }
 
                         },
                         "directory_tree" : {
                                 "allow" : {
-                                        "roles" : [ "*" ]
+                                        "groups" : [ "*" ]
                                 }
 
                         },
                         "move_file" : {
                                 "allow" : {
-                                        "roles" : [ "*" ]
+                                        "groups" : [ "*" ]
                                 }
 
                         },
                         "search_files" : {
                                 "allow" : {
-                                        "roles" : [ "*" ]
+                                        "groups" : [ "*" ]
                                 }
 
                         },
                         "copy_file" : {
                                 "allow" : {
-                                        "roles" : [ "*" ]
+                                        "groups" : [ "*" ]
                                 }
 
                         },
                         "delete_file" : {
                                 "allow" : {
-                                        "roles" : [ "*" ]
+                                        "groups" : [ "*" ]
                                 }
 
                         },
                         "search_within_files" : {
                                 "allow" : {
-                                        "roles" : [ "*" ]
+                                        "groups" : [ "*" ]
                                 }
 
                         },
                         "get_file_info" : {
                                 "allow" : {
-                                        "roles" : [ "*" ]
+                                        "groups" : [ "*" ]
                                 }
 
                         },
                         "list_allowed_directories" : {
                                 "allow" : {
-                                        "roles" : [ "*" ]
+                                        "groups" : [ "*" ]
                                 }
 
                         }
@@ -112,28 +134,28 @@
 
 			"get_customer": {
 				"allow" : {
-					"roles" : [ "admin", "developer", "clerk" ]
+					"groups" : [ "admin", "developer", "clerk" ]
 				},
 				"escalate" : {
-					"roles" : [ "*" ]
+					"groups" : [ "*" ]
 				}
 			},
 			"update_order_status": {
 				"allow" : {
-					"roles" : [ "admin" ]
+					"groups" : [ "admin" ]
 				},
 				"escalate" : {
-					"roles" : [ "*" ]
+					"groups" : [ "*" ]
 				}
 			},
 			"query_inventory": {
 				"allow" : {
-					"roles" : [ "*" ]
+					"groups" : [ "*" ]
 				}
 			},
 			"delete_order": {
 				"allow" : {
-					"roles" : [ "admin" ]
+					"groups" : [ "admin" ]
 				}
 			}
 

@@ -34,7 +34,7 @@ All field names use **snake_case**.
 ```json
 {
   "input": {
-    "server_name": "filesystem",
+    "service": "filesystem",
     "tool_name": "write_file",
     "arguments": {
       "path": "/workspace/src/main.go",
@@ -305,8 +305,11 @@ The gate only prunes expired tokens on load.
   "granted_by": "bob.manager@example.com",
   "portcullis": {
     "tools":       ["write_file", "edit_file"],
-    "servers":     ["filesystem"],
-    "path_prefix": "/workspace/feature-x/",
+    "services":    ["filesystem"],
+    "groups" :     ["admin"],
+    "arg_restrictions": [
+       { "type":"prefix", "key_path": "path", "data": "/workspace/feature-x/", "required":true }
+    ],
     "reason":      "Sprint 42 feature branch work"
   }
 }
