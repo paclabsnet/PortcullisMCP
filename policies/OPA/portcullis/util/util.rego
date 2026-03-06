@@ -18,6 +18,7 @@ import rego.v1
 request_matches_criteria( request, rules ) := true if {
 
    "groups" in object.keys(rules)
+   print("#DEBUG: arg_restrictions: ",rules)
    not "arg_restrictions" in object.keys(rules)
 
    # if there are group rules, but no arg restrictions, we just have
@@ -48,7 +49,9 @@ request_matches_criteria_groups_and_arg_restrictions( request, rules ) := true i
 #
 request_matches_arg_restrictions( request, arg_restriction_array ) := true if {
 
-   all_arg_restrictions_honored( arg_restriction_array, request.args)
+   print("DEBUG: request_matches_arg_restrictions: ", arg_restriction_array, " request:", request.arguments)
+
+   any_arg_restrictions_honored( arg_restriction_array, request.arguments)
 
 } else := false
 
@@ -80,7 +83,7 @@ request_matches_escalation_criteria( request, rules, service, tool_name, jwt_sec
             allowed_groups, 
             service, 
             tool_name, 
-            request.args )   
+            request.arguments )   
 
 # we've already tested the core criteria, so if we get here, there's no
 # way to succeed
@@ -143,11 +146,13 @@ escalation_matches_group_service_tool_and_request_args(
       tool, 
       request_args) := true if {
 
+  
+ 
   some record in escalation_data
      arrays_share_element( record.portcullis.groups, allowed_groups)
      service in record.portcullis.services
      tool in record.portcullis.tools
-     all_arg_restrictions_honored( record.arg_restrictions, request_args)	
+     any_arg_restrictions_honored( record.arg_restrictions, request_args)	
 
 } else := false
 
@@ -172,6 +177,14 @@ all_arg_restrictions_honored( restriction_array, request_args) := true if {
 
 } else := false
 
+
+any_arg_restrictions_honored( restriction_array, request_args) := true if {
+
+   some restriction in restriction_array
+      arg_restriction_honored( restriction, request_args )
+   
+
+} else := false
 
 
 
@@ -210,9 +223,13 @@ arg_restriction_honored_existence_required( request_args, restriction) := true i
 
 arg_restriction_honored_type_ladder( element, restriction ) := true if {
    
+
    restriction.type == "prefix"
    
-   startswith(restriction.data, element)
+   startswith(element, restriction.data)
+
+   print("#DEBUG: TRUE: arg_restriction_honored_type_ladder: element: ", element, " restriction: ", restriction)
+
 
 } else := false   # if we need other types of restrictions, we can add them here fairly gracefully
 

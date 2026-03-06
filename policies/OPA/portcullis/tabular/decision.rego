@@ -179,6 +179,8 @@ response_list contains { "decision" : "deny",
 			  "reason" : "Denied by rule",
 			  "request_id": input.request_id } if {
 
+				print("#DEBUG: rules_section: ", rules_section)
+
 				not rules_section.deny == null
 				does_request_meet_criteria_no_escalation( input, rules_section.deny )
 
@@ -264,19 +266,22 @@ decision := deny_result if {
 }
 
 
+decision := escalate_result if {
+	count(deny_list) == 0
+	# count(allow_list) == 0
+	count(escalate_list) > 0
+	escalate_result := escalate_list[0]
+}
+
+
 decision := allow_list if {
 	count(deny_list) == 0
+	count(escalate_list) == 0
 	count(allow_list) > 0
 	allow_result := allow_list[0]
 }
 
 
-decision := escalate_result if {
-	count(deny_list) == 0
-	count(allow_list) == 0
-	count(escalate_list) > 0
-	escalate_result := escalate_list[0]
-}
 
 
 
@@ -289,6 +294,8 @@ decision := escalate_result if {
 # the presence or absence of key information in the request
 #
 does_request_meet_criteria_no_escalation( request, rules ) := true if {
+
+	print("#DEBUG: does_request_meet_criteria_no_escalation: ", request, " ", rules)
 
 	util.request_matches_criteria( request, rules )
 
