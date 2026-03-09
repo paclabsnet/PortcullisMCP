@@ -157,6 +157,21 @@ default decision := {
 # }
 
 
+
+escalation_grant_list := list if {
+
+	"escalation_tokens" in object.keys(input)
+	count(input.escalation_tokens) > 0
+	list := find_applicable_escalation_grants(
+			input.escalation_tokens, 
+			input.service, 
+			input.tool_name, 
+			data.config.escalation_secret)
+
+} else := []
+
+
+
 response_list contains { "decision":   "deny",	
 			  "reason":  "invalid input request",
 			  "request_id": input.request_id } if {
@@ -166,7 +181,7 @@ response_list contains { "decision":   "deny",
 			  }
 
 
-rules_section := util.traverse_json_2(data.portcullis.mcp, [input.service, input.tool_name], null)
+rules_section := object.get(data.portcullis.mcp, [input.service, input.tool_name], null)
 
 response_list contains { "decision":   "deny",	
 			  "reason":  sprintf("no policy rules found for mcp: %s, tool: %s", [input.service, input.tool_name]),
@@ -179,7 +194,6 @@ response_list contains { "decision" : "deny",
 			  "reason" : "Denied by rule",
 			  "request_id": input.request_id } if {
 
-				print("#DEBUG: rules_section: ", rules_section)
 
 				not rules_section.deny == null
 				does_request_meet_criteria_no_escalation( input, rules_section.deny )
@@ -202,12 +216,24 @@ response_list contains { "decision" : "allow",
 			  "request_id" : input.request_id } if {
 
 				not rules_section.escalate == null
-				does_request_meet_criteria_with_escalation( 
+
+				count(escalation_grant_list) > 0
+
+				# it must meet the base criteria for escalate
+				does_request_meet_criteria_no_escalation( input, rules_section.escalate)
+
+
+				# and it meets the criteria of at least one escalation token
+				does_request_meet_criteria_escalation_only( 
 						input, 
 						rules_section.escalate, 
 						input.service, 
 						input.tool_name, 
-						data.config.escalation_secret )
+						escalation_grant_list )
+
+				# the most exciting case!
+				print("#DEBUG: request meets the criteria of the escalation token")
+
 
 			  }
 
@@ -217,12 +243,17 @@ response_list contains {
 			  	"request_id" : input.request_id } if {
 
 					not rules_section.escalate == null
-					not does_request_meet_criteria_with_escalation( 
+					does_request_meet_criteria_no_escalation( input, rules_section.escalate )
+					
+					# why are we checking this? Because if the request does meet the escalation
+					# criteria, it's approved, and no longer needs to be escalated
+					#
+					not does_request_meet_criteria_escalation_only( 
 							input, 
 							rules_section.escalate, 
 							input.service, 
 							input.tool_name, 
-							data.config.escalation_secret )
+							escalation_grant_list )
 				}
 
 
@@ -233,12 +264,6 @@ decision := { "decision" : "deny",
 					count(response_list) == 0
 				}
 
-# only one response, return it
-#decision := single_response if { 
-#				count(response_list) == 1
-#				some x in response_list
-#					single_response := x
-#			}
 
 #
 # multiple responses?  handle the scenarios
@@ -268,13 +293,12 @@ decision := deny_result if {
 
 decision := escalate_result if {
 	count(deny_list) == 0
-	# count(allow_list) == 0
 	count(escalate_list) > 0
 	escalate_result := escalate_list[0]
 }
 
 
-decision := allow_list if {
+decision := allow_result if {
 	count(deny_list) == 0
 	count(escalate_list) == 0
 	count(allow_list) > 0
@@ -295,183 +319,47 @@ decision := allow_list if {
 #
 does_request_meet_criteria_no_escalation( request, rules ) := true if {
 
-	print("#DEBUG: does_request_meet_criteria_no_escalation: ", request, " ", rules)
+	# print("#DEBUG: does_request_meet_criteria_no_escalation: ", request, " ", rules)
 
 	util.request_matches_criteria( request, rules )
 
 } else := false
 
 
-does_request_meet_criteria_with_escalation( request, rules, service, tool_name, jwt_secret ) := true if {
+does_request_meet_criteria_with_escalation( request, rules, service, tool_name, escalation_grant_list ) := true if {
 
 	# if we match the core criteria, we're good
     util.request_matches_criteria( request, rules)
 
-} else := does_request_meet_criteria_escalation_only( request, rules, service, tool_name, jwt_secret) 
+} else := does_request_meet_criteria_escalation_only( request, rules, service, tool_name, escalation_grant_list) 
 
 
 
-does_request_meet_criteria_escalation_only( request, rules, service, tool_name, jwt_secret) := true if {
+does_request_meet_criteria_escalation_only( request, rules, service, tool_name, escalation_grant_list) := true if {
 
-	util.request_matches_escalation_criteria( request, rules, service, tool_name, jwt_secret)
+	util.request_matches_escalation_criteria( request, rules, service, tool_name, escalation_grant_list)
 
 } else := false
 
 
 
-# verify_options := opts if {
-# 	data.portcullis.escalation_secret != ""
-# 	opts := {
-# 		"secret": data.portcullis.escalation_secret,
-# 		"iss":    "portcullis-approver",
-# 	}
-# } else := opts if {
-# 	data.portcullis.escalation_jwks_url != ""
-# 	opts := {
-# 		"jwks_url": data.portcullis.escalation_jwks_url,
-# 		"iss":      "portcullis-approver",
-# 	}
-# }
 
-# # valid_escalation_for_request is true when at least one escalation token
-# # passes signature verification and covers the current request.
-# valid_escalation_for_request if {
-# 	some token in input.escalation_tokens
-# 	[valid, _, payload] := io.jwt.decode_verify(token.raw, verify_options)
-# 	valid == true
+#
+# look through the escalation tokens and find all the ones that are:
+# a) valid
+# b) for the correct service and tool
+#
+# and return those
+#
+find_applicable_escalation_grants( escalation_tokens, service, tool_name, jwt_secret ) := escalation_grant_list if {
 
-# 	# Token must be issued for this specific user (prevents token sharing).
-# 	payload.sub == input.user_identity.user_id
+   escalation_grant_list := [ claims | 
+      some token in escalation_tokens
+      [valid, _, claims ] := io.jwt.decode_verify(token.raw, {"secret": jwt_secret})
+      valid == true
+	  service in claims.portcullis.services
+	  tool_name in claims.portcullis.tools
+   ]
 
-# 	pc := payload.portcullis
-# 	server_covered(pc)
-# 	tool_covered(pc)
-# 	path_covered(pc)
-# }
+} else := []
 
-# server_covered(pc) if { pc.servers == ["*"] }
-# server_covered(pc) if { input.server_name in pc.servers }
-
-# tool_covered(pc) if { pc.tools == ["*"] }
-# tool_covered(pc) if { input.tool_name in pc.tools }
-
-# path_covered(pc) if { not pc.path_prefix }
-# path_covered(pc) if {
-# 	pc.path_prefix
-# 	startswith(input.arguments.path, pc.path_prefix)
-# }
-
-# # ============================================================================
-# # POLICY TABLE EVALUATION
-# #
-# # Reads from data.portcullis.policies — an array of policy rule objects.
-# # Rules are evaluated for every request; all matching deny rules accumulate
-# # into the deny set, all matching escalate rules into the escalate set.
-# #
-# # Rule schema:
-# #   id:          string  — identifier for audit / debugging
-# #   server:      string  — MCP server name, or "*" for any
-# #   tools:       [string] — tool names this rule applies to (omit = any tool)
-# #   groups:      [string] — user must be in at least one group
-# #   action:      "allow" | "deny" | "escalate"
-# #   reason:      string  — returned to the caller on deny/escalate
-# #   path_prefix: string  — (optional) restrict to paths with this prefix
-# #
-# # Data can be loaded via:
-# #   - OPA Data API:  PUT /v1/data/portcullis/policies
-# #   - OPA Bundles:   bundle from S3, GCS, HTTP, etc.
-# #   - OPA plugins:   LDAP, database, Consul, etc.
-# # ============================================================================
-
-# rule_matches(rule) if {
-# 	server_matches_rule(rule)
-# 	tool_matches_rule(rule)
-# 	group_matches_rule(rule)
-# 	path_matches_rule(rule)
-# }
-
-# server_matches_rule(rule) if { rule.server == "*" }
-# server_matches_rule(rule) if { rule.server == input.server_name }
-
-# # No tools constraint means the rule applies to any tool.
-# tool_matches_rule(rule) if { not rule.tools }
-# tool_matches_rule(rule) if { input.tool_name in rule.tools }
-
-# # User must be in at least one of the listed groups.
-# group_matches_rule(rule) if {
-# 	some group in rule.groups
-# 	group in input.user_identity.groups
-# }
-
-# # No path_prefix constraint means any path is acceptable.
-# path_matches_rule(rule) if { not rule.path_prefix }
-# path_matches_rule(rule) if {
-# 	rule.path_prefix
-# 	startswith(input.arguments.path, rule.path_prefix)
-# }
-
-# # Collect all matching deny reasons.
-# deny contains reason if {
-# 	some rule in data.portcullis.policies
-# 	rule.action == "deny"
-# 	rule_matches(rule)
-# 	reason := rule.reason
-# }
-
-# # Collect all matching escalate reasons.
-# # Suppressed when a valid escalation token covers the request, allowing
-# # the request to fall through to the allow decision below.
-# escalate contains reason if {
-# 	some rule in data.portcullis.policies
-# 	rule.action == "escalate"
-# 	rule_matches(rule)
-# 	not valid_escalation_for_request
-# 	reason := rule.reason
-# }
-
-# # request_permitted is true when a policy rule explicitly allows access,
-# # or a valid escalation token covers the request.
-# request_permitted if {
-# 	some rule in data.portcullis.policies
-# 	rule.action == "allow"
-# 	rule_matches(rule)
-# }
-
-# request_permitted if { valid_escalation_for_request }
-
-# # ============================================================================
-# # FINAL DECISION LOGIC
-# # Priority: deny > escalate > allow > default deny
-# # ============================================================================
-
-# # Deny if any deny rule matched.
-# decision := {
-# 	"decision":   "deny",
-# 	"reason":     reason,
-# 	"request_id": input.request_id,
-# } if {
-# 	count(deny) > 0
-# 	reason := concat("; ", deny)
-# }
-
-# # Escalate if no denials but at least one escalation rule matched.
-# decision := {
-# 	"decision":   "escalate",
-# 	"reason":     reason,
-# 	"request_id": input.request_id,
-# } if {
-# 	count(deny) == 0
-# 	count(escalate) > 0
-# 	reason := concat("; ", escalate)
-# }
-
-# # Allow if no denials, no escalations, and the request is permitted.
-# decision := {
-# 	"decision":   "allow",
-# 	"reason":     "user is authorized to perform this action",
-# 	"request_id": input.request_id,
-# } if {
-# 	count(deny) == 0
-# 	count(escalate) == 0
-# 	request_permitted
-# }

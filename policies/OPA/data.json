@@ -21,6 +21,11 @@
                         "read_media_file" : {
                                 "allow" : {
                                         "groups" : [ "*" ]
+                                },
+                                "deny" : {
+                                        "arg_restrictions" :[
+                                                { "type":"prefix", "key_path": "path.filename.extension", "data": ".gz" }
+                                        ]
                                 }
 
                         },

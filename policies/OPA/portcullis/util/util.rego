@@ -18,12 +18,12 @@ import rego.v1
 request_matches_criteria( request, rules ) := true if {
 
    "groups" in object.keys(rules)
-   print("#DEBUG: arg_restrictions: ",rules)
+   # print("#DEBUG: arg_restrictions: ",rules)
    not "arg_restrictions" in object.keys(rules)
 
    # if there are group rules, but no arg restrictions, we just have
    # to test the group match
-   user_identity_has_matching_group( request.user_identity, rules.groups)
+   has_group_membership( request.user_identity.groups, rules.groups)
 
 
 } else := request_matches_criteria_groups_and_arg_restrictions( request, rules )
@@ -35,7 +35,7 @@ request_matches_criteria_groups_and_arg_restrictions( request, rules ) := true i
    "arg_restrictions" in object.keys(rules)
    
    # we have to match both criteria around groups and arg restrictions
-   user_identity_has_matching_group( request.user_identity, rules.groups)
+   has_group_membership( request.user_identity.groups, rules.groups)
    request_matches_arg_restrictions( request, rules.arg_restrictions)
 
 # we can't get here unless we know that arg restrictions exist, so this should
@@ -49,7 +49,7 @@ request_matches_criteria_groups_and_arg_restrictions( request, rules ) := true i
 #
 request_matches_arg_restrictions( request, arg_restriction_array ) := true if {
 
-   print("DEBUG: request_matches_arg_restrictions: ", arg_restriction_array, " request:", request.arguments)
+   # print("DEBUG: request_matches_arg_restrictions: ", arg_restriction_array, " request:", request.arguments)
 
    any_arg_restrictions_honored( arg_restriction_array, request.arguments)
 
@@ -57,29 +57,64 @@ request_matches_arg_restrictions( request, arg_restriction_array ) := true if {
 
 
 
-request_matches_criteria_with_escalation( request, rules, service, tool_name, jwt_secret) := true if {
+request_matches_criteria_with_escalation( request, rules, service, tool_name, escalation_grant_list) := true if {
 
    # simple case - the request matches the core crit
    request_matches_criteria(request, rules)
-} else := request_matches_escalation_criteria( request, rules, service, tool_name, jwt_secret )
+} else := request_matches_escalation_criteria( request, rules, service, tool_name, escalation_grant_list )
 
 
 
-# we decode the valid escalation JWTs into an array, and then
-# check the array elements against the rules
-request_matches_escalation_criteria( request, rules, service, tool_name, jwt_secret ) := true if {
-
-
-   escalation_data := [ claims | 
-      some token in request.escalation_tokens
-      [valid, _, claims ] := io.jwt.decode_verify(token.raw, {"secret": jwt_secret})
-      valid == true
-   ]
+# We check the escalation_grants to see if any of them are a match for the request
+#
+# This is probably the most subtle element in the whole system, so let's spend a little time
+# explaining what's going on
+#
+# Let's say that the agent wants to use the "filesystem" MCP, and the tool: write_file to write
+# records to the file /var/log/whatever.log
+#
+# And the default policy for write_file to /var is escalate. 
+#
+# The user is notified that the AI wants to escalate this request.
+# (Let's assume that it's a reasonable request)
+#
+# The user creates a JWT that grants the following:
+# service: filesystem
+# tool_name: write_file
+# arg_restriction (shorthand):  /var/log/whatever.log
+#
+# The next time the AI asks to do this, this JWT is included
+#
+# when it gets to this point, we've already validated the JWT, so now we just need to
+# see that the parameters of the request (/var/log/whatever.log) match the arg_restrictions
+# in the JWT.  
+#
+# They do match.  So this request can now be considered allowed.  
+#
+# The key insight: the presence of a signed JWT that matches the parameters of the request is
+# sufficient to allow the request to proceed.  "But they're both in the same request, how is 
+# that secure?" I hear you ask. 
+#
+# The answer is in two parts:
+# a) the AI has no ability to sign or add JWTs to the request - all of that happens
+#    in a way that is opaque to the AI. All the AI agent can do is create MCP requests
+# b) the creation of the JWT can be governed by security processes that are outside the
+#    scope of Portcullis, and the security of JWTs is well-established
+#
+# In principle, an organization that is not careful about creating the escalation tokens
+# *could* allow a user to exploit this to give them the ability to coerce the AI agent into
+# doing things that the user can't do themselves (subject to any seecurity in the MCP, etc)
+#
+# Having said that, if the user deliberately gives the agent a token that allows the agent to
+# delete a database, the signed token demonstrates that the user is accountable for this
+# outcome.
+#
+request_matches_escalation_criteria( request, rules, service, tool_name, escalation_grant_list ) := true if {
 
    allowed_groups := object.get(rules, "group", ["*"])
 
    escalation_matches_group_service_tool_and_request_args( 
-            escalation_data, 
+            escalation_grant_list, 
             allowed_groups, 
             service, 
             tool_name, 
@@ -105,32 +140,21 @@ request_matches_escalation_criteria( request, rules, service, tool_name, jwt_sec
 has_matching_group_for_service_tool_and_request_args_with_escalation( 
       user_identity, 
       request_args, 
-      escalation_data,  
+      escalation_grant_list,  
       allowed_groups, 
       service, 
       tool ) := true if {
 
-   user_identity_has_matching_group( user_identity, allowed_groups)
+   has_group_membership( user_identity.groups, allowed_groups)
 
 } else := escalation_matches_group_service_tool_and_request_args( 
-      escalation_data, 
+      escalation_grant_list, 
       allowed_groups, 
       service, 
       tool, 
       request_args )
 
 
-#
-# simple case - is there an intersection between the user groups and the allowed groups
-#
-# special initial case - if the allowed_groups contains the simple string "*", that's
-# a wildcard match
-#
-user_identity_has_matching_group( user_identity, allowed_groups ) := true if {
-  
-  "*" in allowed_groups
-
-} else := arrays_share_element( user_identity.groups, allowed_groups)
 
 
 
@@ -140,19 +164,38 @@ user_identity_has_matching_group( user_identity, allowed_groups ) := true if {
 #  in the arg restriction and match appropriately 
 #
 escalation_matches_group_service_tool_and_request_args( 
-      escalation_data, 
+      escalation_grant_list, 
       allowed_groups, 
       service, 
       tool, 
       request_args) := true if {
 
-  
- 
-  some record in escalation_data
-     arrays_share_element( record.portcullis.groups, allowed_groups)
+
+#  print("#DEBUG: escalation_matches_group_service_tool_and_request_args: allowed_groups:",allowed_groups,", service: ",service,", tool:",tool,", request: ", request_args) 
+#  print("#DEBUG++: escalation grant list: ", escalation_grant_list)
+
+  some record in escalation_grant_list
+
+#     print("#DEBUG++: escalation record: ", record)
+
+     has_group_membership( record.portcullis.groups, allowed_groups)
+
+#     print("#DEBUG++: has group memebership: true")
+
+     # @TODO: these two tests are probably redundant, TBD 
      service in record.portcullis.services
+
+#     print("#DEBUG++: service match: true")
+
      tool in record.portcullis.tools
-     any_arg_restrictions_honored( record.arg_restrictions, request_args)	
+
+#     print("#DEBUG++: tool  match: true")
+
+
+#     print("#DEBUG++: arg restrictions: ", record.portcullis.arg_restrictions," request_args: ", request_args)
+     any_arg_restrictions_honored( record.portcullis.arg_restrictions, request_args)	
+
+#     print("#DEBUG++: any_arg_restriction_honored: TRUE")
 
 } else := false
 
@@ -211,6 +254,8 @@ arg_restriction_honored( restriction, request_args) := true if {
 #
 arg_restriction_honored_existence_required( request_args, restriction) := true if {
 
+#  print("#DEBUG: arg_restriction_honored_existence_required: request_args: ", request_args, ", restriction: ", restriction)
+
   key_path_array := split(restriction.key_path, ".")
    
   element := traverse_json( request_args, key_path_array)
@@ -224,11 +269,13 @@ arg_restriction_honored_existence_required( request_args, restriction) := true i
 arg_restriction_honored_type_ladder( element, restriction ) := true if {
    
 
+   # print("#DEBUG: arg_restriction_honored_type_ladder: element: ", element, " restriction: ", restriction)
+
    restriction.type == "prefix"
    
    startswith(element, restriction.data)
 
-   print("#DEBUG: TRUE: arg_restriction_honored_type_ladder: element: ", element, " restriction: ", restriction)
+#   print("#DEBUG: TRUE: arg_restriction_honored_type_ladder: element: ", element, " restriction: ", restriction)
 
 
 } else := false   # if we need other types of restrictions, we can add them here fairly gracefully
@@ -238,10 +285,18 @@ arg_restriction_honored_type_ladder( element, restriction ) := true if {
 
 
 element_does_not_exist_but_is_not_required( request_args, key_path_array, required ) := true if {
-   not traverse_json( request_args, key_path_array)
+
+   not traverse_json( request_args, key_path_array) == null
    required == false 
 }
 
+##############################################
+#
+# group membership evaluation, with wildcard support
+#
+has_group_membership( user_groups, allowed_groups) := true if {
+   "*" in allowed_groups
+} else := arrays_share_element( user_groups, allowed_groups)
 
 
 ##############################################
@@ -257,8 +312,14 @@ element_does_not_exist_but_is_not_required( request_args, key_path_array, requir
 # now, and sufficient for the purposes of proving the 
 # concept(s)
 #
-traverse_json(obj, path) := value if {
-    walk(obj, [path, value])
+traverse_json(obj, key_path_array) := value if {
+
+#    print("#DEBUG: traverse_json: object: ",obj,", key_path_array: ", key_path_array)
+
+    value := object.get(obj, key_path_array, null)
+
+#    print("#DEBUG: traverse_json: value: ", value)
+
 }
 
 
@@ -273,25 +334,6 @@ arrays_share_element(a, b) if {
       x in b
 } else := false
 
-
-#######################################
-#
-# Data fetching
-#
-
-# convenience method for traversing down a set of keys. This specifically
-# works for a two-element array. Building a three-element version of this
-# is straightforward, but I don't need it right now
-traverse_json_2( json_object, key_array, default_value ) := result if {
-   key_array[0] in object.keys(json_object)
-
-   sub_object := object.get(json_object, key_array[0], default_value)
-
-   key_array[1] in object.keys( sub_object)
-   final_object := object.get(sub_object, key_array[1], default_value)
-
-   result := final_object
-} else := default_value
 
 
 #######################################

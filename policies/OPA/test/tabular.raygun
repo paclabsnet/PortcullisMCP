@@ -137,7 +137,7 @@ tests:
 
 
   - name: invalid inputs result in a deny
-    skip: true
+    skip: false
     description: missing user_identity
     decision-path: /v1/data/portcullis/tabular/decision
     expects:
@@ -247,4 +247,150 @@ tests:
         }
 
 
+
+  - name: can't write to /boot
+    description: checking arguments
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"deny"'
+    input:
+      type: inline
+      value: >
+        {
+          "service": "portcullis-localfs",
+          "tool_name": "write_file",
+          "arguments": {
+            "path": "/boot/image"
+          },
+          "user_identity": {
+            "user_id": "alice@example.com",
+            "display_name": "Alice Developer",
+            "groups": ["developers", "blah"]
+          },
+          "escalation_tokens":[
+
+          ],
+          "session_id": "tbd123",
+          "request_id": "req-abc123"
+        }
+
+
+
+
+
+  - name: no deny for a .tar etxension
+    description: checking that the traverse_json function works properly
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"allow"'
+    input:
+      type: inline
+      value: >
+        {
+          "service": "portcullis-localfs",
+          "tool_name": "read_media_file",
+          "arguments": {
+            "path": { 
+                "directory":"/var/log/whatever",
+                "extension":".tar"
+            }
+          },
+          "user_identity": {
+            "user_id": "alice@example.com",
+            "display_name": "Alice Developer",
+            "groups": ["developers", "blah"]
+          },
+          "escalation_tokens":[
+          ],
+          "session_id": "tbd123",
+          "request_id": "req-abc123"
+        }
+
+
+
+  - name: denies for a .gz extension
+    description: checking that the traverse_json function works properly
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"deny"'
+    input:
+      type: inline
+      value: >
+        {
+          "service": "portcullis-localfs",
+          "tool_name": "read_media_file",
+          "arguments": {
+            "path": { 
+                "directory":"/var/log/whatever",
+                "filename": {
+                    "body":"test",
+                    "extension":".gz"
+                }
+            }
+          },
+          "user_identity": {
+            "user_id": "alice@example.com",
+            "display_name": "Alice Developer",
+            "groups": ["developers", "blah"]
+          },
+          "escalation_tokens":[
+          ],
+          "session_id": "tbd123",
+          "request_id": "req-abc123"
+        }
+
+
+
+#####################################################################
+#
+#  escalation scenarios
+
+
+#
+# the token for returns allow after escalation
+# secret: a-string-secret-at-least-256-bits-long
+#
+# {
+#  "sub": "1234567890",
+#  "name": "John Doe",
+#  "admin": true,
+#  "iat": 1516239022,
+#  "portcullis": {
+#    "tools":       ["write_file", "edit_file"],
+#    "services":    ["portcullis-localfs"],
+#    "groups" :     ["developer"],
+#    "arg_restrictions": [
+#       { "type":"prefix", "key_path": "path", "data": "/var/log/whatever.log", "required":true }
+#    ],
+#    "reason":      "Allow writing to /var/log"
+#     
+#  }
+# }
+#
+#
+  - name: returns allow after escalation
+    description: checking that the escalation token provides the appropriate override
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"allow"'
+    input:
+      type: inline
+      value: >
+        {
+          "service": "portcullis-localfs",
+          "tool_name": "write_file",
+          "arguments": {
+            "path": "/var/log/whatever.log"
+          },
+          "user_identity": {
+            "user_id": "alice@example.com",
+            "display_name": "Alice Developer",
+            "groups": ["developers", "blah"]
+          },
+          "escalation_tokens":[
+              { "raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiYWRtaW4iOnRydWUsImlhdCI6MTUxNjIzOTAyMiwicG9ydGN1bGxpcyI6eyJ0b29scyI6WyJ3cml0ZV9maWxlIiwiZWRpdF9maWxlIl0sInNlcnZpY2VzIjpbInBvcnRjdWxsaXMtbG9jYWxmcyJdLCJncm91cHMiOlsiZGV2ZWxvcGVyIl0sImFyZ19yZXN0cmljdGlvbnMiOlt7InR5cGUiOiJwcmVmaXgiLCJrZXlfcGF0aCI6InBhdGgiLCJkYXRhIjoiL3Zhci9sb2cvd2hhdGV2ZXIubG9nIiwicmVxdWlyZWQiOnRydWV9XSwicmVhc29uIjoiQWxsb3cgd3JpdGluZyB0byAvdmFyL2xvZyJ9fQ.hPTYnOWOIy5andqOWhUJCQNumLwL22ypHwhG5Xd8bUg" }
+          ],
+          "session_id": "tbd123",
+          "request_id": "req-abc123"
+        }
 

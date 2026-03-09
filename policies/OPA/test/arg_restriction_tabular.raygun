@@ -6,11 +6,13 @@ opa:
 
 
 tests:
-  - name: can't write to /boot
-    description: checking arguments
+
+
+  - name: returns escalate appropriately
+    description: checking arguments against escalation criteria
     decision-path: /v1/data/portcullis/tabular/decision
     expects:
-      - substring: '"decision":"deny"'
+      - substring: '"decision":"escalate"'
     input:
       type: inline
       value: >
@@ -18,7 +20,7 @@ tests:
           "service": "portcullis-localfs",
           "tool_name": "write_file",
           "arguments": {
-            "path": "/boot/image"
+            "path": "/var/log/whatever.log"
           },
           "user_identity": {
             "user_id": "alice@example.com",
@@ -31,3 +33,4 @@ tests:
           "session_id": "tbd123",
           "request_id": "req-abc123"
         }
+
