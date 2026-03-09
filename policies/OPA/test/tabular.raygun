@@ -12,19 +12,27 @@ tests:
       type: inline
       value: >
         {
-          "service": "portcullis-localfs",
-          "tool_name": "read_file",
-          "arguments": {
-            "path": "/workspace/src/main.go"
-          },
-          "user_identity": {
-            "user_id": "alice@example.com",
-            "display_name": "Alice Developer",
-            "groups": ["developers", "team-backend"]
-          },
-          "escalation_tokens":[
+          "authorization_request": {
+            "action": {
+              "service": "portcullis-localfs",
+              "tool_name": "read_file"
+            },
+            "resource":{
+              "arguments": {
+                "path": "/workspace/src/main.go"
+              }
+            },
+            "principal": {
+              "user_id": "alice@example.com",
+              "display_name": "Alice Developer",
+              "groups": ["developers", "team-backend"]
+            },
+            "context": {
+              "escalation_tokens":[
 
-          ],
+              ]
+            }
+          },
           "session_id": "tbd123",
           "request_id": "req-abc123"
         }
@@ -38,19 +46,27 @@ tests:
       type: inline
       value: >
         {
-          "service": "XXXXXXXX",
-          "tool_name": "read_file",
-          "arguments": {
-            "path": "/workspace/src/main.go"
-          },
-          "user_identity": {
-            "user_id": "alice@example.com",
-            "display_name": "Alice Developer",
-            "groups": ["developers", "team-backend"]
-          },
-          "escalation_tokens":[
+          "authorization_request": {
+            "action": {
+              "service": "XXXXXXXX",
+              "tool_name": "read_file"
+            },
+            "resource":{
+              "arguments": {
+                "path": "/workspace/src/main.go"
+              }
+            },
+            "principal": {
+              "user_id": "alice@example.com",
+              "display_name": "Alice Developer",
+              "groups": ["developers", "team-backend"]
+            },
+            "context": {
+              "escalation_tokens":[
 
-          ],
+              ]
+            }
+          },
           "session_id": "tbd123",
           "request_id": "req-abc123"
         }
@@ -64,19 +80,27 @@ tests:
       type: inline
       value: >
         {
-          "_service": "XXXXXXXX",
-          "tool_name": "read_file",
-          "arguments": {
-            "path": "/workspace/src/main.go"
-          },
-          "user_identity": {
-            "user_id": "alice@example.com",
-            "display_name": "Alice Developer",
-            "groups": ["developers", "team-backend"]
-          },
-          "escalation_tokens":[
+          "authorization_request": {
+            "action": {
+              "_service": "XXXXXXXX",
+              "tool_name": "read_file"
+            },
+            "resource":{
+              "arguments": {
+                "path": "/workspace/src/main.go"
+              }
+            },
+            "principal": {
+              "user_id": "alice@example.com",
+              "display_name": "Alice Developer",
+              "groups": ["developers", "team-backend"]
+            },
+            "context": {
+              "escalation_tokens":[
 
-          ],
+              ]
+            }
+          },
           "session_id": "tbd123",
           "request_id": "req-abc123"
         }
@@ -91,19 +115,27 @@ tests:
       type: inline
       value: >
         {
-          "service": "portcullis-localfs",
-          "_tool_name": "read_file",
-          "arguments": {
-            "path": "/workspace/src/main.go"
-          },
-          "user_identity": {
-            "user_id": "alice@example.com",
-            "display_name": "Alice Developer",
-            "groups": ["developers", "team-backend"]
-          },
-          "escalation_tokens":[
+          "authorization_request": {
+            "action": {
+              "service": "portcullis-localfs",
+              "_tool_name": "read_file"
+            },
+            "resource":{
+              "arguments": {
+                "path": "/workspace/src/main.go"
+              }
+            },
+            "principal": {
+              "user_id": "alice@example.com",
+              "display_name": "Alice Developer",
+              "groups": ["developers", "team-backend"]
+            },
+            "context": {
+              "escalation_tokens":[
 
-          ],
+              ]
+            }
+          },
           "session_id": "tbd123",
           "request_id": "req-abc123"
         }
@@ -118,19 +150,27 @@ tests:
       type: inline
       value: >
         {
-          "service": "portcullis-localfs",
-          "_tool_name": "compile_file",
-          "arguments": {
-            "path": "/workspace/src/main.go"
-          },
-          "user_identity": {
-            "user_id": "alice@example.com",
-            "display_name": "Alice Developer",
-            "groups": ["developers", "team-backend"]
-          },
-          "escalation_tokens":[
+          "authorization_request": {
+            "action": {
+              "service": "portcullis-localfs",
+              "_tool_name": "compile_file"
+            },
+            "resource":{
+              "arguments": {
+                "path": "/workspace/src/main.go"
+              }
+            },
+            "principal": {
+              "user_id": "alice@example.com",
+              "display_name": "Alice Developer",
+              "groups": ["developers", "team-backend"]
+            },
+            "context": {
+              "escalation_tokens":[
 
-          ],
+              ]
+            }
+          },
           "session_id": "tbd123",
           "request_id": "req-abc123"
         }
@@ -146,47 +186,63 @@ tests:
       type: inline
       value: >
         {
-          "service": "portcullis-localfs",
-          "tool_name": "read_file",
-          "arguments": {
-            "path": "/workspace/src/main.go"
-          },
-          "_user_identity": {
-            "user_id": "alice@example.com",
-            "display_name": "Alice Developer",
-            "groups": ["developers", "team-backend"]
-          },
-          "escalation_tokens":[
+          "authorization_request": {
+            "action": {
+              "service": "portcullis-localfs",
+              "tool_name": "read_file"
+            },
+            "resource":{
+              "arguments": {
+                "path": "/workspace/src/main.go"
+              }
+            },
+            "_principal": {
+              "user_id": "alice@example.com",
+              "display_name": "Alice Developer",
+              "groups": ["developers", "team-backend"]
+            },
+            "context": {
+              "escalation_tokens":[
 
-          ],
+              ]
+            }
+          },
           "session_id": "tbd123",
           "request_id": "req-abc123"
         }
 
 
-  - name: invalid inputs result in a deny
+  - name: system handles a missing request_id gracefully
     skip: false
     description: missing request_id
     decision-path: /v1/data/portcullis/tabular/decision
     expects:
-      - substring: '"decision":"deny"'
+      - substring: '"decision":"allow"'
     input:
       type: inline
       value: >
         {
-          "service": "portcullis-localfs",
-          "tool_name": "read_file",
-          "arguments": {
-            "path": "/workspace/src/main.go"
-          },
-          "user_identity": {
-            "user_id": "alice@example.com",
-            "display_name": "Alice Developer",
-            "groups": ["developers", "team-backend"]
-          },
-          "escalation_tokens":[
+          "authorization_request": {
+            "action": {
+              "service": "portcullis-localfs",
+              "tool_name": "read_file"
+            },
+            "resource":{
+              "arguments": {
+                "path": "/workspace/src/main.go"
+              }
+            },
+            "principal": {
+              "user_id": "alice@example.com",
+              "display_name": "Alice Developer",
+              "groups": ["developers", "team-backend"]
+            },
+            "context": {
+              "escalation_tokens":[
 
-          ],
+              ]
+            }
+          },
           "session_id": "tbd123",
           "_request_id": "req-abc123"
         }
@@ -201,19 +257,27 @@ tests:
       type: inline
       value: >
         {
-          "service": "portcullis-localfs",
-          "tool_name": "delete_file",
-          "arguments": {
-            "path": "/workspace/src/main.go"
-          },
-          "user_identity": {
-            "user_id": "alice@example.com",
-            "display_name": "Alice Developer",
-            "groups": ["developers", "admin"]
-          },
-          "escalation_tokens":[
+          "authorization_request": {
+            "action": {
+              "service": "portcullis-localfs",
+              "tool_name": "delete_file"
+            },
+            "resource":{
+              "arguments": {
+                "path": "/workspace/src/main.go"
+              }
+            },
+            "principal": {
+              "user_id": "alice@example.com",
+              "display_name": "Alice Developer",
+              "groups": ["developers", "admin"]
+            },
+            "context": {
+              "escalation_tokens":[
 
-          ],
+              ]
+            }
+          },
           "session_id": "tbd123",
           "request_id": "req-abc123"
         }
@@ -229,19 +293,27 @@ tests:
       type: inline
       value: >
         {
-          "service": "portcullis-localfs",
-          "tool_name": "delete_file",
-          "arguments": {
-            "path": "/workspace/src/main.go"
-          },
-          "user_identity": {
-            "user_id": "alice@example.com",
-            "display_name": "Alice Developer",
-            "groups": ["developers", "blah"]
-          },
-          "escalation_tokens":[
+          "authorization_request": {
+            "action": {
+              "service": "portcullis-localfs",
+              "tool_name": "delete_file"
+            },
+            "resource":{
+              "arguments": {
+                "path": "/workspace/src/main.go"
+              }
+            },
+            "principal": {
+              "user_id": "alice@example.com",
+              "display_name": "Alice Developer",
+              "groups": ["developers", "blah"]
+            },
+            "context": {
+              "escalation_tokens":[
 
-          ],
+              ]
+            }
+          },
           "session_id": "tbd123",
           "request_id": "req-abc123"
         }
@@ -257,19 +329,26 @@ tests:
       type: inline
       value: >
         {
-          "service": "portcullis-localfs",
-          "tool_name": "write_file",
-          "arguments": {
-            "path": "/boot/image"
+          "authorization_request": {
+            "action": {
+              "service": "portcullis-localfs",
+              "tool_name": "write_file"
+            },
+            "resource":{
+              "arguments": {
+                "path": "/boot/image"
+              }
+            },
+            "principal": {
+              "user_id": "alice@example.com",
+              "display_name": "Alice Developer",
+              "groups": ["developers", "blah"]
+            },
+            "context": {
+              "escalation_tokens":[
+              ]
+            }
           },
-          "user_identity": {
-            "user_id": "alice@example.com",
-            "display_name": "Alice Developer",
-            "groups": ["developers", "blah"]
-          },
-          "escalation_tokens":[
-
-          ],
           "session_id": "tbd123",
           "request_id": "req-abc123"
         }
@@ -287,21 +366,29 @@ tests:
       type: inline
       value: >
         {
-          "service": "portcullis-localfs",
-          "tool_name": "read_media_file",
-          "arguments": {
-            "path": { 
-                "directory":"/var/log/whatever",
-                "extension":".tar"
+          "authorization_request": {
+            "action": {
+              "service": "portcullis-localfs",
+              "tool_name": "read_media_file"
+            },
+            "resource":{
+              "arguments": {
+                "path": { 
+                    "directory":"/var/log/whatever",
+                    "extension":".tar"
+                }
+              }
+            },
+            "principal": {
+              "user_id": "alice@example.com",
+              "display_name": "Alice Developer",
+              "groups": ["developers", "blah"]
+            },
+            "context": {
+              "escalation_tokens":[
+              ]
             }
           },
-          "user_identity": {
-            "user_id": "alice@example.com",
-            "display_name": "Alice Developer",
-            "groups": ["developers", "blah"]
-          },
-          "escalation_tokens":[
-          ],
           "session_id": "tbd123",
           "request_id": "req-abc123"
         }
@@ -317,24 +404,32 @@ tests:
       type: inline
       value: >
         {
-          "service": "portcullis-localfs",
-          "tool_name": "read_media_file",
-          "arguments": {
-            "path": { 
-                "directory":"/var/log/whatever",
-                "filename": {
-                    "body":"test",
-                    "extension":".gz"
+          "authorization_request": {
+            "action": {
+              "service": "portcullis-localfs",
+              "tool_name": "read_media_file"
+            },
+            "resource":{
+              "arguments": {
+                "path": { 
+                    "directory":"/var/log/whatever",
+                    "filename": {
+                        "body":"test",
+                        "extension":".gz"
+                    }
                 }
+              }
+            },
+            "principal": {
+              "user_id": "alice@example.com",
+              "display_name": "Alice Developer",
+              "groups": ["developers", "blah"]
+            },
+            "context": {
+              "escalation_tokens":[
+              ]
             }
           },
-          "user_identity": {
-            "user_id": "alice@example.com",
-            "display_name": "Alice Developer",
-            "groups": ["developers", "blah"]
-          },
-          "escalation_tokens":[
-          ],
           "session_id": "tbd123",
           "request_id": "req-abc123"
         }
@@ -344,6 +439,45 @@ tests:
 #####################################################################
 #
 #  escalation scenarios
+
+
+
+
+  - name: returns escalate appropriately
+    description: checking arguments against escalation criteria
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"escalate"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {
+            "action": {
+              "service": "portcullis-localfs",
+              "tool_name": "write_file"
+            },
+            "resource":{
+              "arguments": {
+                "path": "/var/log/whatever.log"
+              }
+            },
+            "principal": {
+              "user_id": "alice@example.com",
+              "display_name": "Alice Developer",
+              "groups": ["developers", "blah"]
+            },
+            "context": {
+              "escalation_tokens":[
+
+              ]
+            }
+          },
+          "session_id": "tbd123",
+          "request_id": "req-abc123"
+        }
+
+
 
 
 #
@@ -377,20 +511,29 @@ tests:
       type: inline
       value: >
         {
-          "service": "portcullis-localfs",
-          "tool_name": "write_file",
-          "arguments": {
-            "path": "/var/log/whatever.log"
+          "authorization_request": {
+            "action": {
+              "service": "portcullis-localfs",
+              "tool_name": "write_file"
+            },
+            "resource":{
+              "arguments": {
+                "path": "/var/log/whatever.log"
+              }
+            },
+            "principal": {
+              "user_id": "alice@example.com",
+              "display_name": "Alice Developer",
+              "groups": ["developers", "blah"]
+            },
+            "context": {
+              "escalation_tokens":[
+                  { "raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiYWRtaW4iOnRydWUsImlhdCI6MTUxNjIzOTAyMiwicG9ydGN1bGxpcyI6eyJ0b29scyI6WyJ3cml0ZV9maWxlIiwiZWRpdF9maWxlIl0sInNlcnZpY2VzIjpbInBvcnRjdWxsaXMtbG9jYWxmcyJdLCJncm91cHMiOlsiZGV2ZWxvcGVyIl0sImFyZ19yZXN0cmljdGlvbnMiOlt7InR5cGUiOiJwcmVmaXgiLCJrZXlfcGF0aCI6InBhdGgiLCJkYXRhIjoiL3Zhci9sb2cvd2hhdGV2ZXIubG9nIiwicmVxdWlyZWQiOnRydWV9XSwicmVhc29uIjoiQWxsb3cgd3JpdGluZyB0byAvdmFyL2xvZyJ9fQ.hPTYnOWOIy5andqOWhUJCQNumLwL22ypHwhG5Xd8bUg" }
+              ]
+            }
           },
-          "user_identity": {
-            "user_id": "alice@example.com",
-            "display_name": "Alice Developer",
-            "groups": ["developers", "blah"]
-          },
-          "escalation_tokens":[
-              { "raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiYWRtaW4iOnRydWUsImlhdCI6MTUxNjIzOTAyMiwicG9ydGN1bGxpcyI6eyJ0b29scyI6WyJ3cml0ZV9maWxlIiwiZWRpdF9maWxlIl0sInNlcnZpY2VzIjpbInBvcnRjdWxsaXMtbG9jYWxmcyJdLCJncm91cHMiOlsiZGV2ZWxvcGVyIl0sImFyZ19yZXN0cmljdGlvbnMiOlt7InR5cGUiOiJwcmVmaXgiLCJrZXlfcGF0aCI6InBhdGgiLCJkYXRhIjoiL3Zhci9sb2cvd2hhdGV2ZXIubG9nIiwicmVxdWlyZWQiOnRydWV9XSwicmVhc29uIjoiQWxsb3cgd3JpdGluZyB0byAvdmFyL2xvZyJ9fQ.hPTYnOWOIy5andqOWhUJCQNumLwL22ypHwhG5Xd8bUg" }
-          ],
           "session_id": "tbd123",
           "request_id": "req-abc123"
         }
+
 

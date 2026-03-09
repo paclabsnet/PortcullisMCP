@@ -129,43 +129,56 @@ default decision := {
 #
 # The input request will look something like:
 # 
-# {
 #  "input": {
-#    "service": "portcullis-localfs",
-#    "tool_name": "write_file",
-#    "arguments": {
-#      "path": "/workspace/src/main.go",
-#      "content": "package main\n..."
+#    "authorization_request" : {
+#      "principal": {
+#        "user_id": "alice@example.com",
+#        "display_name": "Alice Developer",
+#        "groups": ["developers", "team-backend"],
+#        "source_type": "oidc",
+#        "raw_token": "eyJhbGc..."
+#      },
+#      "resource": {
+#        "arguments": {
+#          "path": "/workspace/src/main.go",
+#          "content": "package main\n..."
+#        },
+#      },
+#      "action": {
+#        "service": "portcullis-localfs",
+#        "tool_name": "write_file",
+#      },
+#      "context": {
+#        "escalation_tokens": [
+#          {
+#            "token_id": "esc-12345",
+#            "raw": "eyJhbGc...",
+#            "granted_by": "bob.manager@example.com"
+#          }
+#        ]
 #    },
-#    "user_identity": {
-#      "user_id": "alice@example.com",
-#      "display_name": "Alice Developer",
-#      "groups": ["developers", "team-backend"],
-#      "source_type": "oidc",
-#      "raw_token": "eyJhbGc..."
-#    },
-#    "escalation_tokens": [
-#      {
-#        "token_id": "esc-12345",
-#        "raw": "eyJhbGc...",
-#        "granted_by": "bob.manager@example.com"
-#      }
-#    ],
 #    "session_id": "session-abc123",
-#    "request_id": "req-xyz789"
+#    "request_id": "req-xyz789"    
 #  }
-# }
+# 
+
+
+principal := input.authorization_request.principal
+action    := input.authorization_request.action
+resource  := input.authorization_request.resource
+context   := input.authorization_request.context
+
+request_id := object.get(input, "request_id", 0)
 
 
 
 escalation_grant_list := list if {
 
-	"escalation_tokens" in object.keys(input)
-	count(input.escalation_tokens) > 0
-	list := find_applicable_escalation_grants(
-			input.escalation_tokens, 
-			input.service, 
-			input.tool_name, 
+	"escalation_tokens" in object.keys(context)
+	count(context.escalation_tokens) > 0
+	list := util.find_applicable_escalation_grants(
+			context.escalation_tokens, 
+			action, 
 			data.config.escalation_secret)
 
 } else := []
@@ -174,61 +187,59 @@ escalation_grant_list := list if {
 
 response_list contains { "decision":   "deny",	
 			  "reason":  "invalid input request",
-			  "request_id": input.request_id } if {
+			  "request_id": request_id } if {
 
 				not util.is_valid_request( input )
 
 			  }
 
 
-rules_section := object.get(data.portcullis.mcp, [input.service, input.tool_name], null)
+rules_section := object.get(data.portcullis.mcp, [action.service, action.tool_name], null)
 
 response_list contains { "decision":   "deny",	
-			  "reason":  sprintf("no policy rules found for mcp: %s, tool: %s", [input.service, input.tool_name]),
-			  "request_id": input.request_id } if {
+			  "reason":  sprintf("no policy rules found for mcp: %s, tool: %s", [action.service, action.tool_name]),
+			  "request_id": request_id } if {
 
 				rules_section == null
 			  }
 
 response_list contains { "decision" : "deny", 
 			  "reason" : "Denied by rule",
-			  "request_id": input.request_id } if {
+			  "request_id": request_id } if {
 
 
 				not rules_section.deny == null
-				does_request_meet_criteria_no_escalation( input, rules_section.deny )
+				does_request_meet_criteria_no_escalation( input.authorization_request, rules_section.deny )
 
 			  }
 
 
 response_list contains { "decision" : "allow",
 			  "reason" : "Allowed by rule",
-			  "request_id" : input.request_id } if {
+			  "request_id" : request_id } if {
 
 				not rules_section.allow == null
-				does_request_meet_criteria_no_escalation( input, rules_section.allow )
+				does_request_meet_criteria_no_escalation( input.authorization_request, rules_section.allow )
 
 			  }
 
 
 response_list contains { "decision" : "allow",
 			  "reason" : "Allowed by escalation token",
-			  "request_id" : input.request_id } if {
+			  "request_id" : request_id } if {
 
 				not rules_section.escalate == null
 
 				count(escalation_grant_list) > 0
 
 				# it must meet the base criteria for escalate
-				does_request_meet_criteria_no_escalation( input, rules_section.escalate)
+				does_request_meet_criteria_no_escalation( input.authorization_request, rules_section.escalate)
 
 
 				# and it meets the criteria of at least one escalation token
 				does_request_meet_criteria_escalation_only( 
-						input, 
+						input.authorization_request, 
 						rules_section.escalate, 
-						input.service, 
-						input.tool_name, 
 						escalation_grant_list )
 
 				# the most exciting case!
@@ -240,19 +251,17 @@ response_list contains { "decision" : "allow",
 response_list contains {
 				"decision" : "escalate",
 			  	"reason" : "Request is not approved, but can be escalated",
-			  	"request_id" : input.request_id } if {
+			  	"request_id" : request_id } if {
 
 					not rules_section.escalate == null
-					does_request_meet_criteria_no_escalation( input, rules_section.escalate )
+					does_request_meet_criteria_no_escalation( input.authorization_request, rules_section.escalate )
 					
 					# why are we checking this? Because if the request does meet the escalation
 					# criteria, it's approved, and no longer needs to be escalated
 					#
 					not does_request_meet_criteria_escalation_only( 
-							input, 
+							input.authorization_request, 
 							rules_section.escalate, 
-							input.service, 
-							input.tool_name, 
 							escalation_grant_list )
 				}
 
@@ -260,15 +269,17 @@ response_list contains {
 # no response, deny
 decision := { "decision" : "deny", 
 				"reason" : "no matching rule found", 
-				"request_id" : input.request_id } if {
+				"request_id" : request_id } if {
 					count(response_list) == 0
-				}
+}
+
 
 
 #
-# multiple responses?  handle the scenarios
+# we'll get 0 or more results from the policy logic. We can
+# then make some high-level policy rules based on the 
+# results.
 #
-
 deny_list := [ x | 
 				some x in response_list
 					x.decision == "deny"
@@ -285,6 +296,18 @@ escalate_list := [ x |
 					x.decision == "escalate"
 			]			
 
+
+
+
+#
+# general rules:
+# 1) If there are any denies, it's a deny
+# 2) If there are any escalates, but no denies, it's escalate
+# 3) if there are allows, and no deny/escalate results, it's allow
+#
+#  We could respond with all of the denies. For the moment, we'll
+# just respond with the first one.
+#
 decision := deny_result if {
 	count(deny_list) > 0
 	deny_result := deny_list[0]
@@ -326,40 +349,21 @@ does_request_meet_criteria_no_escalation( request, rules ) := true if {
 } else := false
 
 
-does_request_meet_criteria_with_escalation( request, rules, service, tool_name, escalation_grant_list ) := true if {
+does_request_meet_criteria_with_escalation( request, rules, escalation_grant_list ) := true if {
 
 	# if we match the core criteria, we're good
     util.request_matches_criteria( request, rules)
 
-} else := does_request_meet_criteria_escalation_only( request, rules, service, tool_name, escalation_grant_list) 
+} else := does_request_meet_criteria_escalation_only( request, rules, escalation_grant_list) 
 
 
 
-does_request_meet_criteria_escalation_only( request, rules, service, tool_name, escalation_grant_list) := true if {
+does_request_meet_criteria_escalation_only( request, rules, escalation_grant_list) := true if {
 
-	util.request_matches_escalation_criteria( request, rules, service, tool_name, escalation_grant_list)
+	util.request_matches_escalation_criteria( request, rules, escalation_grant_list)
 
 } else := false
 
 
 
-
-#
-# look through the escalation tokens and find all the ones that are:
-# a) valid
-# b) for the correct service and tool
-#
-# and return those
-#
-find_applicable_escalation_grants( escalation_tokens, service, tool_name, jwt_secret ) := escalation_grant_list if {
-
-   escalation_grant_list := [ claims | 
-      some token in escalation_tokens
-      [valid, _, claims ] := io.jwt.decode_verify(token.raw, {"secret": jwt_secret})
-      valid == true
-	  service in claims.portcullis.services
-	  tool_name in claims.portcullis.tools
-   ]
-
-} else := []
 

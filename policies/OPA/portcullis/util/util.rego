@@ -15,27 +15,30 @@ import rego.v1
 # we need to evaluate the input request against the criteria, in a way that is 
 # mindful of the fact that some of the criteria are optional.
 
+#
+# starting scenario - there is a group requirement, but no argument
+#                     restrictions
+# we just have to match the allowed groups to any of the user's groups
+#
 request_matches_criteria( request, rules ) := true if {
 
    "groups" in object.keys(rules)
-   # print("#DEBUG: arg_restrictions: ",rules)
    not "arg_restrictions" in object.keys(rules)
 
-   # if there are group rules, but no arg restrictions, we just have
-   # to test the group match
-   has_group_membership( request.user_identity.groups, rules.groups)
-
+   has_group_membership( request.principal.groups, rules.groups)
 
 } else := request_matches_criteria_groups_and_arg_restrictions( request, rules )
 
 
+# Second case - there are both group membership requirements and
+#               argument restrictions
 request_matches_criteria_groups_and_arg_restrictions( request, rules ) := true if {
 
    "groups" in object.keys(rules)
    "arg_restrictions" in object.keys(rules)
    
    # we have to match both criteria around groups and arg restrictions
-   has_group_membership( request.user_identity.groups, rules.groups)
+   has_group_membership( request.principal.groups, rules.groups)
    request_matches_arg_restrictions( request, rules.arg_restrictions)
 
 # we can't get here unless we know that arg restrictions exist, so this should
@@ -45,23 +48,26 @@ request_matches_criteria_groups_and_arg_restrictions( request, rules ) := true i
 
 
 #
-# 
+# Third case - there aren't any group requirements, but there can be 
+#              argument restrictions 
+# Note that if there aren't any group requirements *or* argument restrictions, we will 
+# fail. That's a design choice
 #
 request_matches_arg_restrictions( request, arg_restriction_array ) := true if {
 
-   # print("DEBUG: request_matches_arg_restrictions: ", arg_restriction_array, " request:", request.arguments)
+   # print("DEBUG: request_matches_arg_restrictions: ", arg_restriction_array, " resource:", resource.resource.arguments)
 
-   any_arg_restrictions_honored( arg_restriction_array, request.arguments)
+   any_arg_restrictions_honored( arg_restriction_array, request.resource.arguments)
 
 } else := false
 
 
 
-request_matches_criteria_with_escalation( request, rules, service, tool_name, escalation_grant_list) := true if {
+request_matches_criteria_with_escalation( request, rules, escalation_grant_list) := true if {
 
    # simple case - the request matches the core crit
    request_matches_criteria(request, rules)
-} else := request_matches_escalation_criteria( request, rules, service, tool_name, escalation_grant_list )
+} else := request_matches_escalation_criteria( request, rules, escalation_grant_list )
 
 
 
@@ -109,16 +115,16 @@ request_matches_criteria_with_escalation( request, rules, service, tool_name, es
 # delete a database, the signed token demonstrates that the user is accountable for this
 # outcome.
 #
-request_matches_escalation_criteria( request, rules, service, tool_name, escalation_grant_list ) := true if {
+request_matches_escalation_criteria( request, rules, escalation_grant_list ) := true if {
 
    allowed_groups := object.get(rules, "group", ["*"])
 
    escalation_matches_group_service_tool_and_request_args( 
             escalation_grant_list, 
             allowed_groups, 
-            service, 
-            tool_name, 
-            request.arguments )   
+            request.action.service, 
+            request.action.tool_name, 
+            request.resource.arguments )   
 
 # we've already tested the core criteria, so if we get here, there's no
 # way to succeed
@@ -138,14 +144,14 @@ request_matches_escalation_criteria( request, rules, service, tool_name, escalat
 #   
 #
 has_matching_group_for_service_tool_and_request_args_with_escalation( 
-      user_identity, 
+      principal, 
       request_args, 
       escalation_grant_list,  
       allowed_groups, 
       service, 
       tool ) := true if {
 
-   has_group_membership( user_identity.groups, allowed_groups)
+   has_group_membership( principal.groups, allowed_groups)
 
 } else := escalation_matches_group_service_tool_and_request_args( 
       escalation_grant_list, 
@@ -226,7 +232,6 @@ any_arg_restrictions_honored( restriction_array, request_args) := true if {
    some restriction in restriction_array
       arg_restriction_honored( restriction, request_args )
    
-
 } else := false
 
 
@@ -244,7 +249,6 @@ arg_restriction_honored( restriction, request_args) := true if {
 
   # if we get here, it means the element didn't exist, but it wasn't required, so we've honored this restriction 
 
-          
 } else := arg_restriction_honored_existence_required( request_args,  restriction )
 
 
@@ -266,9 +270,13 @@ arg_restriction_honored_existence_required( request_args, restriction) := true i
 
 
 
+#
+# right now, we just have prefix, but if we add other types of tests, we can
+# add one a new function as the else clause for this restriction.type, and then add
+# an else clause to that function for the next one, etc.
+#
 arg_restriction_honored_type_ladder( element, restriction ) := true if {
    
-
    # print("#DEBUG: arg_restriction_honored_type_ladder: element: ", element, " restriction: ", restriction)
 
    restriction.type == "prefix"
@@ -285,8 +293,7 @@ arg_restriction_honored_type_ladder( element, restriction ) := true if {
 
 
 element_does_not_exist_but_is_not_required( request_args, key_path_array, required ) := true if {
-
-   not traverse_json( request_args, key_path_array) == null
+   not object.get(request_args, key_path_array, null) == null
    required == false 
 }
 
@@ -297,6 +304,34 @@ element_does_not_exist_but_is_not_required( request_args, key_path_array, requir
 has_group_membership( user_groups, allowed_groups) := true if {
    "*" in allowed_groups
 } else := arrays_share_element( user_groups, allowed_groups)
+
+
+##############################################
+#
+# JWT processing
+#
+#
+# look through the escalation tokens and find all the ones that are:
+# a) valid
+# b) for the correct service and tool
+#
+# and return those
+#
+find_applicable_escalation_grants( escalation_tokens, action, jwt_secret ) := escalation_grant_list if {
+
+   escalation_grant_list := [ claims | 
+      some token in escalation_tokens
+         [valid, _, claims ] := io.jwt.decode_verify(token.raw, {"secret": jwt_secret})
+            valid == true
+            action.service in claims.portcullis.services
+            action.tool_name in claims.portcullis.tools
+            # need to check for expiration for the token
+      ]
+
+} else := []
+
+
+
 
 
 ##############################################
@@ -341,12 +376,22 @@ arrays_share_element(a, b) if {
 # input validation
 #
 
-is_valid_request( request )  := true if {
+is_valid_request( document )  := true if {
 
-  "service" in object.keys(request)
-  "tool_name" in object.keys(request)
-  "user_identity" in object.keys(request)
-  "groups" in object.keys(request.user_identity)
-  "request_id" in object.keys(request)
+  "authorization_request" in object.keys(document)
+
+  auth_request := document.authorization_request
+
+  "principal" in object.keys(auth_request)
+    "groups" in object.keys(auth_request.principal)
+
+
+  "action" in object.keys(auth_request)
+   "service" in object.keys(auth_request.action)
+   "tool_name" in object.keys(auth_request.action)
+
+#  "request_id" in object.keys(request)
 
 } else := false
+
+

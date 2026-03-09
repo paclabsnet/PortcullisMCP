@@ -4,17 +4,52 @@
 # Rules are written explicitly in Rego rather than evaluated from a data table.
 # Neither approach is required — use whatever best fits your organization.
 #
-# To use this file instead of decision.rego:
-#   opa run --server --addr localhost:8181 \
-#     policies/decision-handwritten.rego \
-#     --data <(echo '{"portcullis":{"escalation_secret":"your-secret"}}')
-#
-# The PDP endpoint Portcullis-keep calls is always:
-#   POST /v1/data/portcullis/decision
+# The PDP endpoint:
+#   POST /v1/data/portcullis/custom/decision
 
 package portcullis.custom
 
 import rego.v1
+import data.portcullis.util
+
+
+#
+# The input request will look something like:
+# 
+# {
+#  "input": {
+#    "principal": {
+#      "user_id": "alice@example.com",
+#      "display_name": "Alice Developer",
+#      "groups": ["developers", "team-backend"],
+#      "source_type": "oidc",
+#      "raw_token": "eyJhbGc..."
+#    },
+#    "resource": {
+#      "arguments": {
+#        "path": "/workspace/src/main.go",
+#        "content": "package main\n..."
+#      },
+#    },
+#    "action": {
+#      "service": "portcullis-localfs",
+#      "tool_name": "write_file",
+#    },
+#    "context": {
+#      "escalation_tokens": [
+#        {
+#          "token_id": "esc-12345",
+#          "raw": "eyJhbGc...",
+#          "granted_by": "bob.manager@example.com"
+#        }
+#      ],
+#      "session_id": "session-abc123",
+#      "request_id": "req-xyz789"
+#    }
+#  }
+# }
+
+
 
 # ============================================================================
 # DEFAULT — fail-safe deny
@@ -26,165 +61,286 @@ default decision := {
 	"request_id": 0
 }
 
-# ============================================================================
-# ESCALATION TOKEN VALIDATION
-# ============================================================================
+principal := input.authorization_request.principal
+action    := input.authorization_request.action
+resource  := input.authorization_request.resource
+context   := input.authorization_request.context
 
-# verify_options := opts if {
-# 	data.portcullis.escalation_secret != ""
-# 	opts := {
-# 		"secret": data.portcullis.escalation_secret,
-# 		"iss":    "portcullis-approver",
-# 	}
-# } else := opts if {
-# 	data.portcullis.escalation_jwks_url != ""
-# 	opts := {
-# 		"jwks_url": data.portcullis.escalation_jwks_url,
-# 		"iss":      "portcullis-approver",
-# 	}
-# }
+request_id := object.get(input, "request_id", 0)
 
-# valid_escalation_for_request if {
-# 	some token in input.escalation_tokens
-# 	[valid, _, payload] := io.jwt.decode_verify(token.raw, verify_options)
-# 	valid == true
-# 	payload.sub == input.user_identity.user_id
-# 	pc := payload.portcullis
-# 	server_covered(pc)
-# 	tool_covered(pc)
-# 	path_covered(pc)
-# }
 
-# server_covered(pc) if { pc.servers == ["*"] }
-# server_covered(pc) if { input.server_name in pc.servers }
 
-# tool_covered(pc) if { pc.tools == ["*"] }
-# tool_covered(pc) if { input.tool_name in pc.tools }
+response_list contains 
+				{ "decision":"deny", 
+				  "reason":"Denied - MCP is not in scope", 
+				  "request_id": request_id} if {
 
-# path_covered(pc) if { not pc.path_prefix }
-# path_covered(pc) if {
-# 	pc.path_prefix
-# 	startswith(input.arguments.path, pc.path_prefix)
-# }
+   not input.service in ["portcullis-localfs", "mock-enterprise-api"]
 
-# # ============================================================================
-# # DENY RULES
-# # Each rule adds a reason to the deny set; any match = deny.
-# # ============================================================================
+}
 
-# # Block access to .git directories.
-# deny contains "access to .git directories is forbidden" if {
-# 	input.arguments.path
-# 	contains(input.arguments.path, "/.git/")
-# }
 
-# deny contains "access to .git directories is forbidden" if {
-# 	input.arguments.path
-# 	startswith(input.arguments.path, ".git/")
-# }
+response_list contains 
+				{ "decision":"deny", 
+				  "reason":"Denied - localfs tool is not recognized", 
+				  "request_id": request_id} if {
 
-# # Block access to the Portcullis config directory.
-# deny contains "access to .portcullis is forbidden" if {
-# 	input.arguments.path
-# 	contains(input.arguments.path, "/.portcullis")
-# }
+   action.service in ["portcullis-localfs"]
+   not action.tool_name in ["read_file", "read_text_file", "read_media_file", "read_multiple_files", "write_file", 
+   						"edit_file", "create_directory", "list_directory", "list_directory_with_sizes", 
+						"directory_tree", "move_file", "search)files", "copy_file", "delete_file", 
+						"search_within_files", "get_file_info", "list_allowed_directories"]
 
-# # Contractors may not access the database at all.
-# deny contains "contractors may not access the database" if {
-# 	input.server_name == "database"
-# 	"contractors" in input.user_identity.groups
-# }
+}
 
-# # Only admins may delete orders.
-# deny contains "deleting orders requires admin group membership" if {
-# 	input.tool_name == "delete_order"
-# 	input.server_name == "mock-enterprise-api"
-# 	not "admin" in input.user_identity.groups
-# }
 
-# # ============================================================================
-# # ESCALATION RULES
-# # Each rule fires only when no valid escalation token covers the request.
-# # A valid token suppresses the escalation and the request falls through to allow.
-# # ============================================================================
+response_list contains 
+				{ "decision":"deny", 
+				  "reason":"Denied - mock-enterprise-api tool is not recognized", 
+				  "request_id": request_id} if {
 
-# # Filesystem write operations require manager approval (non-admins).
-# escalate contains "write operations require manager approval" if {
-# 	input.tool_name in ["write_file", "edit_file", "delete_file", "move_file", "copy_file"]
-# 	input.server_name == "filesystem"
-# 	not "admin" in input.user_identity.groups
-# 	not valid_escalation_for_request
-# }
+   action.service in ["mock-enterprise-api"]
+   not action.tool_name in ["get_customer", "update_order_status", "query_inventory", "delete_order"]
 
-# # Order status changes require manager approval (non-admins).
-# escalate contains "order updates require manager approval" if {
-# 	input.tool_name == "update_order_status"
-# 	input.server_name == "mock-enterprise-api"
-# 	not "admin" in input.user_identity.groups
-# 	not valid_escalation_for_request
-# }
+}
 
-# # ============================================================================
-# # ALLOW RULES
-# # Explicit rules for what is permitted.
-# # ============================================================================
 
-# # Developers and analysts may read from the filesystem.
-# allow_matched if {
-# 	input.server_name == "filesystem"
-# 	input.tool_name in ["read_text_file", "list_directory", "directory_tree",
-# 	                    "search_files", "search_within_files"]
-# 	some group in ["developers", "analysts", "contractors"]
-# 	group in input.user_identity.groups
-# }
 
-# # Developers and analysts may query the database.
-# allow_matched if {
-# 	input.server_name == "database"
-# 	input.tool_name == "execute_query"
-# 	some group in ["developers", "analysts"]
-# 	group in input.user_identity.groups
-# }
 
-# # Any authenticated user may call read-only enterprise API tools.
-# allow_matched if {
-# 	input.server_name == "mock-enterprise-api"
-# 	input.tool_name in ["get_order", "list_orders", "get_customer"]
-# }
+response_list contains 
+				{ "decision":"deny", 
+				  "reason":"Denied - media file extension not allowed", 
+				  "request_id": request_id} if {
 
-# # Request is permitted via a valid escalation token.
-# allow_matched if { valid_escalation_for_request }
+   action.service in ["portcullis-localfs"]
+   action.tool_name in ["read_media_file"]
+   resource.arguments.path.filename.extension in ".gz"
 
-# # ============================================================================
-# # FINAL DECISION LOGIC
-# # Priority: deny > escalate > allow > default deny
-# # ============================================================================
+}
 
-# decision := {
-# 	"decision":   "deny",
-# 	"reason":     reason,
-# 	"request_id": input.request_id,
-# } if {
-# 	count(deny) > 0
-# 	reason := concat("; ", deny)
-# }
+response_list contains 
+				{ "decision":"deny", 
+				  "reason":"Denied - write destination not allowed", 
+				  "request_id": request_id} if {
 
-# decision := {
-# 	"decision":   "escalate",
-# 	"reason":     reason,
-# 	"request_id": input.request_id,
-# } if {
-# 	count(deny) == 0
-# 	count(escalate) > 0
-# 	reason := concat("; ", escalate)
-# }
+   action.service in ["portcullis-localfs"]
+   action.tool_name in ["write_file"]
+   some prefix in [ "C:\\Windows" ,
+                    "C:\\ProgramData",
+                    "/boot" ,
+                    "/proc" ,
+                    "/sys" ,
+                     "/etc" ,
+                     "/lib" ,
+                     "~/.ssh" ,
+                     "~/.gnupg"]
+	   startswith(prefix, resource.arguments.path)
 
-# decision := {
-# 	"decision":   "allow",
-# 	"reason":     "user is authorized to perform this action",
-# 	"request_id": input.request_id,
-# } if {
-# 	count(deny) == 0
-# 	count(escalate) == 0
-# 	allow_matched
-# }
+}
+
+
+#
+# escalation scenarios.  This includes both the cases where we
+# return 'escalate', indicating that the user needs to approve of
+# the action, and the case where the escalation_tokens grant the
+# AI the permission to do the new thing
+#
+
+
+response_list contains 
+				{ "decision":"escalate", 
+				  "reason":"This request requires escalated privilege", 
+				  "request_id": request_id} if {
+
+   action.service in ["portcullis-localfs"]
+   action.tool_name in ["write_file"]
+   some prefix in [ "C:\\Program Files", "C:\\Program Files (x86)" , "/var" ]
+		startswith(prefix, resource.arguments.path)
+	
+	# so we've matched the escalation base case. If we have any tokens that
+	# grant the agent permission, we would fail this case, and pass the
+	# allow case below
+
+    not util.escalation_matches_group_service_tool_and_request_args(
+			escalation_grant_list,
+			["*"],
+			action.service,
+			action.tool_name,
+			resource.arguments)
+
+
+}
+
+
+
+response_list contains 
+				{ "decision":"allow", 
+				  "reason":"This request is allowed because of escalated privilege", 
+				  "request_id": request_id} if {
+
+   action.service in ["portcullis-localfs"]
+   action.tool_name in ["write_file"]
+   some prefix in [ "C:\\Program Files", "C:\\Program Files (x86)" , "/var" ]
+		startswith(prefix, resource.arguments.path)
+	
+	# so we've matched the escalation base case. If we have any tokens that
+	# grant the agent permission, we would fail this case, and pass the
+	# allow case below
+
+    util.escalation_matches_group_service_tool_and_request_args(
+			escalation_grant_list,
+			["*"],
+			action.service,
+			action.tool_name,
+			resource.arguments)
+
+
+}
+
+
+#
+#  explicit allow rules
+#
+response_list contains 
+				{ "decision":"allow", 
+				  "reason":"Allowed - in authorized group", 
+				  "request_id": request_id} if {
+
+   action.service in ["portcullis-localfs"]
+   action.tool_name in ["delete_file"]
+   util.has_group_membership( principal.groups, ["admin"])
+
+}
+
+response_list contains 
+				{ "decision":"allow", 
+				  "reason":"Allowed - in authorized group", 
+				  "request_id": request_id} if {
+
+   action.service in ["mock-enterprise-api"]
+   action.tool_name in ["update_order_status"]
+   util.has_group_membership( principal.groups, ["admin"])
+
+}
+
+response_list contains 
+				{ "decision":"allow", 
+				  "reason":"Allowed - in authorized group", 
+				  "request_id": request_id} if {
+
+   action.service in ["mock-enterprise-api"]
+   action.tool_name in ["delete_order"]
+   util.has_group_membership( principal.groups, ["admin"])
+
+}
+
+
+
+
+
+
+
+#############################################################################
+# Boilerplate
+#
+# the following stuff is the same for both custom and tabular rule 
+# processing. I am reasonably fluent in Rego, but not enough to 
+# turn this into common code
+#
+
+
+
+
+#
+# process the escalation tokens attached to the input
+#  
+#
+escalation_grant_list := list if {
+
+	"escalation_tokens" in object.keys(context)
+	count(context.escalation_tokens) > 0
+	list := util.find_applicable_escalation_grants(
+			context.escalation_tokens, 
+			action, 
+			data.config.escalation_secret)
+
+} else := []
+
+
+
+
+# no response, deny
+decision := { "decision" : "deny", 
+				"reason" : "no matching rule found", 
+				"request_id" : request_id } if {
+					count(response_list) == 0
+}
+
+
+#
+# if the request doesn't have the necessary fields, it's
+# invalid and should be denied
+#
+response_list contains { "decision":   "deny",	
+			  "reason":  "invalid input request",
+			  "request_id": request_id } if {
+
+				not util.is_valid_request( input )
+
+}
+
+
+
+#
+# we'll get 0 or more results from the policy logic. We can
+# then make some high-level policy rules based on the 
+# results.
+#
+
+deny_list := [ x | 
+				some x in response_list
+					x.decision == "deny"
+			]
+
+allow_list := [ x | 
+				some x in response_list
+					x.decision == "allow"
+			]
+
+
+escalate_list := [ x | 
+				some x in response_list
+					x.decision == "escalate"
+			]			
+
+
+#
+# general rules:
+# 1) If there are any denies, it's a deny
+# 2) If there are any escalates, but no denies, it's escalate
+# 3) if there are allows, and no deny/escalate results, it's allow
+#
+#  We could respond with all of the denies. For the moment, we'll
+# just respond with the first one.
+#
+decision := deny_result if {
+	count(deny_list) > 0
+	deny_result := deny_list[0]
+}
+
+
+decision := escalate_result if {
+	count(deny_list) == 0
+	count(escalate_list) > 0
+	escalate_result := escalate_list[0]
+}
+
+
+decision := allow_result if {
+	count(deny_list) == 0
+	count(escalate_list) == 0
+	count(allow_list) > 0
+	allow_result := allow_list[0]
+}
+
+

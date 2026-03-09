@@ -7,9 +7,61 @@ opa:
 
 tests:
 
+#########################################################
+#
+#  mock-enterprise-api
+#
+#  additional test scenarios that we want to exercise
+#
+#  these are failing, because the semantics of the escalate are
+#  different than they were for the filesystem.
+#
+#  in the filesystem, allow is inferior to escalate - if the
+#  escalate response is included in the list, it is preferred
+#  over the allow response.  
+#
+#  In this case, if the user is in the appropriate group, the
+#  allow matters, not the escalate. We're just working on 
+#  groups, we're not worried about arguments. 
+#
+#  need to ponder this, this is a little tricky
+#
+#
 
-  - name: returns escalate appropriately
-    description: checking arguments against escalation criteria
+
+  - name: mock-enterprise-api - get_customer - returns allow 
+    description: the user is in an allowed group
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"allow"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {
+            "action":{
+              "service": "mock-enterprise-api",
+              "tool_name": "get_customer"
+            },
+            "resource":{
+            },
+            "principal": {
+              "user_id": "alice@example.com",
+              "display_name": "Alice Developer",
+              "groups": ["developers", "blah"]
+            },
+            "context": {
+              "escalation_tokens":[
+              ]
+            }
+          },
+          "session_id": "tbd123",
+          "request_id": "req-abc123"
+        }
+
+
+  - name: mock-enterprise-api - get_customer - returns escalate 
+    description: the escalation token(s) don't provide the necessary privilege
     decision-path: /v1/data/portcullis/tabular/decision
     expects:
       - substring: '"decision":"escalate"'
@@ -17,20 +69,57 @@ tests:
       type: inline
       value: >
         {
-          "service": "portcullis-localfs",
-          "tool_name": "write_file",
-          "arguments": {
-            "path": "/var/log/whatever.log"
+          "authorization_request": {
+            "action":{
+              "service": "mock-enterprise-api",
+              "tool_name": "get_customer"
+            },
+            "resource":{
+            },
+            "principal": {
+              "user_id": "alice@example.com",
+              "display_name": "Alice Developer",
+              "groups": ["blah"]
+            },
+            "context": {
+              "escalation_tokens":[
+                  { "raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiYWRtaW4iOnRydWUsImlhdCI6MTUxNjIzOTAyMiwicG9ydGN1bGxpcyI6eyJ0b29scyI6WyJ3cml0ZV9maWxlIiwiZWRpdF9maWxlIl0sInNlcnZpY2VzIjpbInBvcnRjdWxsaXMtbG9jYWxmcyJdLCJncm91cHMiOlsiZGV2ZWxvcGVyIl0sImFyZ19yZXN0cmljdGlvbnMiOlt7InR5cGUiOiJwcmVmaXgiLCJrZXlfcGF0aCI6InBhdGgiLCJkYXRhIjoiL3Zhci9sb2cvd2hhdGV2ZXIubG9nIiwicmVxdWlyZWQiOnRydWV9XSwicmVhc29uIjoiQWxsb3cgd3JpdGluZyB0byAvdmFyL2xvZyJ9fQ.hPTYnOWOIy5andqOWhUJCQNumLwL22ypHwhG5Xd8bUg" }
+              ]
+            }
           },
-          "user_identity": {
-            "user_id": "alice@example.com",
-            "display_name": "Alice Developer",
-            "groups": ["developers", "blah"]
-          },
-          "escalation_tokens":[
-
-          ],
           "session_id": "tbd123",
           "request_id": "req-abc123"
         }
 
+
+
+  - name: mock-enterprise-api - get_customer - returns allow after escalation
+    description: checking that the escalation token provides the appropriate override
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"allow"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {
+            "action": {
+              "service": "mock-enterprise-api",
+              "tool_name": "get_customer"
+            },
+            "resource":{
+            },
+            "principal": {
+              "user_id": "alice@example.com",
+              "display_name": "Alice Developer",
+              "groups": ["blah"]
+            },
+            "context": {
+              "escalation_tokens":[
+                  { "raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiYWRtaW4iOnRydWUsImlhdCI6MTUxNjIzOTAyMiwicG9ydGN1bGxpcyI6eyJ0b29scyI6WyJnZXRfY3VzdG9tZXIiLCJ1cGRhdGVfaW52ZW50b3J5Il0sInNlcnZpY2VzIjpbIm1vY2stZW50ZXJwcmlzZS1hcGkiXSwiZ3JvdXBzIjpbImRldmVsb3BlciJdLCJhcmdfcmVzdHJpY3Rpb25zIjpbXSwicmVhc29uIjoidXBkYXRlIGdyb3VwIG1lbWJlcnNoaXAifX0.eCCM5fYkMOuWB1aQbqqhrFAewb7jFoZxrezo_bJsQS0" }
+              ]
+            }
+          },
+          "session_id": "tbd123",
+          "request_id": "req-abc123"
+        }

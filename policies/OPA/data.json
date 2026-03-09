@@ -136,14 +136,14 @@
 
 
 		},
-		"mock-enterprese-api": {
+		"mock-enterprise-api": {
 
 			"get_customer": {
 				"allow" : {
 					"groups" : [ "admin", "developer", "clerk" ]
 				},
 				"escalate" : {
-					"groups" : [ "*" ]
+					"groups" : [ "escalate" ]
 				}
 			},
 			"update_order_status": {
@@ -151,7 +151,7 @@
 					"groups" : [ "admin" ]
 				},
 				"escalate" : {
-					"groups" : [ "*" ]
+					"groups" : [ "escalate" ]
 				}
 			},
 			"query_inventory": {
