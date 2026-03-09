@@ -2,16 +2,16 @@ Things to do
 
 
 
-1. We should include a deny table rule that uses the arg_restriction thing we just built
+DONE - 1. We should include a deny table rule that uses the arg_restriction thing we just built
 
-2. we need the primary scaffold that parses any escalation_tokens and converts the valid ones
+DONE - 2. we need the primary scaffold that parses any escalation_tokens and converts the valid ones
    into escalation_data elements in an array
 
 
-3. write some Raygun tests to verify that the rules are working as expected
+DONE - 3. write some Raygun tests to verify that the rules are working as expected
 
 
-4. finish up the tabular example to include all of the scenarios (allow, escalate, deny)
+DONE - 4. finish up the tabular example to include all of the scenarios (allow, escalate, deny, allow-after-escalate)
 
 
 5. Implement the same rules in custom rego.  take advantage of the util functions
@@ -19,4 +19,23 @@ Things to do
 
 6. those same raygun tests should work for custom rules if the logic is the same
 
+7. look at the rules for the enterprise mcp
+8. have some escalation scenarios handy
 
+
+# Next steps
+
+After all of these are done, we integrate
+
+1. make keep call out to the PDP for answers
+2. if the answer is deny, return that
+3. if the answer is escalate, indicate that you won't do the work, but it can be escalated
+4. if the answer is allow, pass the request on to the actual MCP for processing
+5. get an escalate response properly set up
+6. create the appropriate approval token
+7. make sure this works in raygun tests
+8. add the token to the official list
+9. verify that the agent is able to access the MCP once the token is added
+
+
+- 
