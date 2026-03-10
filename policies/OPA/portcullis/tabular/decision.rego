@@ -58,6 +58,8 @@ package portcullis.tabular
 
 import rego.v1
 import data.portcullis.util
+import data.portcullis.allowdeny
+import data.portcullis.escalate
 
 # ============================================================================
 # DEFAULT — fail-safe deny
@@ -209,7 +211,7 @@ response_list contains { "decision" : "deny",
 
 
 				not rules_section.deny == null
-				does_request_meet_criteria_no_escalation( input.authorization_request, rules_section.deny )
+				allowdeny.request_matches_rule_criteria( input.authorization_request, rules_section.deny )
 
 			  }
 
@@ -219,7 +221,7 @@ response_list contains { "decision" : "allow",
 			  "request_id" : request_id } if {
 
 				not rules_section.allow == null
-				does_request_meet_criteria_no_escalation( input.authorization_request, rules_section.allow )
+				allowdeny.request_matches_rule_criteria( input.authorization_request, rules_section.allow )
 
 			  }
 
@@ -232,12 +234,20 @@ response_list contains { "decision" : "allow",
 
 				count(escalation_grant_list) > 0
 
-				# it must meet the base criteria for escalate
-				does_request_meet_criteria_no_escalation( input.authorization_request, rules_section.escalate)
+				# it must meet the base criteria for escalate.  For escalation, this can include both
+				# positive rules (the request argument match the criteria for escalation)
+				# and also negative rules (the principal must not be in one of the escalation groups)
+				escalate.request_matches_base_criteria( input.authorization_request, rules_section.escalate)
 
 
 				# and it meets the criteria of at least one escalation token
-				does_request_meet_criteria_escalation_only( 
+				# this will also have two ways to match - with the escalated temporary group membership,
+				# the user is in one of the 'escalate_to_groups' groups
+				#
+				# and/or the token includes argument-based permissions that verify that the caller is authorized 
+				# to use said argument(s) in fulfillment of its objective
+				#
+				escalate.request_matches_escalation_criteria( 
 						input.authorization_request, 
 						rules_section.escalate, 
 						escalation_grant_list )
@@ -254,12 +264,14 @@ response_list contains {
 			  	"request_id" : request_id } if {
 
 					not rules_section.escalate == null
-					does_request_meet_criteria_no_escalation( input.authorization_request, rules_section.escalate )
+					escalate.request_matches_base_criteria( input.authorization_request, rules_section.escalate )
 					
+					print("#DEBUG: escalate scenario: we match the base case, do we match the escalation case?")
+
 					# why are we checking this? Because if the request does meet the escalation
 					# criteria, it's approved, and no longer needs to be escalated
 					#
-					not does_request_meet_criteria_escalation_only( 
+					not escalate.request_matches_escalation_criteria( 
 							input.authorization_request, 
 							rules_section.escalate, 
 							escalation_grant_list )
@@ -334,35 +346,13 @@ decision := allow_result if {
 
 
 
+
+
+#does_request_meet_criteria_escalation_only( request, rules, escalation_grant_list) := true if {
 #
-# compare the request to the rule criteria
+#	util.request_matches_escalation_criteria( request, rules, escalation_grant_list)
 #
-# these will typically be rules around group membership and
-# the presence or absence of key information in the request
-#
-does_request_meet_criteria_no_escalation( request, rules ) := true if {
-
-	# print("#DEBUG: does_request_meet_criteria_no_escalation: ", request, " ", rules)
-
-	util.request_matches_criteria( request, rules )
-
-} else := false
-
-
-does_request_meet_criteria_with_escalation( request, rules, escalation_grant_list ) := true if {
-
-	# if we match the core criteria, we're good
-    util.request_matches_criteria( request, rules)
-
-} else := does_request_meet_criteria_escalation_only( request, rules, escalation_grant_list) 
-
-
-
-does_request_meet_criteria_escalation_only( request, rules, escalation_grant_list) := true if {
-
-	util.request_matches_escalation_criteria( request, rules, escalation_grant_list)
-
-} else := false
+#} else := false
 
 
 

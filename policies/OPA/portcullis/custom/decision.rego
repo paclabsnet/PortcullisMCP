@@ -11,7 +11,8 @@ package portcullis.custom
 
 import rego.v1
 import data.portcullis.util
-
+import data.portcullis.allowdeny
+import data.portcullis.escalate
 
 #
 # The input request will look something like:
@@ -161,9 +162,9 @@ response_list contains
 	# grant the agent permission, we would fail this case, and pass the
 	# allow case below
 
-    not util.escalation_matches_group_service_tool_and_request_args(
+    not escalate.escalation_grant_matches_group_service_tool_and_request_args(
 			escalation_grant_list,
-			["*"],
+			[],
 			action.service,
 			action.tool_name,
 			resource.arguments)
@@ -187,9 +188,9 @@ response_list contains
 	# grant the agent permission, we would fail this case, and pass the
 	# allow case below
 
-    util.escalation_matches_group_service_tool_and_request_args(
+    escalate.escalation_grant_matches_group_service_tool_and_request_args(
 			escalation_grant_list,
-			["*"],
+			[],
 			action.service,
 			action.tool_name,
 			resource.arguments)
