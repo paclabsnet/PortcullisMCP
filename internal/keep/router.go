@@ -143,6 +143,13 @@ func buildBackendTransport(cfg BackendConfig) (mcp.Transport, error) {
 		if cfg.URL == "" {
 			return nil, fmt.Errorf("http backend requires a URL")
 		}
+		return &mcp.StreamableClientTransport{
+			Endpoint: cfg.URL,
+		}, nil
+	case "sse":
+		if cfg.URL == "" {
+			return nil, fmt.Errorf("sse backend requires a URL")
+		}
 		return &mcp.SSEClientTransport{
 			Endpoint: cfg.URL,
 		}, nil

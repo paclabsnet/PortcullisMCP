@@ -31,7 +31,7 @@ type PDPConfig struct {
 }
 
 type BackendConfig struct {
-	Type    string            `yaml:"type"`    // "stdio" | "http"
+	Type    string            `yaml:"type"`    // "stdio" | "http" (Streamable HTTP) | "sse" (legacy SSE)
 	Command string            `yaml:"command"` // for stdio
 	Args    []string          `yaml:"args"`
 	Env     map[string]string `yaml:"env"`

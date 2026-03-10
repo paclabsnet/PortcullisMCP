@@ -14,13 +14,16 @@ DONE - 3. write some Raygun tests to verify that the rules are working as expect
 DONE - 4. finish up the tabular example to include all of the scenarios (allow, escalate, deny, allow-after-escalate)
 
 
-5. Implement the same rules in custom rego.  take advantage of the util functions
+DONE 5. Implement the same rules in custom rego.  take advantage of the util functions
 
 
-6. those same raygun tests should work for custom rules if the logic is the same
+DONE 6. those same raygun tests should work for custom rules if the logic is the same
 
-7. look at the rules for the enterprise mcp
-8. have some escalation scenarios handy
+DONE 7. look at the rules for the enterprise mcp
+DONE 8. have some escalation scenarios handy
+
+9. add the 'and' restriction to the ladder, and implement it
+10. add the 'suffix' restriction to the ladder, and implement it
 
 
 # Next steps

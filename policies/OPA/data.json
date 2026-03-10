@@ -165,8 +165,32 @@
 				}
 			}
 
-		}
-
+		},
+                "fetch" : {
+                        "fetch" : {
+                                "allow" : {
+                                        "groups" : ["*"]
+                                },
+                                "deny" : {
+                                        "arg_restrictions" :[
+                                                { "type":"and", "list" :[
+                                                        { "type":"prefix", "key_path": "host", "data": "competitor.com" },
+                                                        { "type":"prefix", "key_path": "path", "data": "/v1/jobs" }
+                                                   ]
+                                                }
+                                        ]
+                                },
+                                "escalate" : {
+                                        "arg_restrictions" :[
+                                                { "type":"and", "list" :[
+                                                        { "type":"prefix", "key_path": "host", "data": "competitor.com" },
+                                                        { "type":"prefix", "key_path": "path", "data": "/v1/products" }
+                                                   ]
+                                                }
+                                        ]
+                                }
+                        }
+                }
 	}
   }
 }

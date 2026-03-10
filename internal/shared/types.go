@@ -7,8 +7,13 @@ import "errors"
 // testing/evaluation only — portcullis-keep may be configured to reject it.
 type UserIdentity struct {
 	UserID      string   `json:"user_id"`      // stable enterprise identifier (UPN, email, etc.)
+	Email       string   `json:"email,omitempty"`
 	DisplayName string   `json:"display_name"`
-	Groups      []string `json:"groups"`       // for PDP group-based policy
+	Groups      []string `json:"groups"`       // directory groups
+	Roles       []string `json:"roles,omitempty"`      // RBAC roles, distinct from directory groups
+	Department  string   `json:"department,omitempty"` // org unit / department for ABAC
+	AuthMethod  []string `json:"auth_method,omitempty"` // OIDC AMR claim, e.g. ["pwd","mfa"]
+	TokenExpiry int64    `json:"token_expiry,omitempty"` // Unix timestamp; 0 means unknown
 	SourceType  string   `json:"source_type"`  // "oidc" | "os"
 	RawToken    string   `json:"raw_token"`    // original OIDC token for PDP verification
 }

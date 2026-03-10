@@ -12,8 +12,6 @@ import rego.v1
 
 
 
-
-
 any_arg_restriction_rule_honored( arg_restriction_rule_array, request_args) := true if {
 
    some restriction in arg_restriction_rule_array
@@ -33,6 +31,8 @@ no_arg_restrictions_to_honor( arg_restriction_rule_array ) := true if {
 #
 arg_restriction_honored( restriction, request_args) := true if {
 
+  print("#DEBUG: arg_restriction_honored")
+
   key_path_array := split(restriction.key_path, ".")
 
   # this only returns true if the element doesn't exist and is not required
@@ -50,35 +50,104 @@ arg_restriction_honored( restriction, request_args) := true if {
 #
 arg_restriction_honored_existence_required( request_args, restriction) := true if {
 
-#  print("#DEBUG: arg_restriction_honored_existence_required: request_args: ", request_args, ", restriction: ", restriction)
+  print("#DEBUG: arg_restriction_honored_existence_required: request_args: ", request_args, ", restriction: ", restriction)
 
-  key_path_array := split(restriction.key_path, ".")
-   
-  element := traverse_json( request_args, key_path_array)
-
-  arg_restriction_honored_type_ladder( element, restriction )
+  arg_restriction_honored_type_ladder( request_args, restriction )
 
 } else := false
 
 
 
-#
-# right now, we just have prefix, but if we add other types of tests, we can
-# add one a new function as the else clause for this restriction.type, and then add
-# an else clause to that function for the next one, etc.
-#
-arg_restriction_honored_type_ladder( element, restriction ) := true if {
-   
-   # print("#DEBUG: arg_restriction_honored_type_ladder: element: ", element, " restriction: ", restriction)
 
+
+#
+# we can add as many different types as we want by creating this ladder
+# of fail-through checks
+#
+arg_restriction_honored_type_ladder( request_args, restriction ) := true if {
+
+   print("#DEBUG: arg_restriction_honored_type_ladder: ", request_args, ", ", restriction)
+
+   restriction.type == "and"
+
+   all_arg_restriction_rule_honored( restriction.list, request_args)
+
+# prefix MUST be the next item on the ladder, or the all_arg_restriction function above won't work properly
+} else := arg_restriction_hored_type_ladder_dereference_element( request_args, restriction)
+
+
+#
+# up until this point, we haven't been looking at the contents of the restriction, just
+# the type. now we have to get into the details
+#
+arg_restriction_hored_type_ladder_dereference_element( request_args, restriction ) := true if {
+
+  key_path_array := split(restriction.key_path, ".")
+   
+  element := traverse_json( request_args, key_path_array)
+
+  arg_restriction_honored_type_ladder_prefix(element, restriction)
+
+} else := false
+
+
+#
+# does the first part of the element match the restriction prefix
+#
+arg_restriction_honored_type_ladder_prefix( element, restriction ) := true if {
+   
    restriction.type == "prefix"
    
    startswith(element, restriction.data)
 
-#   print("#DEBUG: TRUE: arg_restriction_honored_type_ladder: element: ", element, " restriction: ", restriction)
+} else := arg_restriction_honored_type_ladder_suffix( element, restriction )
 
 
-} else := false   # if we need other types of restrictions, we can add them here fairly gracefully
+#
+# does the end of the element match the restriction suffix
+#
+arg_restriction_honored_type_ladder_suffix( element, restriction ) := true if {
+
+   restriction.type == "suffix"
+   
+   endswith(element, restriction.data)
+
+} else := false
+
+
+
+
+#
+# this is a bit of a 'pro gamer move'.  Rego does not support recursion. so we can't
+# have this in a scenario where all_arg_restrictions calls any_arg_restrictions .  But in
+# practice, that's probably fine. 
+#
+# the other hack that makes this a pro-gamer move is taking advantage of knowing that
+# the prefix check is immediately after the 'AND' check on the ladder.  This requires
+# discipline, which I do not love, because people forget.  But for the purposes of this
+# proof of concept, it's fine.  
+#
+# Note also that the AND is implicitly required.  what would be the point of an AND if
+# one of the restrictions were optional?
+#
+all_arg_restriction_rule_honored( arg_restriction_rule_array, request_args ) := true if {
+
+
+   print("#DEBUG: all_arg - array: ", arg_restriction_rule_array, ", request: ", request_args)
+
+  every restriction in arg_restriction_rule_array {
+
+      arg_restriction_hored_type_ladder_dereference_element( request_args, restriction)
+#      key_path_array := split(restriction.key_path, ".")
+#         
+#      element := traverse_json( request_args, key_path_array)
+#
+#      print("#DEBUG++: element: ",element, ", restriction: ", restriction)
+#
+#      arg_restriction_honored_type_ladder_prefix( element, restriction)
+  }
+
+} else := false
 
 
 
@@ -111,13 +180,19 @@ has_group_membership( user_groups, allowed_groups) := true if {
 #
 find_applicable_escalation_grants( escalation_tokens, action, jwt_secret ) := escalation_grant_list if {
 
+   print("#DEBUG: find_applicable_escalation_grants: ", action)
+   print("#DEBUG++: escalation_tokens: ", escalation_tokens)
+
    escalation_grant_list := [ claims |
       some token in escalation_tokens
          [valid, _, claims ] := io.jwt.decode_verify(token.raw, {"secret": jwt_secret, "time": time.now_ns()})
+            print("#DEBUG++: valid, ", valid, ", claims: ",claims)
             valid == true
             action.service in claims.portcullis.services
             action.tool_name in claims.portcullis.tools
       ]
+
+   print("#DEBUG++: found grants: ", escalation_grant_list)   
 
 } else := []
 

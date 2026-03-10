@@ -22,15 +22,19 @@ backends:
     env:
       GITHUB_TOKEN: "${GITHUB_TOKEN}"
   
-  # HTTP backends are preferred for enterprise deployments
-  # These run as separate services and can be scaled/monitored independently
+  # Streamable HTTP backends (current MCP standard, preferred for new deployments)
+  fetch:
+    type: "http"
+    url: "http://localhost:8080/mcp"
+
   enterprise-api:
     type: "http"
     url: "https://mcp-api.internal.example.com/mcp"
-  
-  customer-db:
-    type: "http"
-    url: "https://mcp-db.internal.example.com/mcp"
+
+  # Legacy SSE backends (deprecated MCP transport, for existing servers not yet migrated)
+  legacy-service:
+    type: "sse"
+    url: "https://mcp-legacy.internal.example.com/sse"
 
 escalation:
   workflow:

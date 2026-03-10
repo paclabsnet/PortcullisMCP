@@ -29,7 +29,7 @@ request_principal_not_in_escalation_group( request, rules) := true if {
 
    not util.has_group_membership( request.principal.groups, rules.escalate_to_groups)
 
-} else := false
+} else := request_has_arg_restrictions( request, rules)
 
 
 # there are both requirements that the user not belong to a particular group
@@ -46,6 +46,18 @@ request_not_in_escalation_group_and_maches_arg_restrictions( request, rules) := 
 
 } else := util.any_arg_restriction_rule_honored( rules.arg_restrictions, request.resource.arguments)
 
+
+request_has_arg_restrictions( request, rules ) := true if {
+
+    print("#DEBUG: request_has_arg_restrictions: ", rules)
+
+   "arg_restrictions" in object.keys(rules)
+
+   print("#DEBUG++: comparing arg_restrictions against arguments ", request.resource.arguments)
+
+   util.any_arg_restriction_rule_honored( rules.arg_restrictions, request.resource.arguments)
+
+}
 
 
 

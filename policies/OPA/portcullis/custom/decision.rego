@@ -72,6 +72,14 @@ request_id := object.get(input, "request_id", 0)
 
 
 #
+# process the escalation tokens attached to the input
+#  
+#
+escalation_grant_list := util.find_applicable_escalation_grants( context.escalation_tokens, action, data.config.escalation_secret)
+
+
+
+#
 #  general deny rules
 #
 
@@ -362,21 +370,6 @@ response_list contains
 
 
 
-
-#
-# process the escalation tokens attached to the input
-#  
-#
-escalation_grant_list := list if {
-
-	"escalation_tokens" in object.keys(context)
-	count(context.escalation_tokens) > 0
-	list := util.find_applicable_escalation_grants(
-			context.escalation_tokens, 
-			action, 
-			data.config.escalation_secret)
-
-} else := []
 
 
 
