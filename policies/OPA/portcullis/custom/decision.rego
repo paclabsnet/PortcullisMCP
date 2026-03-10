@@ -71,6 +71,10 @@ request_id := object.get(input, "request_id", 0)
 
 
 
+#
+#  general deny rules
+#
+
 response_list contains 
 				{ "decision":"deny", 
 				  "reason":"Denied - MCP is not in scope", 
@@ -106,6 +110,10 @@ response_list contains
 }
 
 
+#######################################
+#
+# tool-specific deny rules
+#
 
 
 response_list contains 
@@ -115,7 +123,7 @@ response_list contains
 
    action.service in ["portcullis-localfs"]
    action.tool_name in ["read_media_file"]
-   resource.arguments.path.filename.extension in ".gz"
+   resource.arguments.path.filename.extension in [".gz"]
 
 }
 
@@ -135,11 +143,12 @@ response_list contains
                      "/lib" ,
                      "~/.ssh" ,
                      "~/.gnupg"]
-	   startswith(prefix, resource.arguments.path)
+	   startswith( resource.arguments.path, prefix)
 
 }
 
 
+###########################################################################
 #
 # escalation scenarios.  This includes both the cases where we
 # return 'escalate', indicating that the user needs to approve of
@@ -156,7 +165,7 @@ response_list contains
    action.service in ["portcullis-localfs"]
    action.tool_name in ["write_file"]
    some prefix in [ "C:\\Program Files", "C:\\Program Files (x86)" , "/var" ]
-		startswith(prefix, resource.arguments.path)
+		startswith(resource.arguments.path, prefix)
 	
 	# so we've matched the escalation base case. If we have any tokens that
 	# grant the agent permission, we would fail this case, and pass the
@@ -164,7 +173,7 @@ response_list contains
 
     not escalate.escalation_grant_matches_group_service_tool_and_request_args(
 			escalation_grant_list,
-			[],
+			["*"],
 			action.service,
 			action.tool_name,
 			resource.arguments)
@@ -190,7 +199,7 @@ response_list contains
 
     escalate.escalation_grant_matches_group_service_tool_and_request_args(
 			escalation_grant_list,
-			[],
+			["*"],
 			action.service,
 			action.tool_name,
 			resource.arguments)
@@ -199,6 +208,63 @@ response_list contains
 }
 
 
+#
+#  mock-enterprise-api
+#
+
+
+response_list contains 
+				{ "decision":"escalate", 
+				  "reason":"This request requires escalated privilege", 
+				  "request_id": request_id} if {
+
+	action.service in ["mock-enterprise-api"]
+	action.tool_name in ["get_customer"]
+		
+	not util.has_group_membership(principal.groups, ["admin", "developer", "clerk"])
+
+	# so we've matched the escalation base case. If we have any tokens that
+	# grant the agent permission, we would fail this case, and pass the
+	# allow case below
+
+    not escalate.escalation_grant_matches_group_service_tool_and_request_args(
+			escalation_grant_list,
+			["admin", "developer", "clerk"],
+			action.service,
+			action.tool_name,
+			[])
+
+
+}
+
+
+response_list contains 
+				{ "decision":"allow", 
+				  "reason":"This request is allowed because of escalated privileges", 
+				  "request_id": request_id} if {
+
+	action.service in ["mock-enterprise-api"]
+	action.tool_name in ["get_customer"]
+		
+	not util.has_group_membership(principal.groups, ["admin", "developer", "clerk"])
+
+	# so we've matched the escalation base case. If we have any tokens that
+	# grant the agent permission, we would fail this case, and pass the
+	# allow case below
+
+    escalate.escalation_grant_matches_group_service_tool_and_request_args(
+			escalation_grant_list,
+			["admin", "developer", "clerk"],
+			action.service,
+			action.tool_name,
+			[])
+
+
+}
+
+
+
+###################################################################
 #
 #  explicit allow rules
 #
@@ -212,6 +278,29 @@ response_list contains
    util.has_group_membership( principal.groups, ["admin"])
 
 }
+
+
+
+
+response_list contains 
+				{ "decision":"allow", 
+				  "reason":"Allowed - in authorized group", 
+				  "request_id": request_id} if {
+
+	action.service in ["portcullis-localfs"]
+    action.tool_name in ["read_file", "read_text_file", "read_media_file", "read_multiple_files", 
+						 "write_file", "edit_file", "create_directory", "list_directory", 
+						 "list_directory_with_sizes", "directory_tree", "move_file", "search_files",
+						 "copy_file", "search_within_files", "get_file_info", "list_allowed_directories"]
+
+    util.has_group_membership( principal.groups, ["*"]) 
+}
+
+
+#
+#  allow rules for mock-enterprise-api
+#
+
 
 response_list contains 
 				{ "decision":"allow", 
@@ -236,7 +325,29 @@ response_list contains
 }
 
 
+response_list contains 
+				{ "decision":"allow", 
+				  "reason":"Allowed - in authorized group", 
+				  "request_id": request_id} if {
 
+   action.service in ["mock-enterprise-api"]
+   action.tool_name in ["query_inventory"]
+   util.has_group_membership( principal.groups, ["*"])
+
+}
+
+
+
+response_list contains 
+				{ "decision":"allow", 
+				  "reason":"Allowed - in authorized group", 
+				  "request_id": request_id} if {
+
+   action.service in ["mock-enterprise-api"]
+   action.tool_name in ["get_customer"]
+   util.has_group_membership( principal.groups, [ "admin", "developer", "clerk" ])
+
+}
 
 
 

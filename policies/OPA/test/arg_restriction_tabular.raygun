@@ -6,3 +6,34 @@ opa:
 
 
 tests:
+
+  - name: mock-enterprise-api - get_customer - returns allow 
+    skip: false
+    description: the user is in an allowed group
+    decision-path: /v1/data/portcullis/custom/decision
+    expects:
+      - substring: '"decision":"allow"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {
+            "action":{
+              "service": "mock-enterprise-api",
+              "tool_name": "get_customer"
+            },
+            "resource":{
+            },
+            "principal": {
+              "user_id": "alice@example.com",
+              "display_name": "Alice Developer",
+              "groups": ["developer", "blah"]
+            },
+            "context": {
+              "escalation_tokens":[
+              ]
+            }
+          },
+          "session_id": "tbd123",
+          "request_id": "req-abc123"
+        }

@@ -111,13 +111,12 @@ has_group_membership( user_groups, allowed_groups) := true if {
 #
 find_applicable_escalation_grants( escalation_tokens, action, jwt_secret ) := escalation_grant_list if {
 
-   escalation_grant_list := [ claims | 
+   escalation_grant_list := [ claims |
       some token in escalation_tokens
-         [valid, _, claims ] := io.jwt.decode_verify(token.raw, {"secret": jwt_secret})
+         [valid, _, claims ] := io.jwt.decode_verify(token.raw, {"secret": jwt_secret, "time": time.now_ns()})
             valid == true
             action.service in claims.portcullis.services
             action.tool_name in claims.portcullis.tools
-            # need to check for expiration for the token
       ]
 
 } else := []

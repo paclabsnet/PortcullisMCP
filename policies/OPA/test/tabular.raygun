@@ -443,7 +443,7 @@ tests:
 
 
 
-  - name: returns escalate appropriately
+  - name: returns escalate appropriately for write_file 
     description: checking arguments against escalation criteria
     decision-path: /v1/data/portcullis/tabular/decision
     expects:
@@ -643,16 +643,17 @@ tests:
 
 
 
-{
-  "portcullis": {
-    "tools":       ["get_customer", "update_inventory"],
-    "services":    ["mock-enterprise-api"],
-    "groups" :     ["developer"],
-    "arg_restrictions": [
-    ],
-    "reason":      "update group membership"     
-  }
-}
+# {
+#  "portcullis": {
+#    "tools":       ["get_customer", "update_inventory"],
+#    "services":    ["mock-enterprise-api"],
+#    "groups" :     ["developer"],
+#    "arg_restrictions": [
+#    ],
+#    "reason":      "update group membership"     
+#  }
+# }
+#
   - name: mock-enterprise-api - get_customer - returns allow after escalation
     skip: false
     description: checking that the escalation token provides the appropriate override
@@ -678,6 +679,70 @@ tests:
             "context": {
               "escalation_tokens":[
                 { "raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJwb3J0Y3VsbGlzIjp7InRvb2xzIjpbImdldF9jdXN0b21lciIsInVwZGF0ZV9pbnZlbnRvcnkiXSwic2VydmljZXMiOlsibW9jay1lbnRlcnByaXNlLWFwaSJdLCJncm91cHMiOlsiZGV2ZWxvcGVyIl0sImFyZ19yZXN0cmljdGlvbnMiOltdLCJyZWFzb24iOiJ1cGRhdGUgZ3JvdXAgbWVtYmVyc2hpcCJ9fQ.LDmDu7qxjrgU9dp_7WKBPCamLfeuj_6ZixN2dCmPmho"}
+              ]
+            }
+          },
+          "session_id": "tbd123",
+          "request_id": "req-abc123"
+        }
+
+
+  - name: mock-enterprise-api - delete_order - returns allow if you're an admin
+    skip: false
+    description: the user is an admin
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"allow"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {
+            "action":{
+              "service": "mock-enterprise-api",
+              "tool_name": "delete_order"
+            },
+            "resource":{
+            },
+            "principal": {
+              "user_id": "alice@example.com",
+              "display_name": "Alice Developer",
+              "groups": ["developer", "admin"]
+            },
+            "context": {
+              "escalation_tokens":[
+              ]
+            }
+          },
+          "session_id": "tbd123",
+          "request_id": "req-abc123"
+        }
+
+
+  - name: mock-enterprise-api - delete_order - returns deny if you're not an admin
+    skip: false
+    description: the user is not an admin
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"deny"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {
+            "action":{
+              "service": "mock-enterprise-api",
+              "tool_name": "delete_order"
+            },
+            "resource":{
+            },
+            "principal": {
+              "user_id": "alice@example.com",
+              "display_name": "Alice Developer",
+              "groups": ["developer", "SUPER-ADMIN"]
+            },
+            "context": {
+              "escalation_tokens":[
               ]
             }
           },
