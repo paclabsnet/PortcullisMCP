@@ -16,7 +16,6 @@
                                 "allow" : {
                                         "groups" : [ "*" ]
                                 }
-
 			},
                         "read_media_file" : {
                                 "allow" : {
@@ -24,7 +23,7 @@
                                 },
                                 "deny" : {
                                         "arg_restrictions" :[
-                                                { "type":"prefix", "key_path": "path.filename.extension", "data": ".gz" }
+                                                { "type":"suffix", "key_path": "path.filename.extension", "data": ".gz" }
                                         ]
                                 }
 
@@ -183,10 +182,12 @@
                                 "escalate" : {
                                         "arg_restrictions" :[
                                                 { "type":"and", "list" :[
-                                                        { "type":"prefix", "key_path": "host", "data": "competitor.com" },
+                                                        { "type":"PREFIX", "key_path": "host", "data": "competitor.com" },
                                                         { "type":"prefix", "key_path": "path", "data": "/v1/products" }
                                                    ]
-                                                }
+                                                }, 
+                                                { "type":"prefix","key_path":"host", "data":"STyRa.CoM"},
+                                                { "type":"prefix","key_path":"host", "data":"OpenPolicyAgent.com"}
                                         ]
                                 }
                         }

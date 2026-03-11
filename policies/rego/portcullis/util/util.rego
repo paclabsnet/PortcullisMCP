@@ -31,7 +31,7 @@ no_arg_restrictions_to_honor( arg_restriction_rule_array ) := true if {
 #
 arg_restriction_honored( restriction, request_args) := true if {
 
-  print("#DEBUG: arg_restriction_honored")
+#  print("#DEBUG: arg_restriction_honored")
 
   key_path_array := split(restriction.key_path, ".")
 
@@ -50,7 +50,7 @@ arg_restriction_honored( restriction, request_args) := true if {
 #
 arg_restriction_honored_existence_required( request_args, restriction) := true if {
 
-  print("#DEBUG: arg_restriction_honored_existence_required: request_args: ", request_args, ", restriction: ", restriction)
+#  print("#DEBUG: arg_restriction_honored_existence_required: request_args: ", request_args, ", restriction: ", restriction)
 
   arg_restriction_honored_type_ladder( request_args, restriction )
 
@@ -68,7 +68,7 @@ arg_restriction_honored_type_ladder( request_args, restriction ) := true if {
 
    print("#DEBUG: arg_restriction_honored_type_ladder: ", request_args, ", ", restriction)
 
-   restriction.type == "and"
+   lower(restriction.type) == "and"
 
    all_arg_restriction_rule_honored( restriction.list, request_args)
 
@@ -96,9 +96,9 @@ arg_restriction_hored_type_ladder_dereference_element( request_args, restriction
 #
 arg_restriction_honored_type_ladder_prefix( element, restriction ) := true if {
    
-   restriction.type == "prefix"
+   lower(restriction.type) == "prefix"
    
-   startswith(element, restriction.data)
+   startswith(lower(element), lower(restriction.data))
 
 } else := arg_restriction_honored_type_ladder_suffix( element, restriction )
 
@@ -108,12 +108,23 @@ arg_restriction_honored_type_ladder_prefix( element, restriction ) := true if {
 #
 arg_restriction_honored_type_ladder_suffix( element, restriction ) := true if {
 
-   restriction.type == "suffix"
+   lower(restriction.type) == "suffix"
    
-   endswith(element, restriction.data)
+   endswith(lower(element), lower(restriction.data))
+
+} else := arg_restriction_honored_type_ladder_whole( element, restriction )
+
+
+#
+# does the end of the element match the restriction suffix
+#
+arg_restriction_honored_type_ladder_whole( element, restriction ) := true if {
+
+   lower(restriction.type) == "whole"
+   
+   lower(element) == lower(restriction.data)
 
 } else := false
-
 
 
 
@@ -133,7 +144,7 @@ arg_restriction_honored_type_ladder_suffix( element, restriction ) := true if {
 all_arg_restriction_rule_honored( arg_restriction_rule_array, request_args ) := true if {
 
 
-   print("#DEBUG: all_arg - array: ", arg_restriction_rule_array, ", request: ", request_args)
+#   print("#DEBUG: all_arg - array: ", arg_restriction_rule_array, ", request: ", request_args)
 
   every restriction in arg_restriction_rule_array {
 
@@ -180,19 +191,19 @@ has_group_membership( user_groups, allowed_groups) := true if {
 #
 find_applicable_escalation_grants( escalation_tokens, action, jwt_secret ) := escalation_grant_list if {
 
-   print("#DEBUG: find_applicable_escalation_grants: ", action)
-   print("#DEBUG++: escalation_tokens: ", escalation_tokens)
+#   print("#DEBUG: find_applicable_escalation_grants: ", action)
+#   print("#DEBUG++: escalation_tokens: ", escalation_tokens)
 
    escalation_grant_list := [ claims |
       some token in escalation_tokens
          [valid, _, claims ] := io.jwt.decode_verify(token.raw, {"secret": jwt_secret, "time": time.now_ns()})
-            print("#DEBUG++: valid, ", valid, ", claims: ",claims)
+            # print("#DEBUG++: valid, ", valid, ", claims: ",claims)
             valid == true
             action.service in claims.portcullis.services
             action.tool_name in claims.portcullis.tools
       ]
 
-   print("#DEBUG++: found grants: ", escalation_grant_list)   
+   # print("#DEBUG++: found grants: ", escalation_grant_list)   
 
 } else := []
 
@@ -249,12 +260,12 @@ is_valid_request( document )  := true if {
   auth_request := document.authorization_request
 
   "principal" in object.keys(auth_request)
-    "groups" in object.keys(auth_request.principal)
+  "groups" in object.keys(auth_request.principal)
 
 
   "action" in object.keys(auth_request)
-   "service" in object.keys(auth_request.action)
-   "tool_name" in object.keys(auth_request.action)
+  "service" in object.keys(auth_request.action)
+  "tool_name" in object.keys(auth_request.action)
 
 #  "request_id" in object.keys(request)
 

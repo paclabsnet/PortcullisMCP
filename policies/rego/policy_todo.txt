@@ -22,8 +22,13 @@ DONE 6. those same raygun tests should work for custom rules if the logic is the
 DONE 7. look at the rules for the enterprise mcp
 DONE 8. have some escalation scenarios handy
 
-9. add the 'and' restriction to the ladder, and implement it
-10. add the 'suffix' restriction to the ladder, and implement it
+DONE 9. add the 'and' restriction to the ladder, and implement it
+DONE 10. add the 'suffix' restriction to the ladder, and implement it
+
+DONE 11. write a test for the suffix restriction
+DONE 12. implement the custom rules for fetch, and verify them
+13. set up a pair of escalation rules for 'fetch' for the OpenPolicyAgent.org and styra.com websites.  For demonstration purposes
+
 
 
 # Next steps

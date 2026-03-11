@@ -749,3 +749,374 @@ tests:
           "session_id": "tbd123",
           "request_id": "req-abc123"
         }
+
+
+
+
+####################################################
+#
+# fetch
+  - name: fetch - returns allow
+    skip: false
+    description:  validating a URL fetch request to a valid URL
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"allow"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {                
+            "action": {
+                "tool_name": "fetch",
+                "service" : "fetch"
+            },
+            "resource": {
+                "arguments": {
+                    "raw": "https://internal-api.example.com/v1/customers",
+                    "scheme": "https",
+                    "host": "internal-api.example.com",
+                    "port": "",
+                    "path": "/v1/customers",
+                    "query": ""
+                }
+            },
+            "principal": {
+                "user_id": "alice@example.com",
+                "email": "alice@example.com",
+                "display_name": "Alice Developer",
+                "groups": ["developer", "internal-api-users"],
+                "roles": ["api-consumer"],
+                "department": "engineering",
+                "auth_method": ["pwd", "mfa"],
+                "token_expiry": 1741651200,
+                "source_type": "oidc"
+            },
+            "context": {
+                "escalation_tokens": []
+            }
+          },
+            "session_id": "sess-abc123",
+            "request_id": "req-def456"
+        }
+    
+
+  - name: fetch - returns deny
+    skip: false
+    description:  validating a URL fetch request to an inappropriate URL
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"deny"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {                
+            "action": {
+                "tool_name": "fetch",
+                "service" : "fetch"
+            },
+            "resource": {
+                "arguments": {
+                    "raw": "https://competitor.com/v1/jobs",
+                    "scheme": "https",
+                    "host": "competitor.com",
+                    "port": "",
+                    "path": "/v1/jobs",
+                    "query": ""
+                }
+            },
+            "principal": {
+                "user_id": "alice@example.com",
+                "email": "alice@example.com",
+                "display_name": "Alice Developer",
+                "groups": ["developer", "internal-api-users"],
+                "roles": ["api-consumer"],
+                "department": "engineering",
+                "auth_method": ["pwd", "mfa"],
+                "token_expiry": 1741651200,
+                "source_type": "oidc"
+            },
+            "context": {
+                "escalation_tokens": []
+            }
+          },
+            "session_id": "sess-abc123",
+            "request_id": "req-def456"
+        }
+
+
+#
+# source of the JWT 
+#
+# {
+#  "portcullis": {
+#    "tools":       ["fetch"],
+#    "services":    ["fetch"],
+#    "groups" :     ["developer"],
+#    "arg_restrictions": [
+#       { "type":"prefix", "key_path": "host", "data": "competitor.com", "required":true },
+#       { "type":"prefix", "key_path": "path", "data": "/v1/products", "required":true }       
+#    ]
+#  }
+# }
+  - name: fetch - returns escalate
+    skip: false
+    description:  validating a URL fetch request to a sketchy URL that requires escalation
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"escalate"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {                
+            "action": {
+                "tool_name": "fetch",
+                "service" : "fetch"
+            },
+            "resource": {
+                "arguments": {
+                    "raw": "https://competitor.com/v1/products",
+                    "scheme": "https",
+                    "host": "competitor.com",
+                    "port": "",
+                    "path": "/v1/products",
+                    "query": ""
+                }
+            },
+            "principal": {
+                "user_id": "alice@example.com",
+                "email": "alice@example.com",
+                "display_name": "Alice Developer",
+                "groups": ["developer", "internal-api-users"],
+                "roles": ["api-consumer"],
+                "department": "engineering",
+                "auth_method": ["pwd", "mfa"],
+                "token_expiry": 1741651200,
+                "source_type": "oidc"
+            },
+            "context": {
+                "escalation_tokens": [
+                    {"raw":"BAD_TOKEN"}                    
+                ]
+            }
+          },
+            "session_id": "sess-abc123",
+            "request_id": "req-def456"
+        }
+
+
+
+
+  - name: fetch - returns allow
+    skip: false
+    description:  validating a URL fetch request to a sketchy URL, but an escalation token exists
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"allow"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {                
+            "action": {
+                "tool_name": "fetch",
+                "service" : "fetch"
+            },
+            "resource": {
+                "arguments": {
+                    "raw": "https://competitor.com/v1/products",
+                    "scheme": "https",
+                    "host": "competitor.com",
+                    "port": "",
+                    "path": "/v1/products",
+                    "query": ""
+                }
+            },
+            "principal": {
+                "user_id": "alice@example.com",
+                "email": "alice@example.com",
+                "display_name": "Alice Developer",
+                "groups": ["developer", "internal-api-users"],
+                "roles": ["api-consumer"],
+                "department": "engineering",
+                "auth_method": ["pwd", "mfa"],
+                "token_expiry": 1741651200,
+                "source_type": "oidc"
+            },
+            "context": {
+                "escalation_tokens": [
+                    {"raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJwb3J0Y3VsbGlzIjp7InRvb2xzIjpbImZldGNoIl0sInNlcnZpY2VzIjpbImZldGNoIl0sImdyb3VwcyI6WyJkZXZlbG9wZXIiXSwiYXJnX3Jlc3RyaWN0aW9ucyI6W3sidHlwZSI6InByZWZpeCIsImtleV9wYXRoIjoiaG9zdCIsImRhdGEiOiJjb21wZXRpdG9yLmNvbSIsInJlcXVpcmVkIjp0cnVlfSx7InR5cGUiOiJwcmVmaXgiLCJrZXlfcGF0aCI6InBhdGgiLCJkYXRhIjoiL3YxL3Byb2R1Y3RzIiwicmVxdWlyZWQiOnRydWV9XX19.Nt4BbzBywam-pmw65XS-M1Tvt0pIpz3YvM3joJVoJsk"}
+                ]
+            }
+          },
+            "session_id": "sess-abc123",
+            "request_id": "req-def456"
+        }
+
+
+
+
+  - name: fetch - returns escalate - no token provided
+    skip: false
+    description:  verifying case insensitivity
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"escalate"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {                
+            "action": {
+                "tool_name": "fetch",
+                "service" : "fetch"
+            },
+            "resource": {
+                "arguments": {
+                    "raw": "https://styra.com",
+                    "scheme": "https",
+                    "host": "styra.com",
+                    "port": "",
+                    "path": "",
+                    "query": ""
+                }
+            },
+            "principal": {
+                "user_id": "alice@example.com",
+                "email": "alice@example.com",
+                "display_name": "Alice Developer",
+                "groups": ["developer", "internal-api-users"],
+                "roles": ["api-consumer"],
+                "department": "engineering",
+                "auth_method": ["pwd", "mfa"],
+                "token_expiry": 1741651200,
+                "source_type": "oidc"
+            },
+            "context": {
+                "escalation_tokens": [
+                ]
+            }
+          },
+            "session_id": "sess-abc123",
+            "request_id": "req-def456"
+        }
+
+
+
+# {
+#  "portcullis": {
+#    "tools":       ["fetch"],
+#    "services":    ["fetch"],
+#    "groups" :     ["developer"],
+#    "arg_restrictions": [
+#       { "type":"prefix", "key_path": "host", "data": "openpolicyAGENT.com", "required":true },
+#       { "type":"prefix", "key_path": "host", "data": "STYRA.com", "required":true }       
+#    ]
+#  }
+# }
+  - name: fetch - returns allow after escalate (openpolicyagent.com)
+    skip: false
+    description:  verifying case insensitivity
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"allow"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {                
+            "action": {
+                "tool_name": "fetch",
+                "service" : "fetch"
+            },
+            "resource": {
+                "arguments": {
+                    "raw": "https://OPENpolicyAGENT.com",
+                    "scheme": "https",
+                    "host": "OpEnPoLiCyAgEnT.com",
+                    "port": "",
+                    "path": "",
+                    "query": ""
+                }
+            },
+            "principal": {
+                "user_id": "alice@example.com",
+                "email": "alice@example.com",
+                "display_name": "Alice Developer",
+                "groups": ["developer", "internal-api-users"],
+                "roles": ["api-consumer"],
+                "department": "engineering",
+                "auth_method": ["pwd", "mfa"],
+                "token_expiry": 1741651200,
+                "source_type": "oidc"
+            },
+            "context": {
+                "escalation_tokens": [
+                   {"raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJwb3J0Y3VsbGlzIjp7InRvb2xzIjpbImZldGNoIl0sInNlcnZpY2VzIjpbImZldGNoIl0sImdyb3VwcyI6WyJkZXZlbG9wZXIiXSwiYXJnX3Jlc3RyaWN0aW9ucyI6W3sidHlwZSI6InByZWZpeCIsImtleV9wYXRoIjoiaG9zdCIsImRhdGEiOiJvcGVucG9saWN5QUdFTlQuY29tIiwicmVxdWlyZWQiOnRydWV9LHsidHlwZSI6InByZWZpeCIsImtleV9wYXRoIjoiaG9zdCIsImRhdGEiOiJTVFlSQS5jb20iLCJyZXF1aXJlZCI6dHJ1ZX1dfX0.AjQp3zI_rPRvxNwqPGVeY8hE7MeUAxqjqrTHXSHtN0Y"}
+                ]
+            }
+          },
+            "session_id": "sess-abc123",
+            "request_id": "req-def456"
+        }
+
+
+# {
+#  "exp": 0,
+#  "portcullis": {
+#    "tools":       ["fetch"],
+#    "services":    ["fetch"],
+#    "groups" :     ["developer"],
+#    "arg_restrictions": [
+#       { "type":"prefix", "key_path": "host", "data": "openpolicyAGENT.com", "required":true },
+#       { "type":"prefix", "key_path": "host", "data": "STYRA.com", "required":true }       
+#    ]
+#  }
+# }
+  - name: fetch - returns escalate because the token has expired
+    skip: false
+    description:  verifying case insensitivity
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"escalate"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {                
+            "action": {
+                "tool_name": "fetch",
+                "service" : "fetch"
+            },
+            "resource": {
+                "arguments": {
+                    "raw": "https://OPENpolicyAGENT.com",
+                    "scheme": "https",
+                    "host": "OpEnPoLiCyAgEnT.com",
+                    "port": "",
+                    "path": "",
+                    "query": ""
+                }
+            },
+            "principal": {
+                "user_id": "alice@example.com",
+                "email": "alice@example.com",
+                "display_name": "Alice Developer",
+                "groups": ["developer", "internal-api-users"],
+                "roles": ["api-consumer"],
+                "department": "engineering",
+                "auth_method": ["pwd", "mfa"],
+                "token_expiry": 1741651200,
+                "source_type": "oidc"
+            },
+            "context": {
+                "escalation_tokens": [
+                   {"raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjAsInBvcnRjdWxsaXMiOnsidG9vbHMiOlsiZmV0Y2giXSwic2VydmljZXMiOlsiZmV0Y2giXSwiZ3JvdXBzIjpbImRldmVsb3BlciJdLCJhcmdfcmVzdHJpY3Rpb25zIjpbeyJ0eXBlIjoicHJlZml4Iiwia2V5X3BhdGgiOiJob3N0IiwiZGF0YSI6Im9wZW5wb2xpY3lBR0VOVC5jb20iLCJyZXF1aXJlZCI6dHJ1ZX0seyJ0eXBlIjoicHJlZml4Iiwia2V5X3BhdGgiOiJob3N0IiwiZGF0YSI6IlNUWVJBLmNvbSIsInJlcXVpcmVkIjp0cnVlfV19fQ.4G5Y1Xy7N0pnj22WVQoEj-CS_sG2vCd1kY3RXS9tq8M"}
+                ]
+            }
+          },
+            "session_id": "sess-abc123",
+            "request_id": "req-def456"
+        }

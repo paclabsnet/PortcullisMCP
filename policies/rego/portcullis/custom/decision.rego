@@ -131,7 +131,8 @@ response_list contains
 
    action.service in ["portcullis-localfs"]
    action.tool_name in ["read_media_file"]
-   resource.arguments.path.filename.extension in [".gz"]
+   some extension in ["gz"]
+      endswith(resource.arguments.path.filename.extension, extension)
 
 }
 
@@ -356,6 +357,129 @@ response_list contains
    util.has_group_membership( principal.groups, [ "admin", "developer", "clerk" ])
 
 }
+
+
+#########################################################################
+#
+# Fetch
+#
+
+response_list contains 
+				{ "decision":"deny", 
+				  "reason":"denied - competitive website job listing", 
+				  "request_id": request_id} if {
+
+   action.service in ["fetch"]
+   action.tool_name in ["fetch"]
+   startswith(resource.arguments.host, "competitor.com")
+   startswith(resource.arguments.path, "/v1/jobs")
+
+}
+
+
+response_list contains 
+				{ "decision":"escalate", 
+				  "reason":"escalation required to visit competitor's product API", 
+				  "request_id": request_id} if {
+
+   action.service in ["fetch"]
+   action.tool_name in ["fetch"]
+   startswith(resource.arguments.host, "competitor.com")
+   startswith(resource.arguments.path, "/v1/products")
+
+   not escalate.escalation_grant_matches_group_service_tool_and_request_args(
+			escalation_grant_list,
+			["*"],
+			action.service,
+			action.tool_name,
+			resource.arguments)
+
+}
+
+
+
+response_list contains 
+				{ "decision":"allow", 
+				  "reason":"allowed to visit competitor's product page after escalation", 
+				  "request_id": request_id} if {
+
+   action.service in ["fetch"]
+   action.tool_name in ["fetch"]
+   startswith(resource.arguments.host, "competitor.com")
+   startswith(resource.arguments.path, "/v1/products")
+
+   escalate.escalation_grant_matches_group_service_tool_and_request_args(
+			escalation_grant_list,
+			["*"],
+			action.service,
+			action.tool_name,
+			resource.arguments)
+
+}
+
+
+
+
+response_list contains 
+				{ "decision":"escalate", 
+				  "reason":"escalation required to visit styra/open policy agent, for the purposes of testing", 
+				  "request_id": request_id} if {
+
+   action.service in ["fetch"]
+   action.tool_name in ["fetch"]
+   some x in ["styra.com", "openpolicyagent.com"]
+     startswith(lower(resource.arguments.host), x)
+
+   not escalate.escalation_grant_matches_group_service_tool_and_request_args(
+			escalation_grant_list,
+			["*"],
+			action.service,
+			action.tool_name,
+			resource.arguments)
+
+}
+
+
+
+response_list contains 
+				{ "decision":"allow", 
+				  "reason":"allowed to visit competitor's product page after escalation", 
+				  "request_id": request_id} if {
+
+   action.service in ["fetch"]
+   action.tool_name in ["fetch"]
+   some x in ["styra.com", "openpolicyagent.com"]
+     startswith(lower(resource.arguments.host), x)
+
+   escalate.escalation_grant_matches_group_service_tool_and_request_args(
+			escalation_grant_list,
+			["*"],
+			action.service,
+			action.tool_name,
+			resource.arguments)
+
+}
+
+
+
+
+response_list contains 
+				{ "decision":"allow", 
+				  "reason":"Allowed - in authorized group", 
+				  "request_id": request_id} if {
+
+   action.service in ["fetch"]
+   action.tool_name in ["fetch"]
+   util.has_group_membership( principal.groups, ["*"])
+
+}
+
+
+
+
+
+
+
 
 
 

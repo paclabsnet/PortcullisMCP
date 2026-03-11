@@ -1,0 +1,9 @@
+
+suite: verify the functionality of the tabular decision matrix
+description: we'll send a variety of inputs to simulate various requests from an AI agent wishing to use a MCP
+opa:
+  bundle-path: ../bundle.tar.gz 
+
+
+tests:
+
