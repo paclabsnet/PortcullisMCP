@@ -27,7 +27,7 @@ DONE 10. add the 'suffix' restriction to the ladder, and implement it
 
 DONE 11. write a test for the suffix restriction
 DONE 12. implement the custom rules for fetch, and verify them
-13. set up a pair of escalation rules for 'fetch' for the OpenPolicyAgent.org and styra.com websites.  For demonstration purposes
+DONE 13. set up a pair of escalation rules for 'fetch' for the OpenPolicyAgent.org and styra.com websites.  For demonstration purposes
 
 
 

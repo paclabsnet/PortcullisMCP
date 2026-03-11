@@ -88,7 +88,7 @@ response_list contains
 				  "reason":"Denied - MCP is not in scope", 
 				  "request_id": request_id} if {
 
-   not input.service in ["portcullis-localfs", "mock-enterprise-api"]
+   not input.service in ["portcullis-localfs", "mock-enterprise-api", "fetch"]
 
 }
 
@@ -478,6 +478,17 @@ response_list contains
 
 
 
+# non-business-hours request
+# response_list contains { "decision" : "deny", 
+#				"reason" : "no access during non-business hours: (Mon–Fri 08:00–18:00 UTC)", 
+#				"request_id" : request_id } if {
+#    now := time.now_ns()
+#    day  := time.weekday(now)   # 0=Sunday, 6=Saturday
+#    hour := time.clock(now)[0]
+#	day in [0,6]
+#    hour < 8
+#	hour > 18
+# }
 
 
 
