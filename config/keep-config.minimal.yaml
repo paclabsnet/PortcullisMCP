@@ -23,7 +23,7 @@ escalation:
   workflow:
     type: "noop"  # No escalation for local testing
 
-decision_log:
+decision_logs:
   enabled: true
   console: true  # Log to console for development
   buffer_size: 100

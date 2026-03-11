@@ -6,7 +6,7 @@ type Config struct {
 	PDP         PDPConfig                `yaml:"pdp"`
 	Backends    map[string]BackendConfig `yaml:"backends"`
 	Escalation  EscalationConfig         `yaml:"escalation"`
-	DecisionLog DecisionLogConfig        `yaml:"decision_log"`
+	DecisionLog DecisionLogConfig        `yaml:"decision_logs"`
 }
 
 type ListenConfig struct {
