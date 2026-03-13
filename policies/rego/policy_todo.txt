@@ -37,13 +37,14 @@ After all of these are done, we integrate
 
 1. make keep call out to the PDP for answers
 2. if the answer is deny, return that
-3. if the answer is escalate, indicate that you won't do the work, but it can be escalated
+3. if the answer is 'escalate', examine the response object.  if the response object includes escalation_scope, create a JWT from that scope and a URL that includes that JWT so the user can approve it
+3.1. but if the user doesn't belong to an approved group, they should get a different response
+3.2. claude also pointed out that perhaps group escalation shouldn't even be a thing? Suitable for demonstration but not for real-world implementations
 4. if the answer is allow, pass the request on to the actual MCP for processing
 5. get an escalate response properly set up
 6. create the appropriate approval token
 7. make sure this works in raygun tests
 8. add the token to the official list
 9. verify that the agent is able to access the MCP once the token is added
-
 
 - 
