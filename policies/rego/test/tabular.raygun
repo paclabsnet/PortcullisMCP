@@ -1120,3 +1120,53 @@ tests:
             "session_id": "sess-abc123",
             "request_id": "req-def456"
         }
+
+
+
+
+  - name: fetch - returns escalation_claims
+    skip: false
+    description:  validating a URL fetch request to a sketchy URL that requires escalation
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"data":"competitor.com"'
+      - substring: '"data":"/v1/products"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {                
+            "action": {
+                "tool_name": "fetch",
+                "service" : "fetch"
+            },
+            "resource": {
+                "arguments": {
+                    "raw": "https://competitor.com/v1/products",
+                    "scheme": "https",
+                    "host": "competitor.com",
+                    "port": "",
+                    "path": "/v1/products",
+                    "query": ""
+                }
+            },
+            "principal": {
+                "user_id": "alice@example.com",
+                "email": "alice@example.com",
+                "display_name": "Alice Developer",
+                "groups": ["developer", "internal-api-users"],
+                "roles": ["api-consumer"],
+                "department": "engineering",
+                "auth_method": ["pwd", "mfa"],
+                "token_expiry": 1741651200,
+                "source_type": "oidc"
+            },
+            "context": {
+                "escalation_tokens": [
+                    {"raw":"BAD_TOKEN"}                    
+                ]
+            }
+          },
+            "session_id": "sess-abc123",
+            "request_id": "req-def456"
+        }

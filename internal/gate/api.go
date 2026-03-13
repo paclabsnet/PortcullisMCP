@@ -30,7 +30,9 @@ func NewManagementServer(store *TokenStore, identity *IdentityCache, cfg MgmtAPI
 	mux := http.NewServeMux()
 
 	// UI — always served without auth so the browser can load it.
-	mux.HandleFunc("GET /", ms.handleUI)
+	// Use "GET /{$}" (Go 1.22+ exact-root match) to avoid conflicting
+	// with the method-agnostic "/tokens" and "/identity" registrations below.
+	mux.HandleFunc("GET /{$}", ms.handleUI)
 
 	// API — optionally protected by shared secret.
 	apiMux := http.NewServeMux()

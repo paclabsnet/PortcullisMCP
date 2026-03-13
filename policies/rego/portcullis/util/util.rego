@@ -9,7 +9,18 @@ import rego.v1
 
 
 
+arg_restriction_matched_list( arg_restriction_rule_array, request_args) := rule_element_matched_list if {
 
+   # because some of the matches can be an 'and' of multiple rules, we potentially get a mix of
+   # 
+   unflattened_rule_element_matched_list := [ rule_element_matched_list |
+                               some restriction in arg_restriction_rule_array
+                                  rule_element_matched_list := arg_restriction_matched_type_ladder( restriction, request_args)
+                           ]
+
+   rule_element_matched_list := array.flatten(unflattened_rule_element_matched_list)
+   
+}
 
 
 any_arg_restriction_rule_honored( arg_restriction_rule_array, request_args) := true if {
@@ -41,18 +52,19 @@ arg_restriction_honored( restriction, request_args) := true if {
 
   # if we get here, it means the element didn't exist, but it wasn't required, so we've honored this restriction 
 
-} else := arg_restriction_honored_existence_required( request_args,  restriction )
+} else := arg_restriction_honored_existence_required( restriction, request_args )
 
 
 #
 # most common case - the element is required, so first we verify that the element exists,
 # and if it does, we verify that the element matches the restriction
 #
-arg_restriction_honored_existence_required( request_args, restriction) := true if {
+arg_restriction_honored_existence_required( restriction, request_args) := true if {
 
 #  print("#DEBUG: arg_restriction_honored_existence_required: request_args: ", request_args, ", restriction: ", restriction)
 
-  arg_restriction_honored_type_ladder( request_args, restriction )
+  rule_element_matched_list := arg_restriction_matched_type_ladder( restriction, request_args )
+  count(rule_element_matched_list) > 0
 
 } else := false
 
@@ -64,67 +76,75 @@ arg_restriction_honored_existence_required( request_args, restriction) := true i
 # we can add as many different types as we want by creating this ladder
 # of fail-through checks
 #
-arg_restriction_honored_type_ladder( request_args, restriction ) := true if {
+arg_restriction_matched_type_ladder( restriction, request_args ) := rule_element_matched_list if {
 
-   print("#DEBUG: arg_restriction_honored_type_ladder: ", request_args, ", ", restriction)
+   print("#DEBUG: arg_restriction_matched_type_ladder: ", request_args, ", ", restriction)
 
    lower(restriction.type) == "and"
 
-   all_arg_restriction_rule_honored( restriction.list, request_args)
+   rule_element_matched_list := all_arg_restriction_rule_matched( restriction.list, request_args)
+
+   print("#DEBUG++: rule_element_matched_list: ", rule_element_matched_list)
 
 # prefix MUST be the next item on the ladder, or the all_arg_restriction function above won't work properly
-} else := arg_restriction_hored_type_ladder_dereference_element( request_args, restriction)
+} else := arg_restriction_matched_type_ladder_dereference_element( restriction, request_args)
 
 
 #
 # up until this point, we haven't been looking at the contents of the restriction, just
 # the type. now we have to get into the details
 #
-arg_restriction_hored_type_ladder_dereference_element( request_args, restriction ) := true if {
+arg_restriction_matched_type_ladder_dereference_element( restriction, request_args ) := rule_element_matched_list if {
 
   key_path_array := split(restriction.key_path, ".")
    
   element := traverse_json( request_args, key_path_array)
 
-  arg_restriction_honored_type_ladder_prefix(element, restriction)
+  rule_element_matched_list := arg_restriction_matched_type_ladder_prefix(restriction, element)
 
-} else := false
+} else := []
 
 
 #
 # does the first part of the element match the restriction prefix
 #
-arg_restriction_honored_type_ladder_prefix( element, restriction ) := true if {
+arg_restriction_matched_type_ladder_prefix( restriction, element ) := rule_element_matched_list if {
    
    lower(restriction.type) == "prefix"
    
    startswith(lower(element), lower(restriction.data))
 
-} else := arg_restriction_honored_type_ladder_suffix( element, restriction )
+   rule_element_matched_list := [ { "rule": restriction, "arg": element } ]
+
+} else := arg_restriction_matched_type_ladder_suffix( restriction, element )
 
 
 #
 # does the end of the element match the restriction suffix
 #
-arg_restriction_honored_type_ladder_suffix( element, restriction ) := true if {
+arg_restriction_matched_type_ladder_suffix( restriction, element ) := rule_element_matched_list if {
 
    lower(restriction.type) == "suffix"
    
    endswith(lower(element), lower(restriction.data))
 
-} else := arg_restriction_honored_type_ladder_whole( element, restriction )
+   rule_element_matched_list := [ { "rule": restriction, "arg": element } ]
+
+} else := arg_restriction_matched_type_ladder_whole( restriction, element )
 
 
 #
 # does the end of the element match the restriction suffix
 #
-arg_restriction_honored_type_ladder_whole( element, restriction ) := true if {
+arg_restriction_matched_type_ladder_whole( restriction, element ) := rule_element_matched_list if {
 
    lower(restriction.type) == "whole"
    
    lower(element) == lower(restriction.data)
 
-} else := false
+   rule_element_matched_list := [ { "rule": restriction, "arg": element } ]
+
+} else := []
 
 
 
@@ -141,24 +161,37 @@ arg_restriction_honored_type_ladder_whole( element, restriction ) := true if {
 # Note also that the AND is implicitly required.  what would be the point of an AND if
 # one of the restrictions were optional?
 #
-all_arg_restriction_rule_honored( arg_restriction_rule_array, request_args ) := true if {
+all_arg_restriction_rule_matched( arg_restriction_rule_array, request_args ) := rule_element_matched_list if {
 
 
 #   print("#DEBUG: all_arg - array: ", arg_restriction_rule_array, ", request: ", request_args)
 
-  every restriction in arg_restriction_rule_array {
+  #
+  # we have <N> arg restrictions to look at, and so we'll go through each of them to see if one
+  # of the arguments matches the arg restriction.     matched_arg_list always returns a single
+  # element when you get to the dereference step on the ladder, so we know the match is the
+  # first element.
+  #
+  # I know this is a little ugly, but I'm working with what I know
+  # 
+  rule_element_matched_list := [ rule_element_item | 
+                                 some restriction in arg_restriction_rule_array
+                                    child_rule_element_matched_list := arg_restriction_matched_type_ladder_dereference_element( restriction, request_args)
+                                    count(child_rule_element_matched_list) > 0
+                                    rule_element_item := child_rule_element_matched_list[0]
+                                    
+                      ]
 
-      arg_restriction_hored_type_ladder_dereference_element( request_args, restriction)
-#      key_path_array := split(restriction.key_path, ".")
-#         
-#      element := traverse_json( request_args, key_path_array)
-#
-#      print("#DEBUG++: element: ",element, ", restriction: ", restriction)
-#
-#      arg_restriction_honored_type_ladder_prefix( element, restriction)
-  }
+   count(rule_element_matched_list) == count(arg_restriction_rule_array)
 
-} else := false
+#   every restriction in arg_restriction_rule_array {
+#
+#       matched_arg_list := arg_restriction_matched_type_ladder_dereference_element( restriction, request_args)
+#       count(match_list) > 0
+#
+#   }
+
+} else := []
 
 
 

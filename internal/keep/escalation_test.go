@@ -1,0 +1,167 @@
+package keep
+
+import (
+	"testing"
+	"time"
+
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/paclabsnet/PortcullisMCP/internal/shared"
+)
+
+func TestNewEscalationSigner_NoKey(t *testing.T) {
+	signer, err := NewEscalationSigner(SigningConfig{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if signer != nil {
+		t.Error("expected nil signer when no key configured")
+	}
+}
+
+func TestNewEscalationSigner_WithKey(t *testing.T) {
+	signer, err := NewEscalationSigner(SigningConfig{Key: "secret-key", TTL: 3600})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if signer == nil {
+		t.Fatal("expected non-nil signer")
+	}
+}
+
+func TestEscalationSigner_Sign(t *testing.T) {
+	signer, _ := NewEscalationSigner(SigningConfig{Key: "test-signing-key", TTL: 3600})
+
+	req := shared.EnrichedMCPRequest{
+		ServerName: "github",
+		ToolName:   "create_issue",
+		UserIdentity: shared.UserIdentity{
+			UserID:      "user@example.com",
+			DisplayName: "Test User",
+		},
+		RequestID: "req-123",
+	}
+	scope := map[string]any{"resource": "repo:example"}
+
+	tokenStr, err := signer.Sign(req, "manager approval needed", scope)
+	if err != nil {
+		t.Fatalf("Sign returned error: %v", err)
+	}
+	if tokenStr == "" {
+		t.Fatal("expected non-empty token string")
+	}
+
+	// Parse and verify the signed token.
+	token, err := jwt.ParseWithClaims(tokenStr, &escalationRequestClaims{}, func(t *jwt.Token) (any, error) {
+		return []byte("test-signing-key"), nil
+	})
+	if err != nil {
+		t.Fatalf("failed to parse signed token: %v", err)
+	}
+
+	claims, ok := token.Claims.(*escalationRequestClaims)
+	if !ok || !token.Valid {
+		t.Fatal("expected valid token claims")
+	}
+	if claims.UserID != "user@example.com" {
+		t.Errorf("UserID = %q, want user@example.com", claims.UserID)
+	}
+	if claims.UserDisplayName != "Test User" {
+		t.Errorf("UserDisplayName = %q, want Test User", claims.UserDisplayName)
+	}
+	if claims.Server != "github" {
+		t.Errorf("Server = %q, want github", claims.Server)
+	}
+	if claims.Tool != "create_issue" {
+		t.Errorf("Tool = %q, want create_issue", claims.Tool)
+	}
+	if claims.Reason != "manager approval needed" {
+		t.Errorf("Reason = %q, want 'manager approval needed'", claims.Reason)
+	}
+	if claims.Issuer != "portcullis-keep" {
+		t.Errorf("Issuer = %q, want portcullis-keep", claims.Issuer)
+	}
+	if claims.ExpiresAt == nil || claims.ExpiresAt.Before(time.Now()) {
+		t.Error("expected future expiry in signed token")
+	}
+	if claims.EscalationScope["resource"] != "repo:example" {
+		t.Errorf("EscalationScope.resource = %v, want repo:example", claims.EscalationScope["resource"])
+	}
+}
+
+func TestEscalationSigner_Sign_DefaultTTL(t *testing.T) {
+	// TTL=0 should default to 1 hour.
+	signer, _ := NewEscalationSigner(SigningConfig{Key: "k", TTL: 0})
+	req := shared.EnrichedMCPRequest{
+		UserIdentity: shared.UserIdentity{UserID: "u@example.com"},
+		ServerName:   "s",
+		ToolName:     "t",
+	}
+
+	tokenStr, err := signer.Sign(req, "", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	token, err := jwt.ParseWithClaims(tokenStr, &escalationRequestClaims{}, func(t *jwt.Token) (any, error) {
+		return []byte("k"), nil
+	})
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+	claims := token.Claims.(*escalationRequestClaims)
+
+	expected := time.Now().Add(time.Hour)
+	diff := claims.ExpiresAt.Time.Sub(expected)
+	if diff < 0 {
+		diff = -diff
+	}
+	if diff > 5*time.Second {
+		t.Errorf("default TTL should be 1 hour; expiry differs from expected by %v", diff)
+	}
+}
+
+func TestEscalationSigner_Sign_CustomTTL(t *testing.T) {
+	signer, _ := NewEscalationSigner(SigningConfig{Key: "k", TTL: 7200}) // 2 hours
+	req := shared.EnrichedMCPRequest{
+		UserIdentity: shared.UserIdentity{UserID: "u@example.com"},
+		ServerName:   "s",
+		ToolName:     "t",
+	}
+
+	tokenStr, _ := signer.Sign(req, "", nil)
+	token, _ := jwt.ParseWithClaims(tokenStr, &escalationRequestClaims{}, func(t *jwt.Token) (any, error) {
+		return []byte("k"), nil
+	})
+	claims := token.Claims.(*escalationRequestClaims)
+
+	expected := time.Now().Add(2 * time.Hour)
+	diff := claims.ExpiresAt.Time.Sub(expected)
+	if diff < 0 {
+		diff = -diff
+	}
+	if diff > 5*time.Second {
+		t.Errorf("TTL=7200 should give 2 hour expiry; diff = %v", diff)
+	}
+}
+
+func TestEscalationSigner_Sign_NilSigner(t *testing.T) {
+	var s *EscalationSigner
+	_, err := s.Sign(shared.EnrichedMCPRequest{}, "", nil)
+	if err == nil {
+		t.Error("expected error from nil signer, got nil")
+	}
+}
+
+func TestEscalationSigner_Sign_NilScope(t *testing.T) {
+	// nil scope should produce a valid token with no scope field.
+	signer, _ := NewEscalationSigner(SigningConfig{Key: "k", TTL: 60})
+	req := shared.EnrichedMCPRequest{
+		UserIdentity: shared.UserIdentity{UserID: "u@example.com"},
+		ServerName:   "s",
+		ToolName:     "t",
+	}
+	_, err := signer.Sign(req, "reason", nil)
+	if err != nil {
+		t.Fatalf("Sign with nil scope returned error: %v", err)
+	}
+}

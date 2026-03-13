@@ -243,7 +243,7 @@ response_list contains { "decision" : "allow",
 						escalation_grant_list )
 
 				# the most exciting case!
-				print("#DEBUG: request meets the criteria of the escalation token")
+				# print("#DEBUG: request meets the criteria of the escalation token")
 
 
 			  }
@@ -251,12 +251,13 @@ response_list contains { "decision" : "allow",
 response_list contains {
 				"decision" : "escalate",
 			  	"reason" : "Request is not approved, but can be escalated",
+				"escalation_claims" : escalation_claims,
 			  	"request_id" : request_id } if {
 
 					not rules_section.escalate == null
 					escalate.request_matches_base_criteria( input.authorization_request, rules_section.escalate )
 					
-					print("#DEBUG: escalate scenario: we match the base case, do we match the escalation case?")
+					# print("#DEBUG: escalate scenario: we match the base case, do we match the escalation case?")
 
 					# why are we checking this? Because if the request does meet the escalation
 					# criteria, it's approved, and no longer needs to be escalated
@@ -265,6 +266,11 @@ response_list contains {
 							input.authorization_request, 
 							rules_section.escalate, 
 							escalation_grant_list )
+
+					escalation_claims := escalate.find_matching_escalation_criteria( 
+							input.authorization_request, 
+							rules_section.escalate, 
+							escalation_grant_list)
 				}
 
 

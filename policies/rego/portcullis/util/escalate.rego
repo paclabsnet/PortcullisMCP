@@ -118,8 +118,6 @@ request_matches_escalation_criteria( request, rules, escalation_grant_list) := t
 
    request_arguments := object.get(request, ["resource", "arguments"], [])
 
-   
-
    escalation_grant_matches_group_service_tool_and_request_args( 
             escalation_grant_list, 
             escalation_groups, 
@@ -128,6 +126,82 @@ request_matches_escalation_criteria( request, rules, escalation_grant_list) := t
             request_arguments )   
 
 } else := false
+
+
+
+#
+# we need to look at the request and compare the arguments in the request to the arg_restrictions in the escalate
+# rules to find the ones that match.
+#
+# for each one that matches (typically only one) we'll create a hybrid arg_restriction, which includes the
+# restriction type (suffix, prefix, etc) from the arg_restriction with the data from the argument itself 
+#
+# Example:  The AI wishes to write to /var/log/whatever.log, and the arg_restriction is for prefix "/var"
+#           we would create an escalation_claim for an arg_restriction: 
+#                   { "type":"prefix", 
+#                     "key_path":<from arg_restriction">
+#                     "data":"/var/log/whatever.log" 
+#                   }
+#
+#          this is the minimal grant required - it gives the AI exactly the specific access it seeks and
+#          nothing more broad
+#
+# @TODO: include advisory claims about group membership, but they won't be enforceable through the Guard
+# process, which will only allow the user to approve argument escalation approvals
+#
+#
+find_matching_escalation_criteria( request, rules, escalation_grant_list) := escalation_claim_list if {
+
+   # if there aren't any arg restrictions, we can't match them
+   "arg_restrictions" in object.keys(rules)
+   count(rules.arg_restrictions) > 0
+
+   request_arguments := object.get(request, ["resource", "arguments"], [])
+
+   escalation_claim_list := find_rule_arg_restrictions_matching_request_args(
+      rules.arg_restrictions,
+      request_arguments
+   )
+
+} else := []
+
+
+
+
+#
+#  This function is used in the scenario where we know we're in the escalation case (in other words
+#  the caller's request satisfies the requirements for the arg_restrictions associated with 
+#  escalation), and we need to create the escalation_claims that can be used to create a token
+#  that would allow the user to grant the AI the necessary escalated privilege
+#
+#  we iterate through the existing restrictions, and any that 'hit' are converted into 
+#  escalation_claim records. The assumption is that those escalation_claim records will
+#  be used by another system (for example: Portcullis-Guard) to create the escalation_token
+#  
+#
+find_rule_arg_restrictions_matching_request_args(
+    rule_arg_restrictions,
+    request_arguments) := escalation_claim_list if {
+   
+    rule_element_matched_list := util.arg_restriction_matched_list( rule_arg_restrictions, request_arguments)
+    
+    # count the matches
+    count(rule_element_matched_list) > 0
+
+    # each hybrid record includes the type and key_path from the rule, and the 
+    # data from the appropriate request_argument
+
+    escalation_claim_list := [ hybrid | 
+                                 some record in rule_element_matched_list
+                                    hybrid := { "type": record.rule.type, 
+                                                "key_path" : record.rule.key_path,
+                                                "data" :  record.arg }
+                             ]
+    
+    print("#DEBUG: find_rule_arg_restrictions_matching_request_args: ", escalation_claim_list)
+
+
+} else := [] 
 
 
 
@@ -159,12 +233,7 @@ escalation_grant_matches_group_service_tool_and_request_args(
 
      # @TODO: these two tests are probably redundant, TBD 
      service in escalation_grant.portcullis.services
-
-     print("#DEBUG++: service match: true")
-
      tool in escalation_grant.portcullis.tools
-
-     print("#DEBUG++: tool  match: true")
 
      print("#DEBUG++: arg restrictions: ", escalation_grant.portcullis.arg_restrictions," request_args: ", request_args)
      util.any_arg_restriction_rule_honored( escalation_grant.portcullis.arg_restrictions, request_args)	
