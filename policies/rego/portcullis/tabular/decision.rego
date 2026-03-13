@@ -251,7 +251,7 @@ response_list contains { "decision" : "allow",
 response_list contains {
 				"decision" : "escalate",
 			  	"reason" : "Request is not approved, but can be escalated",
-				"escalation_claims" : escalation_claims,
+				"escalation_scope" : escalation_scope,
 			  	"request_id" : request_id } if {
 
 					not rules_section.escalate == null
@@ -267,7 +267,7 @@ response_list contains {
 							rules_section.escalate, 
 							escalation_grant_list )
 
-					escalation_claims := escalate.find_matching_escalation_criteria( 
+					escalation_scope := escalate.find_matching_escalation_criteria( 
 							input.authorization_request, 
 							rules_section.escalate, 
 							escalation_grant_list)

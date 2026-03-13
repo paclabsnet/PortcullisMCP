@@ -1124,7 +1124,7 @@ tests:
 
 
 
-  - name: fetch - returns escalation_claims
+  - name: fetch - returns escalation_scope
     skip: false
     description:  validating a URL fetch request to a sketchy URL that requires escalation
     decision-path: /v1/data/portcullis/tabular/decision
