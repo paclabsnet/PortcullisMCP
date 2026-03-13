@@ -18,7 +18,7 @@ import (
 // MCPRouter defines the interface for routing MCP tool calls to backends.
 type MCPRouter interface {
 	CallTool(ctx context.Context, serverName, toolName string, args map[string]any) (*mcp.CallToolResult, error)
-	ListAllTools(ctx context.Context) ([]*mcp.Tool, error)
+	ListAllTools(ctx context.Context) ([]shared.AnnotatedTool, error)
 }
 
 // Server is the portcullis-keep HTTP server.
@@ -30,6 +30,7 @@ type Server struct {
 	pdp         PolicyDecisionPoint
 	router      MCPRouter
 	workflow    WorkflowHandler
+	signer      *EscalationSigner
 	decisionLog *DecisionLogger
 }
 
@@ -44,11 +45,17 @@ func NewServer(cfg Config) (*Server, error) {
 		return nil, fmt.Errorf("create workflow handler: %w", err)
 	}
 
+	signer, err := NewEscalationSigner(cfg.EscalationRequestSigning)
+	if err != nil {
+		return nil, fmt.Errorf("create escalation signer: %w", err)
+	}
+
 	return &Server{
 		cfg:         cfg,
 		pdp:         pdp,
 		router:      router,
 		workflow:    wf,
+		signer:      signer,
 		decisionLog: NewDecisionLogger(cfg.DecisionLog),
 	}, nil
 }
@@ -143,7 +150,17 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, pdpResp.Reason)
 
 	case "escalate":
-		wfRequestID, err := s.workflow.Submit(r.Context(), req, pdpResp.Reason)
+		escalationJWT := ""
+		if s.signer != nil {
+			jwtStr, err := s.signer.Sign(req, pdpResp.Reason, pdpResp.EscalationScope)
+			if err != nil {
+				slog.Error("escalation jwt sign failed", "error", err, "request_id", req.RequestID)
+				// Non-fatal: continue without JWT; some workflow handlers may still function.
+			} else {
+				escalationJWT = jwtStr
+			}
+		}
+		wfRef, err := s.workflow.Submit(r.Context(), req, escalationJWT)
 		if err != nil {
 			slog.Error("workflow submit failed", "error", err, "request_id", req.RequestID)
 			writeError(w, http.StatusInternalServerError, "escalation submission failed")
@@ -152,9 +169,9 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(w).Encode(map[string]string{
-			"status":              "escalation_pending",
-			"reason":              pdpResp.Reason,
-			"workflow_request_id": wfRequestID,
+			"status":             "escalation_pending",
+			"reason":             pdpResp.Reason,
+			"workflow_reference": wfRef,
 		})
 
 	default:

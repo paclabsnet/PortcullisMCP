@@ -27,21 +27,22 @@ func newWebhookHandler(cfg WebhookConfig) (*webhookHandler, error) {
 }
 
 // Submit POSTs the escalation payload to the configured webhook URL.
-// The approver is expected to send a signed JWT to the user out-of-band.
-func (h *webhookHandler) Submit(ctx context.Context, req shared.EnrichedMCPRequest, pdpReason string) (string, error) {
+// The escalationJWT is included so the webhook handler can build approval URLs
+// or forward the token to the user via the enterprise's own notification system.
+func (h *webhookHandler) Submit(ctx context.Context, req shared.EnrichedMCPRequest, escalationJWT string) (string, error) {
 	payload := map[string]any{
-		"request_id": req.RequestID,
-		"session_id": req.SessionID,
-		"server":     req.ServerName,
-		"tool":       req.ToolName,
-		"arguments":  req.Arguments,
+		"request_id":     req.RequestID,
+		"session_id":     req.SessionID,
+		"server":         req.ServerName,
+		"tool":           req.ToolName,
+		"arguments":      req.Arguments,
+		"escalation_jwt": escalationJWT,
 		"user": map[string]any{
 			"id":          req.UserIdentity.UserID,
 			"display":     req.UserIdentity.DisplayName,
 			"groups":      req.UserIdentity.Groups,
 			"source_type": req.UserIdentity.SourceType,
 		},
-		"pdp_reason": pdpReason,
 	}
 
 	data, err := json.Marshal(payload)

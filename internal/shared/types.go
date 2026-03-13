@@ -1,6 +1,17 @@
 package shared
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+// AnnotatedTool pairs an MCP tool schema with the backend server name it belongs to.
+// The server name is used by portcullis-gate to route tool calls to the correct backend.
+type AnnotatedTool struct {
+	ServerName string    `json:"server_name"`
+	Tool       *mcp.Tool `json:"tool"`
+}
 
 // UserIdentity carries the resolved identity of the local user.
 // SourceType indicates how the identity was obtained; "os" is provided for
@@ -40,10 +51,31 @@ type EnrichedMCPRequest struct {
 
 // PDPResponse is the decision returned by the Policy Decision Point.
 type PDPResponse struct {
-	Decision  string `json:"decision"`             // "allow" | "deny" | "escalate"
-	Reason    string `json:"reason"`
-	RequestID string `json:"request_id,omitempty"` // echoed from the input request, if the PDP chooses to include it
+	Decision        string         `json:"decision"`                   // "allow" | "deny" | "escalate"
+	Reason          string         `json:"reason"`
+	EscalationScope map[string]any `json:"escalation_scope,omitempty"` // claims required for escalation token
+	RequestID       string         `json:"request_id,omitempty"`       // echoed from the input request, if the PDP chooses to include it
 }
+
+// EscalationPendingError is returned when the PDP requires escalation approval.
+// Reference is a workflow-specific identifier — an approval URL, ticket ID, etc.
+type EscalationPendingError struct {
+	Reason    string
+	Reference string
+}
+
+func (e *EscalationPendingError) Error() string {
+	msg := "escalation required"
+	if e.Reason != "" {
+		msg += ": " + e.Reason
+	}
+	if e.Reference != "" {
+		msg += " — to approve, visit: " + e.Reference
+	}
+	return msg
+}
+
+func (e *EscalationPendingError) Unwrap() error { return ErrEscalationPending }
 
 // Sentinel errors for known failure modes.
 var (

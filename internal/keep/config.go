@@ -6,7 +6,14 @@ type Config struct {
 	PDP         PDPConfig                `yaml:"pdp"`
 	Backends    map[string]BackendConfig `yaml:"backends"`
 	Escalation  EscalationConfig         `yaml:"escalation"`
-	DecisionLog DecisionLogConfig        `yaml:"decision_logs"`
+	DecisionLog              DecisionLogConfig        `yaml:"decision_logs"`
+	EscalationRequestSigning SigningConfig             `yaml:"escalation_request_signing"`
+}
+
+// SigningConfig holds the HMAC key Keep uses to sign escalation request JWTs.
+type SigningConfig struct {
+	Key string `yaml:"key"` // HMAC secret; reference env var with ${VAR}
+	TTL int    `yaml:"ttl"` // JWT TTL in seconds (default: 3600)
 }
 
 type ListenConfig struct {
@@ -43,9 +50,16 @@ type EscalationConfig struct {
 }
 
 type WorkflowConfig struct {
-	Type       string           `yaml:"type"` // "servicenow" | "webhook"
-	ServiceNow ServiceNowConfig `yaml:"servicenow"`
-	Webhook    WebhookConfig    `yaml:"webhook"`
+	Type       string            `yaml:"type"` // "servicenow" | "webhook" | "url" | "noop"
+	ServiceNow ServiceNowConfig  `yaml:"servicenow"`
+	Webhook    WebhookConfig     `yaml:"webhook"`
+	URL        URLWorkflowConfig `yaml:"url"`
+}
+
+// URLWorkflowConfig is the demo workflow plugin that returns a Guard approval URL
+// through the MCP error channel so the user can approve directly.
+type URLWorkflowConfig struct {
+	GuardURL string `yaml:"guard_url"` // base URL of portcullis-guard, e.g. "https://guard.internal.example.com"
 }
 
 type ServiceNowConfig struct {

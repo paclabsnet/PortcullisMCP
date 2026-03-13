@@ -1,0 +1,14 @@
+listen:
+  address: "0.0.0.0:8444"
+
+keep:
+  escalation_request_signing_key: "${KEEP_SIGNING_KEY}"   # must match keep.signing.key
+
+escalation_token_signing:
+  key: "${GUARD_SIGNING_KEY}"          # PDP must be configured to trust tokens signed with this key
+  ttl: 86400                           # escalation token TTL in seconds (default: 86400 = 24h)
+
+templates:
+  dir: "/etc/portcullis/guard/templates"
+
+portcullis_gate_management_port: 7777   # gate management API port, shown in post-approval instructions

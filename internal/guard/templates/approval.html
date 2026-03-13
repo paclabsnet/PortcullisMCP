@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Portcullis &mdash; Escalation Approval</title>
+  <style>
+    body { font-family: sans-serif; max-width: 700px; margin: 40px auto; padding: 0 20px; color: #333; }
+    h1 { color: #c00; }
+    .card { border: 1px solid #ddd; border-radius: 6px; padding: 20px; margin: 20px 0; }
+    .warn { background: #fff8e1; border-color: #f9a825; }
+    .label { font-weight: bold; font-size: 0.8em; text-transform: uppercase; color: #666; margin-top: 12px; }
+    .value { margin: 4px 0 8px; }
+    pre { background: #f5f5f5; padding: 12px; border-radius: 4px; overflow-x: auto; white-space: pre-wrap; font-size: 0.9em; }
+    button { background: #c00; color: #fff; border: none; padding: 12px 28px; font-size: 16px; border-radius: 4px; cursor: pointer; margin-top: 8px; }
+    button:hover { background: #a00; }
+  </style>
+</head>
+<body>
+  <h1>Escalation Approval Required</h1>
+  <div class="card warn">
+    <p>Your AI agent attempted an operation that requires your explicit approval before it can proceed.</p>
+  </div>
+  <div class="card">
+    <div class="label">Requesting User</div>
+    <div class="value">{{if .UserDisplayName}}{{.UserDisplayName}} &mdash; {{end}}{{.UserID}}</div>
+    <div class="label">Service / Tool</div>
+    <div class="value">{{.Server}} / {{.Tool}}</div>
+    <div class="label">Reason</div>
+    <div class="value">{{.Reason}}</div>
+    <div class="label">Privileges Being Requested</div>
+    <pre>{{.ScopeJSON}}</pre>
+  </div>
+  <form method="POST" action="/approve">
+    <input type="hidden" name="token" value="{{.Token}}">
+    <button type="submit">Approve &mdash; Grant These Privileges</button>
+  </form>
+</body>
+</html>

@@ -33,7 +33,7 @@ func (m *mockPDP) Evaluate(ctx context.Context, req shared.EnrichedMCPRequest) (
 type mockRouter struct {
 	callToolResult  *mcp.CallToolResult
 	callToolError   error
-	listToolsResult []*mcp.Tool
+	listToolsResult []shared.AnnotatedTool
 	listToolsError  error
 }
 
@@ -44,7 +44,7 @@ func (m *mockRouter) CallTool(ctx context.Context, serverName, toolName string, 
 	return m.callToolResult, nil
 }
 
-func (m *mockRouter) ListAllTools(ctx context.Context) ([]*mcp.Tool, error) {
+func (m *mockRouter) ListAllTools(ctx context.Context) ([]shared.AnnotatedTool, error) {
 	if m.listToolsError != nil {
 		return nil, m.listToolsError
 	}
@@ -206,8 +206,8 @@ func TestServer_HandleCall_Escalate(t *testing.T) {
 		t.Errorf("status = %q, want %q", result["status"], "escalation_pending")
 	}
 
-	if result["workflow_request_id"] != "workflow-123" {
-		t.Errorf("workflow_request_id = %q, want %q", result["workflow_request_id"], "workflow-123")
+	if result["workflow_reference"] != "workflow-123" {
+		t.Errorf("workflow_reference = %q, want %q", result["workflow_reference"], "workflow-123")
 	}
 
 }
@@ -261,15 +261,9 @@ func TestServer_HandleCall_InvalidJSON(t *testing.T) {
 
 func TestServer_HandleListTools(t *testing.T) {
 	router := &mockRouter{
-		listToolsResult: []*mcp.Tool{
-			{
-				Name:        "read_file",
-				Description: "Read a file",
-			},
-			{
-				Name:        "write_file",
-				Description: "Write a file",
-			},
+		listToolsResult: []shared.AnnotatedTool{
+			{ServerName: "filesystem", Tool: &mcp.Tool{Name: "read_file", Description: "Read a file"}},
+			{ServerName: "github", Tool: &mcp.Tool{Name: "list_repos", Description: "List repos"}},
 		},
 	}
 
@@ -286,13 +280,20 @@ func TestServer_HandleListTools(t *testing.T) {
 		t.Errorf("status code = %d, want %d", w.Code, http.StatusOK)
 	}
 
-	var result []*mcp.Tool
+	var result []shared.AnnotatedTool
 	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
 	if len(result) != 2 {
 		t.Errorf("got %d tools, want 2", len(result))
+	}
+
+	if result[0].ServerName != "filesystem" {
+		t.Errorf("tool[0].ServerName = %q, want %q", result[0].ServerName, "filesystem")
+	}
+	if result[1].ServerName != "github" {
+		t.Errorf("tool[1].ServerName = %q, want %q", result[1].ServerName, "github")
 	}
 }
 

@@ -152,9 +152,10 @@ type opaContext struct {
 // opaResponse is the envelope OPA returns: {"result": <decision>}.
 type opaResponse struct {
 	Result struct {
-		Decision  string `json:"decision"`
-		Reason    string `json:"reason"`
-		RequestID string `json:"request_id"` // optionally echoed by the PDP
+		Decision        string         `json:"decision"`
+		Reason          string         `json:"reason"`
+		RequestID       string         `json:"request_id"`       // optionally echoed by the PDP
+		EscalationScope map[string]any `json:"escalation_scope"` // claims required for escalation token
 	} `json:"result"`
 }
 
@@ -222,8 +223,9 @@ func (c *opaClient) Evaluate(ctx context.Context, req shared.EnrichedMCPRequest)
 	}
 
 	return shared.PDPResponse{
-		Decision:  decision,
-		Reason:    opaResp.Result.Reason,
-		RequestID: opaResp.Result.RequestID,
+		Decision:        decision,
+		Reason:          opaResp.Result.Reason,
+		RequestID:       opaResp.Result.RequestID,
+		EscalationScope: opaResp.Result.EscalationScope,
 	}, nil
 }

@@ -21,7 +21,7 @@ backends:
     args: ["-y", "@modelcontextprotocol/server-github"]
     env:
       GITHUB_TOKEN: "${GITHUB_TOKEN}"
-  
+
   # Streamable HTTP backends (current MCP standard, preferred for new deployments)
   fetch:
     type: "http"
@@ -36,13 +36,19 @@ backends:
     type: "sse"
     url: "https://mcp-legacy.internal.example.com/sse"
 
+escalation_request_signing:
+  key: "${KEEP_SIGNING_KEY}"   # must match guard's keep.escalation_request_signing_key; use ${ENV_VAR} in production
+  ttl: 3600                    # escalation request JWT TTL in seconds (default: 3600)
+
 escalation:
   workflow:
-    type: "servicenow"    # or "webhook"
-    servicenow:
-      instance: "example.service-now.com"
-      credential_env: "${SNOW_CREDENTIALS}"
-    # webhook:
+    type: "url"         # "url" sends approval link through MCP channel to the user via portcullis-guard
+    url:
+      guard_url: "https://portcullis-guard.internal.example.com"
+    # servicenow:       # uncomment to use ServiceNow workflow instead
+    #   instance: "example.service-now.com"
+    #   credential_env: "${SNOW_CREDENTIALS}"
+    # webhook:          # uncomment to use a generic webhook instead
     #   url: "https://hooks.internal.example.com/portcullis"
     #   headers:
     #     Authorization: "Bearer ${WEBHOOK_TOKEN}"
@@ -51,7 +57,7 @@ decision_logs:
   enabled: true
   buffer_size: 10000           # channel buffer size (default: 10000)
   flush_interval: 5            # seconds between flushes (default: 5)
-  max_batch_size: 1000         # max entries per batch (default: 1000) 
+  max_batch_size: 1000         # max entries per batch (default: 1000)
   console: false               # also log to console (default: false)
   url: "https://siem.internal.example.com/api/v1/logs"
   headers:

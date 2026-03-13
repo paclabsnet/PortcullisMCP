@@ -41,8 +41,10 @@ func (f *Forwarder) CallTool(ctx context.Context, req shared.EnrichedMCPRequest)
 	return &result, nil
 }
 
-// ListTools fetches the aggregated tool list from Keep.
-func (f *Forwarder) ListTools(ctx context.Context, identity shared.UserIdentity, escalationTokens []shared.EscalationToken) ([]*mcp.Tool, error) {
+// ListTools fetches the annotated tool list from Keep.
+// Each entry carries the backend server name alongside the tool schema,
+// so the caller can build a routing map without guessing.
+func (f *Forwarder) ListTools(ctx context.Context, identity shared.UserIdentity, escalationTokens []shared.EscalationToken) ([]shared.AnnotatedTool, error) {
 	reqBody := struct {
 		UserIdentity     shared.UserIdentity      `json:"user_identity"`
 		EscalationTokens []shared.EscalationToken `json:"escalation_tokens"`
@@ -50,7 +52,7 @@ func (f *Forwarder) ListTools(ctx context.Context, identity shared.UserIdentity,
 		UserIdentity:     identity,
 		EscalationTokens: escalationTokens,
 	}
-	var tools []*mcp.Tool
+	var tools []shared.AnnotatedTool
 	if err := f.post(ctx, "/tools", reqBody, &tools); err != nil {
 		return nil, err
 	}
@@ -93,7 +95,12 @@ func (f *Forwarder) post(ctx context.Context, path string, body, out any) error 
 	case http.StatusForbidden:
 		return shared.ErrDenied
 	case http.StatusAccepted:
-		return shared.ErrEscalationPending
+		var body struct {
+			Reason    string `json:"reason"`
+			Reference string `json:"workflow_reference"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&body)
+		return &shared.EscalationPendingError{Reason: body.Reason, Reference: body.Reference}
 	case http.StatusServiceUnavailable:
 		return shared.ErrPDPUnavailable
 	default:

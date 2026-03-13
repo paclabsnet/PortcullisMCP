@@ -34,19 +34,19 @@ func newServiceNowHandler(cfg ServiceNowConfig) (*serviceNowHandler, error) {
 }
 
 // Submit opens a ServiceNow change request for the escalation.
-// The change request description includes the tool call details and the PDP
-// reason. The approver is expected to send a signed JWT to the user out-of-band.
-func (h *serviceNowHandler) Submit(ctx context.Context, req shared.EnrichedMCPRequest, pdpReason string) (string, error) {
+// The escalationJWT is included in the description so the approver can embed
+// it in a Guard approval URL or send it directly to the requesting user.
+func (h *serviceNowHandler) Submit(ctx context.Context, req shared.EnrichedMCPRequest, escalationJWT string) (string, error) {
 	body := map[string]any{
 		"short_description": fmt.Sprintf(
 			"Portcullis escalation: %s/%s requested by %s",
 			req.ServerName, req.ToolName, req.UserIdentity.UserID,
 		),
 		"description": fmt.Sprintf(
-			"Tool: %s\nServer: %s\nUser: %s (%s)\nReason: %s\nRequest ID: %s\nSession ID: %s",
+			"Tool: %s\nServer: %s\nUser: %s (%s)\nRequest ID: %s\nSession ID: %s\nEscalation JWT: %s",
 			req.ToolName, req.ServerName,
 			req.UserIdentity.DisplayName, req.UserIdentity.UserID,
-			pdpReason, req.RequestID, req.SessionID,
+			req.RequestID, req.SessionID, escalationJWT,
 		),
 		"caller_id":  req.UserIdentity.UserID,
 		"category":   "AI Agent Access Request",

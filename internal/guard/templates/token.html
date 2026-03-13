@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Portcullis &mdash; Escalation Token</title>
+  <style>
+    body { font-family: sans-serif; max-width: 700px; margin: 40px auto; padding: 0 20px; color: #333; }
+    h1 { color: #090; }
+    .card { border: 1px solid #ddd; border-radius: 6px; padding: 20px; margin: 20px 0; }
+    .success { background: #e8f5e9; border-color: #43a047; }
+    textarea { width: 100%; height: 90px; font-family: monospace; font-size: 12px; resize: vertical; }
+    .btn { background: #555; color: #fff; border: none; padding: 8px 18px; border-radius: 4px; cursor: pointer; font-size: 14px; margin-top: 6px; }
+    .btn:hover { background: #333; }
+    ol li { margin: 8px 0; }
+  </style>
+</head>
+<body>
+  <h1>Escalation Approved</h1>
+  <div class="card success">
+    <p>You have approved elevated access for <strong>{{.Server}} / {{.Tool}}</strong>.</p>
+  </div>
+  <div class="card">
+    <p><strong>Your escalation token:</strong></p>
+    <textarea id="tok" readonly>{{.EscalationToken}}</textarea><br>
+    <button class="btn" onclick="navigator.clipboard.writeText(document.getElementById('tok').value)">Copy to Clipboard</button>
+  </div>
+  <div class="card">
+    <p><strong>Next steps:</strong></p>
+    <ol>
+      <li>Copy the escalation token above.</li>
+      <li>Open the Portcullis Gate management page at <a href="{{.GateURL}}">{{.GateURL}}</a>.</li>
+      <li>Paste the token into the escalation token store.</li>
+      <li>Return to your AI agent and ask it to retry the operation.</li>
+    </ol>
+  </div>
+</body>
+</html>

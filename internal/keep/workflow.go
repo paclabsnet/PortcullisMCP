@@ -7,10 +7,11 @@ import (
 )
 
 // WorkflowHandler submits an escalation request to an enterprise workflow system.
-// The call returns a workflow-specific request ID that can be used for tracking.
-// Escalation is async: portcullis-keep does not wait for approval.
+// escalationJWT is a Keep-signed JWT encoding the full escalation context; plugins
+// may embed it in approval URLs, ticket descriptions, or webhook payloads.
+// The returned reference is workflow-specific: an approval URL, ticket ID, etc.
 type WorkflowHandler interface {
-	Submit(ctx context.Context, req shared.EnrichedMCPRequest, pdpReason string) (requestID string, err error)
+	Submit(ctx context.Context, req shared.EnrichedMCPRequest, escalationJWT string) (reference string, err error)
 }
 
 // NewWorkflowHandler creates the appropriate WorkflowHandler from config.
@@ -20,6 +21,8 @@ func NewWorkflowHandler(cfg WorkflowConfig) (WorkflowHandler, error) {
 		return newServiceNowHandler(cfg.ServiceNow)
 	case "webhook":
 		return newWebhookHandler(cfg.Webhook)
+	case "url":
+		return newURLWorkflowHandler(cfg.URL)
 	default:
 		return &noopWorkflow{}, nil
 	}

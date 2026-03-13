@@ -30,16 +30,17 @@ type DecisionLogEntry struct {
 // It presents itself to the agent as an MCP server, applies the local
 // fast-path for filesystem operations, and forwards everything else to Keep.
 type Gate struct {
-	cfg      Config
-	identity *IdentityCache
-	store    *TokenStore
-	forwarder *Forwarder
-	server    *mcp.Server
-	localFS   *mcp.ClientSession // in-process filesystem backend
-	sessionID string
-	logChan   chan DecisionLogEntry
-	logDone   chan struct{}
-	logWg     sync.WaitGroup
+	cfg           Config
+	identity      *IdentityCache
+	store         *TokenStore
+	forwarder     *Forwarder
+	server        *mcp.Server
+	localFS       *mcp.ClientSession // in-process filesystem backend
+	sessionID     string
+	toolServerMap map[string]string // tool name → backend server name, populated at startup
+	logChan       chan DecisionLogEntry
+	logDone       chan struct{}
+	logWg         sync.WaitGroup
 }
 
 // New creates a Gate from the given config. Call Run to start serving.
@@ -77,14 +78,15 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 	}
 
 	g := &Gate{
-		cfg:       cfg,
-		identity:  identity,
-		store:     store,
-		forwarder: fwd,
-		localFS:   localFSSession,
-		sessionID: uuid.New().String(),
-		logChan:   make(chan DecisionLogEntry, 1000),
-		logDone:   make(chan struct{}),
+		cfg:           cfg,
+		identity:      identity,
+		store:         store,
+		forwarder:     fwd,
+		localFS:       localFSSession,
+		sessionID:     uuid.New().String(),
+		toolServerMap: make(map[string]string),
+		logChan:       make(chan DecisionLogEntry, 1000),
+		logDone:       make(chan struct{}),
 	}
 
 	// Start decision log worker
@@ -114,8 +116,9 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 		// temporarily unavailable at startup.
 		slog.Warn("fetch tool list from keep failed", "error", err)
 	}
-	for _, tool := range keepTools {
-		g.registerTool(tool)
+	for _, at := range keepTools {
+		g.toolServerMap[at.Tool.Name] = at.ServerName
+		g.registerTool(at.Tool)
 	}
 
 	return g, nil
@@ -216,9 +219,14 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 	}
 
 	// Forward to Keep.
+	serverName, ok := g.toolServerMap[toolName]
+	if !ok {
+		slog.Warn("no server mapping for tool, routing may fail", "tool", toolName)
+		serverName = "unknown"
+	}
 	currentIdentity := g.identity.Get(ctx)
 	enriched := shared.EnrichedMCPRequest{
-		ServerName:       inferServerName(toolName),
+		ServerName:       serverName,
 		ToolName:         toolName,
 		Arguments:        args,
 		UserIdentity:     currentIdentity,
@@ -227,15 +235,6 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 		RequestID:        requestID,
 	}
 	return g.forwarder.CallTool(ctx, enriched)
-}
-
-// inferServerName maps a tool name to a backend server name.
-// A more robust approach would annotate each tool schema with its origin server.
-func inferServerName(toolName string) string {
-	if isFastPathTool(toolName) {
-		return "filesystem"
-	}
-	return "unknown"
 }
 
 // logWorker batches decision log entries and sends them to Keep periodically.

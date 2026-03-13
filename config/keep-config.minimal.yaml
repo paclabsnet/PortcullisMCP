@@ -21,7 +21,13 @@ backends:
 
 escalation:
   workflow:
-    type: "noop"  # No escalation for local testing
+    type: "url"
+    url:
+      guard_url: "http://localhost:8444"
+
+escalation_request_signing:
+  key: "dev-keep-signing-secret"   # must match guard's keep.escalation_request_signing_key; use ${ENV_VAR} in production
+  ttl: 3600
 
 decision_logs:
   enabled: true

@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 )
 
 // MCPBackend routes tool calls to a registered MCP backend server.
@@ -66,10 +67,11 @@ func (r *Router) ListTools(ctx context.Context, serverName string) ([]*mcp.Tool,
 }
 
 // ListAllTools returns the aggregated tool list from all registered backends.
-// Each returned tool is annotated with its server name via a naming convention
-// (serverName + "." + toolName) so that gate can infer routing on CallTool.
-// Tools that fail to list are skipped with a warning.
-func (r *Router) ListAllTools(ctx context.Context) ([]*mcp.Tool, error) {
+// Each tool is annotated with its backend server name so that portcullis-gate
+// can route tool calls without guessing.
+// Tools from backends that fail to list are skipped so one broken backend
+// does not prevent the gate from starting.
+func (r *Router) ListAllTools(ctx context.Context) ([]shared.AnnotatedTool, error) {
 	r.mu.Lock()
 	names := make([]string, 0, len(r.backends))
 	for name := range r.backends {
@@ -77,7 +79,7 @@ func (r *Router) ListAllTools(ctx context.Context) ([]*mcp.Tool, error) {
 	}
 	r.mu.Unlock()
 
-	var all []*mcp.Tool
+	var all []shared.AnnotatedTool
 	for _, name := range names {
 		tools, err := r.ListTools(ctx, name)
 		if err != nil {
@@ -85,7 +87,9 @@ func (r *Router) ListAllTools(ctx context.Context) ([]*mcp.Tool, error) {
 			// prevent the gate from starting.
 			continue
 		}
-		all = append(all, tools...)
+		for _, t := range tools {
+			all = append(all, shared.AnnotatedTool{ServerName: name, Tool: t})
+		}
 	}
 	return all, nil
 }
