@@ -3,6 +3,7 @@ package keep
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"sync"
@@ -19,8 +20,10 @@ type MCPBackend interface {
 
 // Router maintains MCP client sessions to all registered backend servers.
 type Router struct {
-	mu       sync.Mutex
-	backends map[string]*backendConn
+	mu         sync.Mutex
+	backends   map[string]*backendConn
+	cacheMu    sync.RWMutex
+	toolCache  []shared.AnnotatedTool
 }
 
 type backendConn struct {
@@ -66,32 +69,61 @@ func (r *Router) ListTools(ctx context.Context, serverName string) ([]*mcp.Tool,
 	return resp.Tools, nil
 }
 
-// ListAllTools returns the aggregated tool list from all registered backends.
-// Each tool is annotated with its backend server name so that portcullis-gate
-// can route tool calls without guessing.
-// Tools from backends that fail to list are skipped so one broken backend
-// does not prevent the gate from starting.
+// ListAllTools returns the cached aggregated tool list from all registered backends.
+// The cache is populated at startup and refreshed via Reload.
 func (r *Router) ListAllTools(ctx context.Context) ([]shared.AnnotatedTool, error) {
+	r.cacheMu.RLock()
+	defer r.cacheMu.RUnlock()
+	return r.toolCache, nil
+}
+
+// Reload reconciles the backend map against the new config, re-surveys all
+// backends via MCP ListTools, and updates the tool cache. Backends removed from
+// config have their sessions closed. New backends are registered. Existing
+// sessions are reused. A backend that fails to list tools is logged and skipped
+// so one broken backend does not prevent the rest from being served.
+func (r *Router) Reload(ctx context.Context, backends map[string]BackendConfig) error {
 	r.mu.Lock()
+	// Close and remove backends no longer in config.
+	for name, conn := range r.backends {
+		if _, exists := backends[name]; !exists {
+			if conn.session != nil {
+				conn.session.Close()
+			}
+			delete(r.backends, name)
+		}
+	}
+	// Register new backends (leave existing sessions intact).
+	for name, cfg := range backends {
+		if _, exists := r.backends[name]; !exists {
+			r.backends[name] = &backendConn{cfg: cfg}
+		}
+	}
 	names := make([]string, 0, len(r.backends))
 	for name := range r.backends {
 		names = append(names, name)
 	}
 	r.mu.Unlock()
 
+	// Survey all backends (without holding mu to avoid deadlock with sessionFor).
 	var all []shared.AnnotatedTool
 	for _, name := range names {
 		tools, err := r.ListTools(ctx, name)
 		if err != nil {
-			// Non-fatal: log and continue so one broken backend doesn't
-			// prevent the gate from starting.
+			slog.Warn("reload: list tools failed for backend", "backend", name, "error", err)
 			continue
 		}
 		for _, t := range tools {
 			all = append(all, shared.AnnotatedTool{ServerName: name, Tool: t})
 		}
 	}
-	return all, nil
+
+	r.cacheMu.Lock()
+	r.toolCache = all
+	r.cacheMu.Unlock()
+
+	slog.Info("tool cache refreshed", "tool_count", len(all), "backend_count", len(names))
+	return nil
 }
 
 // sessionFor returns an active MCP client session for the named backend,

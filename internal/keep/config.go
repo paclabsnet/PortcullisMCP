@@ -1,13 +1,27 @@
 package keep
 
+import (
+	"os"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/paclabsnet/PortcullisMCP/internal/shared"
+)
+
 // Config holds the full portcullis-keep configuration loaded from keep.yaml.
 type Config struct {
-	Listen      ListenConfig             `yaml:"listen"`
-	PDP         PDPConfig                `yaml:"pdp"`
-	Backends    map[string]BackendConfig `yaml:"backends"`
-	Escalation  EscalationConfig         `yaml:"escalation"`
+	Listen                   ListenConfig             `yaml:"listen"`
+	PDP                      PDPConfig                `yaml:"pdp"`
+	Backends                 map[string]BackendConfig `yaml:"backends"`
+	Escalation               EscalationConfig         `yaml:"escalation"`
 	DecisionLog              DecisionLogConfig        `yaml:"decision_logs"`
 	EscalationRequestSigning SigningConfig             `yaml:"escalation_request_signing"`
+	Admin                    AdminConfig              `yaml:"admin"`
+}
+
+// AdminConfig holds credentials for the Keep admin API.
+type AdminConfig struct {
+	Token string `yaml:"token"` // required to call /admin/* endpoints; reference env var with ${VAR}
 }
 
 // SigningConfig holds the HMAC key Keep uses to sign escalation request JWTs.
@@ -80,4 +94,15 @@ type DecisionLogConfig struct {
 	URL           string            `yaml:"url"`            // remote endpoint URL
 	Headers       map[string]string `yaml:"headers"`        // HTTP headers for remote endpoint
 	Console       bool              `yaml:"console"`        // also log to console
+}
+
+// LoadConfig reads and parses a keep config file, expanding environment variables.
+func LoadConfig(path string) (Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return Config{}, err
+	}
+	data = shared.ExpandEnvVarsInYAML(data)
+	var cfg Config
+	return cfg, yaml.Unmarshal(data, &cfg)
 }

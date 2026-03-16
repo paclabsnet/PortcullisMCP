@@ -8,17 +8,14 @@ import (
 	"os/signal"
 	"syscall"
 
-	"gopkg.in/yaml.v3"
-
 	"github.com/paclabsnet/PortcullisMCP/internal/keep"
-	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 )
 
 func main() {
 	cfgPath := flag.String("config", "/etc/portcullis/keep.yaml", "path to keep config file")
 	flag.Parse()
 
-	cfg, err := loadConfig(*cfgPath)
+	cfg, err := keep.LoadConfig(*cfgPath)
 	if err != nil {
 		slog.Error("load config", "error", err)
 		os.Exit(1)
@@ -27,7 +24,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	srv, err := keep.NewServer(cfg)
+	srv, err := keep.NewServer(cfg, *cfgPath)
 	if err != nil {
 		slog.Error("init keep", "error", err)
 		os.Exit(1)
@@ -39,13 +36,3 @@ func main() {
 	}
 }
 
-func loadConfig(path string) (keep.Config, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return keep.Config{}, err
-	}
-	// Expand environment variables in the YAML
-	data = shared.ExpandEnvVarsInYAML(data)
-	var cfg keep.Config
-	return cfg, yaml.Unmarshal(data, &cfg)
-}

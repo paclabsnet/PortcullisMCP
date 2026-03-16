@@ -51,6 +51,10 @@ func (m *mockRouter) ListAllTools(ctx context.Context) ([]shared.AnnotatedTool, 
 	return m.listToolsResult, nil
 }
 
+func (m *mockRouter) Reload(ctx context.Context, backends map[string]BackendConfig) error {
+	return nil
+}
+
 // mockWorkflow is a test implementation of WorkflowHandler
 type mockWorkflow struct {
 	requestID string

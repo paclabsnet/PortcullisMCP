@@ -19,6 +19,7 @@ import (
 type MCPRouter interface {
 	CallTool(ctx context.Context, serverName, toolName string, args map[string]any) (*mcp.CallToolResult, error)
 	ListAllTools(ctx context.Context) ([]shared.AnnotatedTool, error)
+	Reload(ctx context.Context, backends map[string]BackendConfig) error
 }
 
 // Server is the portcullis-keep HTTP server.
@@ -27,6 +28,7 @@ type MCPRouter interface {
 // submits an escalation to the enterprise workflow system.
 type Server struct {
 	cfg         Config
+	configPath  string
 	pdp         PolicyDecisionPoint
 	router      MCPRouter
 	workflow    WorkflowHandler
@@ -34,8 +36,9 @@ type Server struct {
 	decisionLog *DecisionLogger
 }
 
-// NewServer creates a Keep server. All dependencies are injected.
-func NewServer(cfg Config) (*Server, error) {
+// NewServer creates a Keep server. configPath is retained so the admin reload
+// handler can re-read the file on demand.
+func NewServer(cfg Config, configPath string) (*Server, error) {
 	pdp := NewOPAClient(cfg.PDP.Endpoint)
 
 	router := NewRouter(cfg.Backends)
@@ -52,6 +55,7 @@ func NewServer(cfg Config) (*Server, error) {
 
 	return &Server{
 		cfg:         cfg,
+		configPath:  configPath,
 		pdp:         pdp,
 		router:      router,
 		workflow:    wf,
@@ -62,10 +66,16 @@ func NewServer(cfg Config) (*Server, error) {
 
 // Run starts the HTTPS server and blocks until ctx is cancelled.
 func (s *Server) Run(ctx context.Context) error {
+	// Populate the tool cache before accepting requests.
+	if err := s.router.Reload(ctx, s.cfg.Backends); err != nil {
+		slog.Warn("initial tool cache population failed", "error", err)
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /call", s.handleCall)
 	mux.HandleFunc("POST /tools", s.handleListTools)
 	mux.HandleFunc("POST /log", s.handleLog)
+	mux.HandleFunc("POST /admin/reload", s.adminAuthMiddleware(s.handleReload))
 
 	// Wrap with authentication middleware if bearer token is configured
 	var handler http.Handler = mux
@@ -208,6 +218,42 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
 		"status": "accepted",
 		"count":  len(entries),
 	})
+}
+
+// adminAuthMiddleware guards admin endpoints with the X-Api-Key header.
+func (s *Server) adminAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.cfg.Admin.Token == "" {
+			writeError(w, http.StatusForbidden, "admin API not configured")
+			return
+		}
+		token := r.Header.Get("X-Api-Key")
+		if subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.Admin.Token)) != 1 {
+			slog.Warn("unauthorized admin request", "remote_addr", r.RemoteAddr, "path", r.URL.Path)
+			writeError(w, http.StatusUnauthorized, "invalid or missing X-Api-Key")
+			return
+		}
+		next(w, r)
+	}
+}
+
+// handleReload re-reads keep.yaml from disk and refreshes the backend
+// connections and tool cache. Only the backends section is reloaded; all other
+// config (TLS, PDP, etc.) requires a full restart.
+func (s *Server) handleReload(w http.ResponseWriter, r *http.Request) {
+	cfg, err := LoadConfig(s.configPath)
+	if err != nil {
+		slog.Error("admin reload: read config failed", "error", err)
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("read config: %s", err))
+		return
+	}
+	if err := s.router.Reload(r.Context(), cfg.Backends); err != nil {
+		slog.Error("admin reload: backend reload failed", "error", err)
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("reload backends: %s", err))
+		return
+	}
+	s.cfg.Backends = cfg.Backends
+	writeJSON(w, http.StatusOK, map[string]string{"status": "reloaded"})
 }
 
 // buildServerTLS creates a tls.Config for the Keep server.
