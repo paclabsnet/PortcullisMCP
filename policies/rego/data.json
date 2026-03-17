@@ -41,6 +41,7 @@
                                 "escalate" : {
                                         "arg_restrictions" :[
                                                 { "type":"prefix", "key_path": "path", "data": "C:\\Program Files" },
+                                                { "type":"prefix", "key_path": "path", "data": "C:\\Users\\Public" },
                                                 { "type":"prefix", "key_path": "path", "data": "C:\\Program Files (x86)" },
                                                 { "type":"prefix", "key_path": "path", "data": "/var" }
                                         ]

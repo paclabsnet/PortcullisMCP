@@ -73,6 +73,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /call", s.handleCall)
+	mux.HandleFunc("POST /authorize", s.handleAuthorize)
 	mux.HandleFunc("POST /tools", s.handleListTools)
 	mux.HandleFunc("POST /log", s.handleLog)
 	mux.HandleFunc("POST /admin/reload", s.adminAuthMiddleware(s.handleReload))
@@ -167,6 +168,80 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				slog.Error("escalation jwt sign failed", "error", err, "request_id", req.RequestID)
 				// Non-fatal: continue without JWT; some workflow handlers may still function.
+			} else {
+				escalationJWT = jwtStr
+			}
+		}
+		wfRef, err := s.workflow.Submit(r.Context(), req, escalationJWT)
+		if err != nil {
+			slog.Error("workflow submit failed", "error", err, "request_id", req.RequestID)
+			writeError(w, http.StatusInternalServerError, "escalation submission failed")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"status":             "escalation_pending",
+			"reason":             pdpResp.Reason,
+			"workflow_reference": wfRef,
+		})
+
+	default:
+		slog.Error("unknown pdp decision", "decision", pdpResp.Decision, "request_id", req.RequestID)
+		writeError(w, http.StatusForbidden, "unknown pdp decision — denied by default")
+	}
+}
+
+// handleAuthorize evaluates the PDP for a gate-local tool call and returns the
+// decision without executing the tool. Gate uses this for local filesystem ops:
+// it asks Keep "is this allowed?" and, if so, executes the tool locally itself.
+func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
+	var req shared.EnrichedMCPRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	pdpResp, err := s.pdp.Evaluate(r.Context(), req)
+	if err != nil {
+		slog.Error("pdp evaluate failed", "error", err, "request_id", req.RequestID)
+		writeError(w, http.StatusServiceUnavailable, shared.ErrPDPUnavailable.Error())
+		return
+	}
+
+	slog.Info("pdp decision (authorize)",
+		"decision", pdpResp.Decision,
+		"tool", req.ToolName,
+		"user", req.UserIdentity.UserID,
+		"request_id", req.RequestID,
+	)
+
+	s.decisionLog.Log(&DecisionLogEntry{
+		SessionID:    req.SessionID,
+		RequestID:    req.RequestID,
+		UserID:       req.UserIdentity.UserID,
+		ServerName:   req.ServerName,
+		ToolName:     req.ToolName,
+		Decision:     pdpResp.Decision,
+		Reason:       pdpResp.Reason,
+		PDPRequestID: pdpResp.RequestID,
+		Source:       "pdp",
+		Arguments:    req.Arguments,
+	})
+
+	switch pdpResp.Decision {
+	case "allow":
+		writeJSON(w, http.StatusOK, pdpResp)
+
+	case "deny":
+		writeError(w, http.StatusForbidden, pdpResp.Reason)
+
+	case "escalate":
+		escalationJWT := ""
+		if s.signer != nil {
+			jwtStr, err := s.signer.Sign(req, pdpResp.Reason, pdpResp.EscalationScope)
+			if err != nil {
+				slog.Error("escalation jwt sign failed", "error", err, "request_id", req.RequestID)
 			} else {
 				escalationJWT = jwtStr
 			}

@@ -1,7 +1,10 @@
 // Package localfs provides an in-process MCP filesystem server for
 // portcullis-gate. It is connected via an in-memory transport (no subprocess,
-// no stdio) and handles only paths that the fast-path has already validated
-// as within the sandbox.
+// no stdio). It can operate on any path on the local filesystem; access control
+// is enforced by portcullis-gate before any call reaches this server:
+//   - Paths within the sandbox directory are allowed immediately (fast-path).
+//   - All other paths require authorization from portcullis-keep before gate
+//     calls this server.
 //
 // The tool set mirrors @modelcontextprotocol/server-filesystem so that agents
 // trained against the official npm package see identical tool names, schemas,
@@ -23,8 +26,10 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// NewServer creates an MCP server that exposes filesystem tools restricted to
-// sandboxDir. The caller is responsible for connecting a transport.
+// NewServer creates an MCP server that exposes filesystem tools for any path
+// on the local filesystem. sandboxDir is used only as the base for resolving
+// relative paths; access control is the caller's responsibility.
+// The caller is responsible for connecting a transport.
 func NewServer(sandboxDir string) (*mcp.Server, error) {
 	sandbox, err := filepath.EvalSymlinks(filepath.Clean(sandboxDir))
 	if err != nil {
@@ -40,82 +45,82 @@ func NewServer(sandboxDir string) (*mcp.Server, error) {
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "read_text_file",
-		Description: "Read the complete contents of a file from the file system as text. Handles various text encodings and provides detailed error messages if the file cannot be read. Use this tool when you need to examine the contents of a single file. Use the 'head' parameter to read only the first N lines of a file, or the 'tail' parameter to read only the last N lines of a file. Operates on the file as text regardless of extension. Only works within allowed directories.",
+		Description: "Read the complete contents of a file from the file system as text. Handles various text encodings and provides detailed error messages if the file cannot be read. Use the 'head' parameter to read only the first N lines, or 'tail' for the last N lines. Access to paths outside the fast-path directory is policy-enforced by Portcullis and may require escalation approval.",
 	}, s.readTextFile)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "read_media_file",
-		Description: "Read an image or audio file. Returns the base64 encoded data and MIME type. Only works within allowed directories.",
+		Description: "Read an image or audio file from any path on the filesystem. Returns the base64 encoded data and MIME type. Access is policy-enforced by Portcullis.",
 	}, s.readMediaFile)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "read_multiple_files",
-		Description: "Read the contents of multiple files simultaneously. This is more efficient than reading files one by one when you need to analyze or compare multiple files. Each file's content is returned with its path as a reference. Failed reads for individual files won't stop the entire operation. Only works within allowed directories.",
+		Description: "Read the contents of multiple files simultaneously. More efficient than reading files one by one. Each file's content is returned with its path as a reference. Failed reads for individual files won't stop the entire operation. Access is policy-enforced by Portcullis.",
 	}, s.readMultipleFiles)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "write_file",
-		Description: "Create a new file or completely overwrite an existing file with new content. Use with caution as it will overwrite existing files without warning. Handles text content with proper encoding. Only works within allowed directories.",
+		Description: "Create a new file or completely overwrite an existing file with new content. Can write to any path on the filesystem. Access is policy-enforced by Portcullis — the operation will be denied or may require escalation approval depending on the path and enterprise policy.",
 	}, s.writeFile)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "edit_file",
-		Description: "Make line-based edits to a text file. Each edit replaces exact line sequences with new content. Returns a git-style diff showing the changes made. Only works within allowed directories.",
+		Description: "Make line-based edits to a text file. Each edit replaces exact line sequences with new content. Returns a git-style diff showing the changes made. Can edit files at any path on the filesystem, subject to Portcullis policy enforcement.",
 	}, s.editFile)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "create_directory",
-		Description: "Create a new directory or ensure a directory exists. Can create multiple nested directories in one operation. If the directory already exists, this operation will succeed silently. Perfect for setting up directory structures for projects or ensuring required paths exist. Only works within allowed directories.",
+		Description: "Create a new directory or ensure a directory exists. Can create multiple nested directories in one operation. Can create directories at any path on the filesystem, subject to Portcullis policy enforcement.",
 	}, s.createDirectory)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "list_directory",
-		Description: "Get a detailed listing of all files and directories in a specified path. Results clearly distinguish between files and directories with [FILE] and [DIR] prefixes. This tool is essential for understanding directory structure and finding specific files within a directory. Only works within allowed directories.",
+		Description: "Get a detailed listing of all files and directories in a specified path. Results distinguish between files and directories with [FILE] and [DIR] prefixes. Can list any directory on the filesystem, subject to Portcullis policy enforcement.",
 	}, s.listDirectory)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "list_directory_with_sizes",
-		Description: "Get a detailed listing of all files and directories in a specified path, including sizes. Results clearly distinguish between files and directories with [FILE] and [DIR] prefixes. This tool is useful for understanding directory structure and finding specific files within a directory. Only works within allowed directories.",
+		Description: "Get a detailed listing of all files and directories in a specified path, including file sizes. Can list any directory on the filesystem, subject to Portcullis policy enforcement.",
 	}, s.listDirectoryWithSizes)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "directory_tree",
-		Description: "Get a recursive tree view of files and directories as a JSON structure. Each entry includes 'name', 'type' (file/directory), and 'children' for directories. Files have no children array, while directories always have a children array (which may be empty). The output is formatted with 2-space indentation for readability. Only works within allowed directories.",
+		Description: "Get a recursive tree view of files and directories as a JSON structure. Each entry includes 'name', 'type' (file/directory), and 'children' for directories. Can traverse any directory on the filesystem, subject to Portcullis policy enforcement.",
 	}, s.directoryTree)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "move_file",
-		Description: "Move or rename files and directories. Can move files between directories and rename them in a single operation. If the destination exists, the operation will fail. Works across different directories and can be used for simple renaming within the same directory. Both source and destination must be within allowed directories.",
+		Description: "Move or rename files and directories. Can move files between any directories on the filesystem. If the destination exists, the operation will fail. Subject to Portcullis policy enforcement.",
 	}, s.moveFile)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "search_files",
-		Description: "Recursively search for files and directories matching a pattern. The patterns should be glob-style patterns that match paths relative to the working directory. Use pattern like '*.ext' to match files in current directory, and '**/*.ext' to match files in all subdirectories. Returns full paths to all matching items. Great for finding files when you don't know their exact location. Only searches within allowed directories.",
+		Description: "Recursively search for files and directories matching a glob pattern. Use '*.ext' to match files in a directory, '**/*.ext' to match recursively. Returns full paths to all matching items. Can search any directory on the filesystem, subject to Portcullis policy enforcement.",
 	}, s.searchFiles)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "copy_file",
-		Description: "Create a copy of a file at a new location. If the destination exists, the operation will fail. Can copy files between directories within allowed directories. Both source and destination must be within allowed directories.",
+		Description: "Create a copy of a file at a new location. If the destination exists, the operation will fail. Can copy files between any paths on the filesystem, subject to Portcullis policy enforcement.",
 	}, s.copyFile)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "delete_file",
-		Description: "Delete a file or directory. For directories, use the recursive flag to delete non-empty directories. Use with caution as this operation cannot be undone. Only works within allowed directories.",
+		Description: "Delete a file or directory. For directories, use the recursive flag to delete non-empty directories. Use with caution as this operation cannot be undone. Can delete files at any path on the filesystem, subject to Portcullis policy enforcement.",
 	}, s.deleteFile)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "search_within_files",
-		Description: "Search for text patterns within files. Recursively searches through text files for a given pattern, returning matches with file paths, line numbers, and matched content. Supports exclude patterns to skip certain files. Case-sensitive by default. Only searches within allowed directories.",
+		Description: "Search for text patterns within files. Recursively searches through text files for a given pattern, returning matches with file paths, line numbers, and matched content. Supports exclude patterns to skip certain files. Case-sensitive by default. Subject to Portcullis policy enforcement.",
 	}, s.searchWithinFiles)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "get_file_info",
-		Description: "Retrieve detailed metadata about a file or directory. Returns comprehensive information including size, creation time, last modified time, permissions, and type. This tool is perfect for understanding file characteristics without reading the actual content. Only works within allowed directories.",
+		Description: "Retrieve detailed metadata about a file or directory including size, creation time, last modified time, permissions, and type. Can retrieve info for any path on the filesystem, subject to Portcullis policy enforcement.",
 	}, s.getFileInfo)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "list_allowed_directories",
-		Description: "Returns the list of directories that this agent is allowed to access. Subdirectories within these allowed directories are also accessible. Use this to understand which directories and their nested paths are available before trying to access files.",
+		Description: "Returns information about filesystem access policy. All paths on the filesystem are accessible subject to Portcullis policy enforcement. Use this tool to understand which paths are in the fast-path (no policy check required) and which require policy evaluation.",
 	}, s.listAllowedDirectories)
 
 	return srv, nil
@@ -152,13 +157,15 @@ type fsServer struct {
 	sandbox string
 }
 
-// resolve validates and resolves a path to an absolute, symlink-free path
-// within the sandbox. Returns an error if the path escapes the sandbox.
+// resolve returns an absolute, symlink-free path for the given input.
+// Relative paths are resolved relative to the sandbox directory.
+// No containment check is performed — access control is handled by
+// portcullis-gate before any call reaches this server.
 //
 // For paths that do not exist (e.g. write targets or new directories), it
 // walks up the ancestor chain to find the deepest existing component, resolves
 // symlinks there, and reconstructs the full path. This correctly handles
-// deeply nested new paths like sandbox/a/b/c where none of the intermediates
+// deeply nested new paths like /some/dir/a/b/c where none of the intermediates
 // exist yet.
 func (s *fsServer) resolve(path string) (string, error) {
 	if path == "" {
@@ -174,11 +181,7 @@ func (s *fsServer) resolve(path string) (string, error) {
 	for {
 		resolved, err := filepath.EvalSymlinks(current)
 		if err == nil {
-			full := filepath.Join(append([]string{resolved}, missing...)...)
-			if !s.inSandbox(full) {
-				return "", fmt.Errorf("path %q is outside the allowed directories", path)
-			}
-			return full, nil
+			return filepath.Join(append([]string{resolved}, missing...)...), nil
 		}
 		if !os.IsNotExist(err) {
 			return "", fmt.Errorf("resolve path: %w", err)
@@ -190,11 +193,6 @@ func (s *fsServer) resolve(path string) (string, error) {
 		missing = append([]string{filepath.Base(current)}, missing...)
 		current = parent
 	}
-}
-
-func (s *fsServer) inSandbox(resolved string) bool {
-	sep := string(filepath.Separator)
-	return resolved == s.sandbox || strings.HasPrefix(resolved, s.sandbox+sep)
 }
 
 // --- result helpers ---
@@ -741,7 +739,11 @@ func (s *fsServer) getFileInfo(_ context.Context, _ *mcp.CallToolRequest, in pat
 }
 
 func (s *fsServer) listAllowedDirectories(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
-	return textResult("Allowed directories:\n" + s.sandbox), nil, nil
+	text := "All directories on this computer are accessible, subject to Portcullis policy enforcement.\n\n" +
+		"Fast-path directory (no policy check required for reads):\n  " + s.sandbox + "\n\n" +
+		"Operations outside the fast-path directory are sent to portcullis-keep for policy evaluation. " +
+		"Access may require escalation approval depending on the path and operation."
+	return textResult(text), nil, nil
 }
 
 func (s *fsServer) copyFile(_ context.Context, _ *mcp.CallToolRequest, in copyInput) (*mcp.CallToolResult, any, error) {

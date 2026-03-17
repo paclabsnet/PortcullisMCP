@@ -40,6 +40,7 @@ type Gate struct {
 	localFS       *mcp.ClientSession // in-process filesystem backend
 	sessionID     string
 	toolServerMap map[string]string // tool name → backend server name, populated at startup
+	localFSTools  map[string]bool   // tools served by the local filesystem session
 	logChan       chan DecisionLogEntry
 	logDone       chan struct{}
 	logWg         sync.WaitGroup
@@ -87,6 +88,7 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 		localFS:       localFSSession,
 		sessionID:     uuid.New().String(),
 		toolServerMap: make(map[string]string),
+		localFSTools:  make(map[string]bool),
 		logChan:       make(chan DecisionLogEntry, 1000),
 		logDone:       make(chan struct{}),
 	}
@@ -108,8 +110,10 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 			return nil, fmt.Errorf("list local filesystem tools: %w", err)
 		}
 		for _, tool := range localTools.Tools {
+			g.localFSTools[tool.Name] = true
 			g.registerTool(tool)
 		}
+		slog.Info("registered local filesystem tools", "count", len(localTools.Tools))
 	}
 
 	keepTools, err := fwd.ListTools(ctx, identity.Get(ctx), store.All())
@@ -122,6 +126,7 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 		g.toolServerMap[at.Tool.Name] = at.ServerName
 		g.registerTool(at.Tool)
 	}
+	slog.Info("registered keep tools", "count", len(keepTools))
 
 	return g, nil
 }
@@ -231,13 +236,38 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 		return nil, shared.ErrDenied
 	}
 
-	// Forward to Keep.
+	currentIdentity := g.identity.Get(ctx)
+
+	// Local filesystem tools: ask Keep to authorize, then execute locally if allowed.
+	// This ensures all non-fast-path filesystem ops are policy-checked and audited.
+	if g.localFSTools[toolName] {
+		enriched := shared.EnrichedMCPRequest{
+			ServerName:       shared.LocalFSServerName,
+			ToolName:         toolName,
+			Arguments:        args,
+			UserIdentity:     currentIdentity,
+			EscalationTokens: g.store.All(),
+			SessionID:        g.sessionID,
+			RequestID:        requestID,
+		}
+		if err := g.forwarder.Authorize(ctx, enriched); err != nil {
+			return policyErrToResult(err, toolName, requestID)
+		}
+		if g.localFS == nil {
+			return nil, fmt.Errorf("local filesystem server not configured")
+		}
+		return g.localFS.CallTool(ctx, &mcp.CallToolParams{
+			Name:      toolName,
+			Arguments: args,
+		})
+	}
+
+	// All other tools: forward to Keep for both authorization and execution.
 	serverName, ok := g.toolServerMap[toolName]
 	if !ok {
 		slog.Warn("no server mapping for tool, routing may fail", "tool", toolName)
 		serverName = "unknown"
 	}
-	currentIdentity := g.identity.Get(ctx)
 	enriched := shared.EnrichedMCPRequest{
 		ServerName:       serverName,
 		ToolName:         toolName,
@@ -249,25 +279,30 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 	}
 	result, err := g.forwarder.CallTool(ctx, enriched)
 	if err != nil {
-		// Convert policy errors into MCP tool-level errors so the agent sees
-		// the message and can act on it (e.g. present an escalation URL to the
-		// user) rather than receiving a JSON-RPC protocol error.
-		var escalationErr *shared.EscalationPendingError
-		switch {
-		case errors.As(err, &escalationErr):
-			return &mcp.CallToolResult{
-				IsError: true,
-				Content: []mcp.Content{&mcp.TextContent{Text: escalationErr.Error()}},
-			}, nil
-		case errors.Is(err, shared.ErrDenied):
-			return &mcp.CallToolResult{
-				IsError: true,
-				Content: []mcp.Content{&mcp.TextContent{Text: "Access denied: " + err.Error()}},
-			}, nil
-		}
-		slog.Error("keep call failed", "error", err, "tool", toolName, "server", serverName, "request_id", requestID)
+		return policyErrToResult(err, toolName, requestID)
 	}
 	return result, err
+}
+
+// policyErrToResult converts a policy error (deny or escalation) from Keep into
+// an MCP tool-level error result so the agent reads the message rather than
+// seeing a JSON-RPC protocol error.
+func policyErrToResult(err error, toolName, requestID string) (*mcp.CallToolResult, error) {
+	var escalationErr *shared.EscalationPendingError
+	switch {
+	case errors.As(err, &escalationErr):
+		return &mcp.CallToolResult{
+			IsError: true,
+			Content: []mcp.Content{&mcp.TextContent{Text: escalationErr.Error()}},
+		}, nil
+	case errors.Is(err, shared.ErrDenied):
+		return &mcp.CallToolResult{
+			IsError: true,
+			Content: []mcp.Content{&mcp.TextContent{Text: "Access denied: " + err.Error()}},
+		}, nil
+	}
+	slog.Error("keep call failed", "error", err, "tool", toolName, "request_id", requestID)
+	return nil, err
 }
 
 // logWorker batches decision log entries and sends them to Keep periodically.

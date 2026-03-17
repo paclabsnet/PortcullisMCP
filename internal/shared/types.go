@@ -6,6 +6,11 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// LocalFSServerName is the agreed server name used when gate sends local filesystem
+// tool calls to Keep for policy authorization. Keep evaluates the PDP but does not
+// execute the tool — gate executes it locally via its in-process filesystem session.
+const LocalFSServerName = "portcullis-localfs"
+
 // AnnotatedTool pairs an MCP tool schema with the backend server name it belongs to.
 // The server name is used by portcullis-gate to route tool calls to the correct backend.
 type AnnotatedTool struct {

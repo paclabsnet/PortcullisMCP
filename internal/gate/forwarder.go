@@ -41,6 +41,14 @@ func (f *Forwarder) CallTool(ctx context.Context, req shared.EnrichedMCPRequest)
 	return &result, nil
 }
 
+// Authorize asks Keep to evaluate the PDP for a gate-local tool call without
+// executing the tool. Returns nil on allow, ErrDenied on deny,
+// EscalationPendingError on escalate, or ErrPDPUnavailable if Keep is down.
+func (f *Forwarder) Authorize(ctx context.Context, req shared.EnrichedMCPRequest) error {
+	var resp shared.PDPResponse
+	return f.post(ctx, "/authorize", req, &resp)
+}
+
 // ListTools fetches the annotated tool list from Keep.
 // Each entry carries the backend server name alongside the tool schema,
 // so the caller can build a routing map without guessing.
