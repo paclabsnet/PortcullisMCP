@@ -151,6 +151,7 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 	case "allow":
 		result, err := s.router.CallTool(r.Context(), req.ServerName, req.ToolName, req.Arguments)
 		if err != nil {
+			slog.Error("backend call failed", "error", err, "server", req.ServerName, "tool", req.ToolName, "request_id", req.RequestID)
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("backend call failed: %s", err))
 			return
 		}

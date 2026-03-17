@@ -48,3 +48,10 @@ After all of these are done, we integrate
 9. verify that the agent is able to access the MCP once the token is added
 
 - 
+
+# Future steps
+
+when we hit the escalate path and find a JWT that satisfies the escalation 
+(so it becomes 'allow'), we should consider adding identity information about which
+JWT was used to the response, so it is captured in the decision log.
+

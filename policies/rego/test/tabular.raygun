@@ -480,62 +480,6 @@ tests:
 
 
 
-#
-# the token for returns allow after escalation
-# secret: a-string-secret-at-least-256-bits-long
-#
-# {
-#  "sub": "1234567890",
-#  "name": "John Doe",
-#  "admin": true,
-#  "iat": 1516239022,
-#  "portcullis": {
-#    "tools":       ["write_file", "edit_file"],
-#    "services":    ["portcullis-localfs"],
-#    "groups" :     ["developer"],
-#    "arg_restrictions": [
-#       { "type":"prefix", "key_path": "path", "data": "/var/log/whatever.log", "required":true }
-#    ],
-#    "reason":      "Allow writing to /var/log"
-#     
-#  }
-# }
-#
-#
-  - name: returns allow after escalation
-    description: checking that the escalation token provides the appropriate override
-    decision-path: /v1/data/portcullis/tabular/decision
-    expects:
-      - substring: '"decision":"allow"'
-    input:
-      type: inline
-      value: >
-        {
-          "authorization_request": {
-            "action": {
-              "service": "portcullis-localfs",
-              "tool_name": "write_file"
-            },
-            "resource":{
-              "arguments": {
-                "path": "/var/log/whatever.log"
-              }
-            },
-            "principal": {
-              "user_id": "alice@example.com",
-              "display_name": "Alice Developer",
-              "groups": ["developers", "blah"]
-            },
-            "context": {
-              "escalation_tokens":[
-                  { "raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiYWRtaW4iOnRydWUsImlhdCI6MTUxNjIzOTAyMiwicG9ydGN1bGxpcyI6eyJ0b29scyI6WyJ3cml0ZV9maWxlIiwiZWRpdF9maWxlIl0sInNlcnZpY2VzIjpbInBvcnRjdWxsaXMtbG9jYWxmcyJdLCJncm91cHMiOlsiZGV2ZWxvcGVyIl0sImFyZ19yZXN0cmljdGlvbnMiOlt7InR5cGUiOiJwcmVmaXgiLCJrZXlfcGF0aCI6InBhdGgiLCJkYXRhIjoiL3Zhci9sb2cvd2hhdGV2ZXIubG9nIiwicmVxdWlyZWQiOnRydWV9XSwicmVhc29uIjoiQWxsb3cgd3JpdGluZyB0byAvdmFyL2xvZyJ9fQ.hPTYnOWOIy5andqOWhUJCQNumLwL22ypHwhG5Xd8bUg" }
-              ]
-            }
-          },
-          "session_id": "tbd123",
-          "request_id": "req-abc123"
-        }
-
 
 
 
@@ -643,48 +587,6 @@ tests:
 
 
 
-# {
-#  "portcullis": {
-#    "tools":       ["get_customer", "update_inventory"],
-#    "services":    ["mock-enterprise-api"],
-#    "groups" :     ["developer"],
-#    "arg_restrictions": [
-#    ],
-#    "reason":      "update group membership"     
-#  }
-# }
-#
-  - name: mock-enterprise-api - get_customer - returns allow after escalation
-    skip: false
-    description: checking that the escalation token provides the appropriate override
-    decision-path: /v1/data/portcullis/tabular/decision
-    expects:
-      - substring: '"decision":"allow"'
-    input:
-      type: inline
-      value: >
-        {
-          "authorization_request": {
-            "action": {
-              "service": "mock-enterprise-api",
-              "tool_name": "get_customer"
-            },
-            "resource":{
-            },
-            "principal": {
-              "user_id": "alice@example.com",
-              "display_name": "Alice Developer",
-              "groups": ["blah"]
-            },
-            "context": {
-              "escalation_tokens":[
-                { "raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJwb3J0Y3VsbGlzIjp7InRvb2xzIjpbImdldF9jdXN0b21lciIsInVwZGF0ZV9pbnZlbnRvcnkiXSwic2VydmljZXMiOlsibW9jay1lbnRlcnByaXNlLWFwaSJdLCJncm91cHMiOlsiZGV2ZWxvcGVyIl0sImFyZ19yZXN0cmljdGlvbnMiOltdLCJyZWFzb24iOiJ1cGRhdGUgZ3JvdXAgbWVtYmVyc2hpcCJ9fQ.LDmDu7qxjrgU9dp_7WKBPCamLfeuj_6ZixN2dCmPmho"}
-              ]
-            }
-          },
-          "session_id": "tbd123",
-          "request_id": "req-abc123"
-        }
 
 
   - name: mock-enterprise-api - delete_order - returns allow if you're an admin
@@ -909,51 +811,6 @@ tests:
 
 
 
-  - name: fetch - returns allow
-    skip: false
-    description:  validating a URL fetch request to a sketchy URL, but an escalation token exists
-    decision-path: /v1/data/portcullis/tabular/decision
-    expects:
-      - substring: '"decision":"allow"'
-    input:
-      type: inline
-      value: >
-        {
-          "authorization_request": {                
-            "action": {
-                "tool_name": "fetch",
-                "service" : "fetch"
-            },
-            "resource": {
-                "arguments": {
-                    "raw": "https://competitor.com/v1/products",
-                    "scheme": "https",
-                    "host": "competitor.com",
-                    "port": "",
-                    "path": "/v1/products",
-                    "query": ""
-                }
-            },
-            "principal": {
-                "user_id": "alice@example.com",
-                "email": "alice@example.com",
-                "display_name": "Alice Developer",
-                "groups": ["developer", "internal-api-users"],
-                "roles": ["api-consumer"],
-                "department": "engineering",
-                "auth_method": ["pwd", "mfa"],
-                "token_expiry": 1741651200,
-                "source_type": "oidc"
-            },
-            "context": {
-                "escalation_tokens": [
-                    {"raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJwb3J0Y3VsbGlzIjp7InRvb2xzIjpbImZldGNoIl0sInNlcnZpY2VzIjpbImZldGNoIl0sImdyb3VwcyI6WyJkZXZlbG9wZXIiXSwiYXJnX3Jlc3RyaWN0aW9ucyI6W3sidHlwZSI6InByZWZpeCIsImtleV9wYXRoIjoiaG9zdCIsImRhdGEiOiJjb21wZXRpdG9yLmNvbSIsInJlcXVpcmVkIjp0cnVlfSx7InR5cGUiOiJwcmVmaXgiLCJrZXlfcGF0aCI6InBhdGgiLCJkYXRhIjoiL3YxL3Byb2R1Y3RzIiwicmVxdWlyZWQiOnRydWV9XX19.Nt4BbzBywam-pmw65XS-M1Tvt0pIpz3YvM3joJVoJsk"}
-                ]
-            }
-          },
-            "session_id": "sess-abc123",
-            "request_id": "req-def456"
-        }
 
 
 
@@ -996,6 +853,280 @@ tests:
             },
             "context": {
                 "escalation_tokens": [
+                ]
+            }
+          },
+            "session_id": "sess-abc123",
+            "request_id": "req-def456"
+        }
+
+
+
+
+
+# {
+#  "exp": 0,
+#  "portcullis": {
+#    "tools":       ["fetch"],
+#    "services":    ["fetch"],
+#    "groups" :     ["developer"],
+#    "arg_restrictions": [
+#       { "type":"prefix", "key_path": "host", "data": "openpolicyAGENT.com", "required":true },
+#       { "type":"prefix", "key_path": "host", "data": "STYRA.com", "required":true }       
+#    ]
+#  }
+# }
+  - name: fetch - returns escalate because the token has expired
+    skip: false
+    description:  verifying case insensitivity
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"escalate"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {                
+            "action": {
+                "tool_name": "fetch",
+                "service" : "fetch"
+            },
+            "resource": {
+                "arguments": {
+                    "raw": "https://OPENpolicyAGENT.com",
+                    "scheme": "https",
+                    "host": "OpEnPoLiCyAgEnT.com",
+                    "port": "",
+                    "path": "",
+                    "query": ""
+                }
+            },
+            "principal": {
+                "user_id": "alice@example.com",
+                "email": "alice@example.com",
+                "display_name": "Alice Developer",
+                "groups": ["developer", "internal-api-users"],
+                "roles": ["api-consumer"],
+                "department": "engineering",
+                "auth_method": ["pwd", "mfa"],
+                "token_expiry": 1741651200,
+                "source_type": "oidc"
+            },
+            "context": {
+                "escalation_tokens": [
+                   {"raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjAsInBvcnRjdWxsaXMiOnsidG9vbHMiOlsiZmV0Y2giXSwic2VydmljZXMiOlsiZmV0Y2giXSwiZ3JvdXBzIjpbImRldmVsb3BlciJdLCJhcmdfcmVzdHJpY3Rpb25zIjpbeyJ0eXBlIjoicHJlZml4Iiwia2V5X3BhdGgiOiJob3N0IiwiZGF0YSI6Im9wZW5wb2xpY3lBR0VOVC5jb20iLCJyZXF1aXJlZCI6dHJ1ZX0seyJ0eXBlIjoicHJlZml4Iiwia2V5X3BhdGgiOiJob3N0IiwiZGF0YSI6IlNUWVJBLmNvbSIsInJlcXVpcmVkIjp0cnVlfV19fQ.4G5Y1Xy7N0pnj22WVQoEj-CS_sG2vCd1kY3RXS9tq8M"}
+                ]
+            }
+          },
+            "session_id": "sess-abc123",
+            "request_id": "req-def456"
+        }
+
+
+
+
+  - name: fetch - returns escalate
+    skip: false
+    description:  validating a URL fetch request to a sketchy URL that requires escalation
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"data":"competitor.com"'
+      - substring: '"data":"/v1/products"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {                
+            "action": {
+                "tool_name": "fetch",
+                "service" : "fetch"
+            },
+            "resource": {
+                "arguments": {
+                    "raw": "https://competitor.com/v1/products",
+                    "scheme": "https",
+                    "host": "competitor.com",
+                    "port": "",
+                    "path": "/v1/products",
+                    "query": ""
+                }
+            },
+            "principal": {
+                "user_id": "alice@example.com",
+                "email": "alice@example.com",
+                "display_name": "Alice Developer",
+                "groups": ["developer", "internal-api-users"],
+                "roles": ["api-consumer"],
+                "department": "engineering",
+                "auth_method": ["pwd", "mfa"],
+                "token_expiry": 1741651200,
+                "source_type": "oidc"
+            },
+            "context": {
+                "escalation_tokens": [
+                    {"raw":"BAD_TOKEN"}                    
+                ]
+            }
+          },
+            "session_id": "sess-abc123",
+            "request_id": "req-def456"
+        }
+
+
+
+
+
+
+
+
+
+
+#
+# the token for returns allow after escalation
+# secret: a-string-secret-at-least-256-bits-long
+#
+# {
+#  "sub": "1234567890",
+#  "name": "John Doe",
+#  "admin": true,
+#  "iat": 1516239022,
+#  "portcullis": {
+#    "tools":       ["write_file", "edit_file"],
+#    "services":    ["portcullis-localfs"],
+#    "groups" :     ["developer"],
+#    "arg_restrictions": [
+#       { "type":"prefix", "key_path": "path", "data": "/var/log/whatever.log", "required":true }
+#    ],
+#    "reason":      "Allow writing to /var/log"
+#     
+#  }
+# }
+#
+#
+  - name: returns allow after escalation
+    skip: false
+    description: checking that the escalation token provides the appropriate override
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"allow"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {
+            "action": {
+              "service": "portcullis-localfs",
+              "tool_name": "write_file"
+            },
+            "resource":{
+              "arguments": {
+                "path": "/var/log/whatever.log"
+              }
+            },
+            "principal": {
+              "user_id": "alice@example.com",
+              "display_name": "Alice Developer",
+              "groups": ["developers", "blah"]
+            },
+            "context": {
+              "escalation_tokens":[
+                  { "raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiYWRtaW4iOnRydWUsImlhdCI6MTUxNjIzOTAyMiwicG9ydGN1bGxpcyI6eyJ0b29scyI6WyJ3cml0ZV9maWxlIiwiZWRpdF9maWxlIl0sInNlcnZpY2VzIjpbInBvcnRjdWxsaXMtbG9jYWxmcyJdLCJncm91cHMiOlsiZGV2ZWxvcGVyIl0sImFyZ19yZXN0cmljdGlvbnMiOlt7InR5cGUiOiJwcmVmaXgiLCJrZXlfcGF0aCI6InBhdGgiLCJkYXRhIjoiL3Zhci9sb2cvd2hhdGV2ZXIubG9nIiwicmVxdWlyZWQiOnRydWV9XSwicmVhc29uIjoiQWxsb3cgd3JpdGluZyB0byAvdmFyL2xvZyJ9fQ.hPTYnOWOIy5andqOWhUJCQNumLwL22ypHwhG5Xd8bUg" }
+              ]
+            }
+          },
+          "session_id": "tbd123",
+          "request_id": "req-abc123"
+        }
+
+
+
+# {
+#  "portcullis": {
+#    "tools":       ["get_customer", "update_inventory"],
+#    "services":    ["mock-enterprise-api"],
+#    "groups" :     ["developer"],
+#    "arg_restrictions": [
+#    ],
+#    "reason":      "update group membership"     
+#  }
+# }
+#
+  - name: mock-enterprise-api - get_customer - returns allow after escalation
+    skip: false
+    description: checking that the escalation token provides the appropriate override
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"allow"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {
+            "action": {
+              "service": "mock-enterprise-api",
+              "tool_name": "get_customer"
+            },
+            "resource":{
+            },
+            "principal": {
+              "user_id": "alice@example.com",
+              "display_name": "Alice Developer",
+              "groups": ["blah"]
+            },
+            "context": {
+              "escalation_tokens":[
+                { "raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJwb3J0Y3VsbGlzIjp7InRvb2xzIjpbImdldF9jdXN0b21lciIsInVwZGF0ZV9pbnZlbnRvcnkiXSwic2VydmljZXMiOlsibW9jay1lbnRlcnByaXNlLWFwaSJdLCJncm91cHMiOlsiZGV2ZWxvcGVyIl0sImFyZ19yZXN0cmljdGlvbnMiOltdLCJyZWFzb24iOiJ1cGRhdGUgZ3JvdXAgbWVtYmVyc2hpcCJ9fQ.LDmDu7qxjrgU9dp_7WKBPCamLfeuj_6ZixN2dCmPmho"}
+              ]
+            }
+          },
+          "session_id": "tbd123",
+          "request_id": "req-abc123"
+        }
+
+
+
+
+
+
+  - name: fetch - returns allow - sketchy - escalation
+    skip: false
+    description:  validating a URL fetch request to a sketchy URL, but an escalation token exists
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"allow"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {                
+            "action": {
+                "tool_name": "fetch",
+                "service" : "fetch"
+            },
+            "resource": {
+                "arguments": {
+                    "raw": "https://competitor.com/v1/products",
+                    "scheme": "https",
+                    "host": "competitor.com",
+                    "port": "",
+                    "path": "/v1/products",
+                    "query": ""
+                }
+            },
+            "principal": {
+                "user_id": "alice@example.com",
+                "email": "alice@example.com",
+                "display_name": "Alice Developer",
+                "groups": ["developer", "internal-api-users"],
+                "roles": ["api-consumer"],
+                "department": "engineering",
+                "auth_method": ["pwd", "mfa"],
+                "token_expiry": 1741651200,
+                "source_type": "oidc"
+            },
+            "context": {
+                "escalation_tokens": [
+                    {"raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJwb3J0Y3VsbGlzIjp7InRvb2xzIjpbImZldGNoIl0sInNlcnZpY2VzIjpbImZldGNoIl0sImdyb3VwcyI6WyJkZXZlbG9wZXIiXSwiYXJnX3Jlc3RyaWN0aW9ucyI6W3sidHlwZSI6InByZWZpeCIsImtleV9wYXRoIjoiaG9zdCIsImRhdGEiOiJjb21wZXRpdG9yLmNvbSIsInJlcXVpcmVkIjp0cnVlfSx7InR5cGUiOiJwcmVmaXgiLCJrZXlfcGF0aCI6InBhdGgiLCJkYXRhIjoiL3YxL3Byb2R1Y3RzIiwicmVxdWlyZWQiOnRydWV9XX19.Nt4BbzBywam-pmw65XS-M1Tvt0pIpz3YvM3joJVoJsk"}
                 ]
             }
           },
@@ -1063,40 +1194,90 @@ tests:
         }
 
 
+
+#
+# the token for returns allow after escalation
+# secret: a-string-secret-at-least-256-bits-long
+#
 # {
-#  "exp": 0,
+#  "sub": "1234567890",
+#  "name": "John Doe",
+#  "admin": true,
+#  "iat": 1516239022,
 #  "portcullis": {
-#    "tools":       ["fetch"],
-#    "services":    ["fetch"],
+#    "tools":       ["write_file", "edit_file"],
+#    "services":    ["portcullis-localfs"],
 #    "groups" :     ["developer"],
 #    "arg_restrictions": [
-#       { "type":"prefix", "key_path": "host", "data": "openpolicyAGENT.com", "required":true },
-#       { "type":"prefix", "key_path": "host", "data": "STYRA.com", "required":true }       
-#    ]
+#       { "type":"prefix", "key_path": "path", "data": "/var/log/whatever.log", "required":true }
+#    ],
+#    "reason":      "Allow writing to /var/log"
+#     
 #  }
 # }
-  - name: fetch - returns escalate because the token has expired
+#
+#
+  - name: returns allow after escalation
     skip: false
-    description:  verifying case insensitivity
+    description: checking that the escalation token provides the appropriate override
     decision-path: /v1/data/portcullis/tabular/decision
     expects:
-      - substring: '"decision":"escalate"'
+      - substring: '"decision":"allow"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {
+            "action": {
+              "service": "portcullis-localfs",
+              "tool_name": "write_file"
+            },
+            "resource":{
+              "arguments": {
+                "path": "/var/log/whatever.log"
+              }
+            },
+            "principal": {
+              "user_id": "alice@example.com",
+              "display_name": "Alice Developer",
+              "groups": ["developers", "blah"]
+            },
+            "context": {
+              "escalation_tokens":[
+                  { "raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiYWRtaW4iOnRydWUsImlhdCI6MTUxNjIzOTAyMiwicG9ydGN1bGxpcyI6eyJ0b29scyI6WyJ3cml0ZV9maWxlIiwiZWRpdF9maWxlIl0sInNlcnZpY2VzIjpbInBvcnRjdWxsaXMtbG9jYWxmcyJdLCJncm91cHMiOlsiZGV2ZWxvcGVyIl0sImFyZ19yZXN0cmljdGlvbnMiOlt7InR5cGUiOiJwcmVmaXgiLCJrZXlfcGF0aCI6InBhdGgiLCJkYXRhIjoiL3Zhci9sb2cvd2hhdGV2ZXIubG9nIiwicmVxdWlyZWQiOnRydWV9XSwicmVhc29uIjoiQWxsb3cgd3JpdGluZyB0byAvdmFyL2xvZyJ9fQ.hPTYnOWOIy5andqOWhUJCQNumLwL22ypHwhG5Xd8bUg" }
+              ]
+            }
+          },
+          "session_id": "tbd123",
+          "request_id": "req-abc123"
+        }
+
+
+
+
+
+  - name: fetch - returns escalation for https://www.styra.com/news
+    skip: false
+    description:  validating a URL fetch request to a perfectly fine URL, but one that we have set up for escalation
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"data":"www.styra.com"'
     input:
       type: inline
       value: >
         {
           "authorization_request": {                
             "action": {
-                "tool_name": "fetch",
+                "tool_name": "fetch_url",
                 "service" : "fetch"
             },
             "resource": {
                 "arguments": {
-                    "raw": "https://OPENpolicyAGENT.com",
+                    "raw": "https://www.styra.com/news",
                     "scheme": "https",
-                    "host": "OpEnPoLiCyAgEnT.com",
+                    "host": "www.styra.com",
                     "port": "",
-                    "path": "",
+                    "path": "/news",
                     "query": ""
                 }
             },
@@ -1113,7 +1294,6 @@ tests:
             },
             "context": {
                 "escalation_tokens": [
-                   {"raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjAsInBvcnRjdWxsaXMiOnsidG9vbHMiOlsiZmV0Y2giXSwic2VydmljZXMiOlsiZmV0Y2giXSwiZ3JvdXBzIjpbImRldmVsb3BlciJdLCJhcmdfcmVzdHJpY3Rpb25zIjpbeyJ0eXBlIjoicHJlZml4Iiwia2V5X3BhdGgiOiJob3N0IiwiZGF0YSI6Im9wZW5wb2xpY3lBR0VOVC5jb20iLCJyZXF1aXJlZCI6dHJ1ZX0seyJ0eXBlIjoicHJlZml4Iiwia2V5X3BhdGgiOiJob3N0IiwiZGF0YSI6IlNUWVJBLmNvbSIsInJlcXVpcmVkIjp0cnVlfV19fQ.4G5Y1Xy7N0pnj22WVQoEj-CS_sG2vCd1kY3RXS9tq8M"}
                 ]
             }
           },
@@ -1123,30 +1303,50 @@ tests:
 
 
 
-
-  - name: fetch - returns escalation_scope
+#
+# token contents:
+# {
+#  "iss": "portcullis-guard",
+#  "iat": 1773767336,
+#  "portcullis": {
+#    "arg_restrictions": [
+#      {
+#        "data": "www.styra.com",
+#        "key_path": "host",
+#        "type": "prefix"
+#      }
+#    ],
+#    "tools": [
+#      "fetch_url"
+#    ],
+#    "services": [
+#      "fetch"
+#    ]
+#  }
+# }
+#
+  - name: fetch - returns allow for https://www.styra.com/news - because of good token
     skip: false
-    description:  validating a URL fetch request to a sketchy URL that requires escalation
+    description:  validating a URL fetch request to a perfectly fine URL, but one that we have set up for escalation
     decision-path: /v1/data/portcullis/tabular/decision
     expects:
-      - substring: '"data":"competitor.com"'
-      - substring: '"data":"/v1/products"'
+      - substring: '"decision":"allow"'
     input:
       type: inline
       value: >
         {
           "authorization_request": {                
             "action": {
-                "tool_name": "fetch",
+                "tool_name": "fetch_url",
                 "service" : "fetch"
             },
             "resource": {
                 "arguments": {
-                    "raw": "https://competitor.com/v1/products",
+                    "raw": "https://www.styra.com/news",
                     "scheme": "https",
-                    "host": "competitor.com",
+                    "host": "www.styra.com",
                     "port": "",
-                    "path": "/v1/products",
+                    "path": "/news",
                     "query": ""
                 }
             },
@@ -1163,7 +1363,7 @@ tests:
             },
             "context": {
                 "escalation_tokens": [
-                    {"raw":"BAD_TOKEN"}                    
+                  {"raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJwb3J0Y3VsbGlzLWd1YXJkIiwiaWF0IjoxNzczNzY3MzM2LCJwb3J0Y3VsbGlzIjp7ImFyZ19yZXN0cmljdGlvbnMiOlt7ImRhdGEiOiJ3d3cuc3R5cmEuY29tIiwia2V5X3BhdGgiOiJob3N0IiwidHlwZSI6InByZWZpeCJ9XSwidG9vbHMiOlsiZmV0Y2hfdXJsIl0sInNlcnZpY2VzIjpbImZldGNoIl19fQ.Y7gnf08ZcaxIxEwuy91FPP3E3fwKnsjdgLeECF2puyI"}
                 ]
             }
           },

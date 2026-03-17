@@ -17,7 +17,7 @@ type escalationRequestClaims struct {
 	Server          string         `json:"srv"`
 	Tool            string         `json:"tool"`
 	Reason          string         `json:"reason"`
-	EscalationScope map[string]any `json:"scope,omitempty"`
+	EscalationScope []map[string]any `json:"scope,omitempty"`
 }
 
 // EscalationSigner creates Keep-signed escalation request JWTs.
@@ -36,14 +36,14 @@ func NewEscalationSigner(cfg SigningConfig) (*EscalationSigner, error) {
 	}
 	ttl := time.Duration(cfg.TTL) * time.Second
 	if ttl == 0 {
-		ttl = time.Hour
+		ttl = 24 * time.Hour
 	}
 	return &EscalationSigner{key: []byte(cfg.Key), ttl: ttl}, nil
 }
 
 // Sign creates a signed JWT encoding the full escalation request context.
 // Returns an error only if JWT signing fails; missing scope is allowed.
-func (s *EscalationSigner) Sign(req shared.EnrichedMCPRequest, reason string, scope map[string]any) (string, error) {
+func (s *EscalationSigner) Sign(req shared.EnrichedMCPRequest, reason string, scope []map[string]any) (string, error) {
 	if s == nil {
 		return "", fmt.Errorf("escalation signing not configured")
 	}

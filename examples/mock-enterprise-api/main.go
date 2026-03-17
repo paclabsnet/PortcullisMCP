@@ -43,14 +43,12 @@ func main() {
 		Description: "Delete an order (admin only)",
 	}, api.handleDeleteOrder)
 
-	// HTTP handler for SSE transport
-	http.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
+	// HTTP handler using Streamable HTTP transport (compatible with Keep's http backend type)
+	handler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
 		log.Printf("MCP connection from %s", r.RemoteAddr)
-		transport := &mcp.SSEServerTransport{}
-		if err := server.Run(r.Context(), transport); err != nil {
-			log.Printf("Server error: %v", err)
-		}
-	})
+		return server
+	}, nil)
+	http.Handle("/mcp", handler)
 
 	// Health endpoint
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {

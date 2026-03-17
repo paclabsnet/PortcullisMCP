@@ -180,9 +180,8 @@ response_list contains
 	# grant the agent permission, we would fail this case, and pass the
 	# allow case below
 
-    not escalate.escalation_grant_matches_group_service_tool_and_request_args(
+    not escalate.escalation_grant_matches_service_tool_and_request_args(
 			escalation_grant_list,
-			["*"],
 			action.service,
 			action.tool_name,
 			resource.arguments)
@@ -206,9 +205,8 @@ response_list contains
 	# grant the agent permission, we would fail this case, and pass the
 	# allow case below
 
-    escalate.escalation_grant_matches_group_service_tool_and_request_args(
+    escalate.escalation_grant_matches_service_tool_and_request_args(
 			escalation_grant_list,
-			["*"],
 			action.service,
 			action.tool_name,
 			resource.arguments)
@@ -236,9 +234,8 @@ response_list contains
 	# grant the agent permission, we would fail this case, and pass the
 	# allow case below
 
-    not escalate.escalation_grant_matches_group_service_tool_and_request_args(
+    not escalate.escalation_grant_matches_service_tool_and_request_args(
 			escalation_grant_list,
-			["admin", "developer", "clerk"],
 			action.service,
 			action.tool_name,
 			[])
@@ -261,9 +258,8 @@ response_list contains
 	# grant the agent permission, we would fail this case, and pass the
 	# allow case below
 
-    escalate.escalation_grant_matches_group_service_tool_and_request_args(
+    escalate.escalation_grant_matches_service_tool_and_request_args(
 			escalation_grant_list,
-			["admin", "developer", "clerk"],
 			action.service,
 			action.tool_name,
 			[])
@@ -387,9 +383,8 @@ response_list contains
    startswith(resource.arguments.host, "competitor.com")
    startswith(resource.arguments.path, "/v1/products")
 
-   not escalate.escalation_grant_matches_group_service_tool_and_request_args(
+   not escalate.escalation_grant_matches_service_tool_and_request_args(
 			escalation_grant_list,
-			["*"],
 			action.service,
 			action.tool_name,
 			resource.arguments)
@@ -408,9 +403,8 @@ response_list contains
    startswith(resource.arguments.host, "competitor.com")
    startswith(resource.arguments.path, "/v1/products")
 
-   escalate.escalation_grant_matches_group_service_tool_and_request_args(
+   escalate.escalation_grant_matches_service_tool_and_request_args(
 			escalation_grant_list,
-			["*"],
 			action.service,
 			action.tool_name,
 			resource.arguments)
@@ -430,9 +424,8 @@ response_list contains
    some x in ["styra.com", "openpolicyagent.com"]
      startswith(lower(resource.arguments.host), x)
 
-   not escalate.escalation_grant_matches_group_service_tool_and_request_args(
+   not escalate.escalation_grant_matches_service_tool_and_request_args(
 			escalation_grant_list,
-			["*"],
 			action.service,
 			action.tool_name,
 			resource.arguments)
@@ -451,9 +444,8 @@ response_list contains
    some x in ["styra.com", "openpolicyagent.com"]
      startswith(lower(resource.arguments.host), x)
 
-   escalate.escalation_grant_matches_group_service_tool_and_request_args(
+   escalate.escalation_grant_matches_service_tool_and_request_args(
 			escalation_grant_list,
-			["*"],
 			action.service,
 			action.tool_name,
 			resource.arguments)

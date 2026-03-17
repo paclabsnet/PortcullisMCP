@@ -40,7 +40,7 @@ func TestEscalationSigner_Sign(t *testing.T) {
 		},
 		RequestID: "req-123",
 	}
-	scope := map[string]any{"resource": "repo:example"}
+	scope := []map[string]any{{"resource": "repo:example"}}
 
 	tokenStr, err := signer.Sign(req, "manager approval needed", scope)
 	if err != nil {
@@ -83,13 +83,13 @@ func TestEscalationSigner_Sign(t *testing.T) {
 	if claims.ExpiresAt == nil || claims.ExpiresAt.Before(time.Now()) {
 		t.Error("expected future expiry in signed token")
 	}
-	if claims.EscalationScope["resource"] != "repo:example" {
-		t.Errorf("EscalationScope.resource = %v, want repo:example", claims.EscalationScope["resource"])
+	if len(claims.EscalationScope) == 0 || claims.EscalationScope[0]["resource"] != "repo:example" {
+		t.Errorf("EscalationScope[0].resource = %v, want repo:example", claims.EscalationScope)
 	}
 }
 
 func TestEscalationSigner_Sign_DefaultTTL(t *testing.T) {
-	// TTL=0 should default to 1 hour.
+	// TTL=0 should default to 24 hours.
 	signer, _ := NewEscalationSigner(SigningConfig{Key: "k", TTL: 0})
 	req := shared.EnrichedMCPRequest{
 		UserIdentity: shared.UserIdentity{UserID: "u@example.com"},
@@ -110,13 +110,13 @@ func TestEscalationSigner_Sign_DefaultTTL(t *testing.T) {
 	}
 	claims := token.Claims.(*escalationRequestClaims)
 
-	expected := time.Now().Add(time.Hour)
+	expected := time.Now().Add(24 * time.Hour)
 	diff := claims.ExpiresAt.Time.Sub(expected)
 	if diff < 0 {
 		diff = -diff
 	}
 	if diff > 5*time.Second {
-		t.Errorf("default TTL should be 1 hour; expiry differs from expected by %v", diff)
+		t.Errorf("default TTL should be 24 hours; expiry differs from expected by %v", diff)
 	}
 }
 

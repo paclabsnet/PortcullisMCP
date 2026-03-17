@@ -1,30 +1,49 @@
+# portcullis-gate minimal config — for local development/evaluation
+#
+# AGENT CONFIGURATION
+# portcullis-gate is launched automatically by your AI agent as an MCP server.
+# Do not run it manually. Configure your agent as follows:
+#
+# Claude Code (~/.claude.json or project .claude.json):
+#   {
+#     "mcpServers": {
+#       "portcullis": {
+#         "command": "portcullis-gate",
+#         "args": ["-config", "/path/to/gate.yaml"]
+#       }
+#     }
+#   }
+#
+# VS Code (settings.json, under "mcp.servers"):
+#   "portcullis": {
+#     "command": "portcullis-gate",
+#     "args": ["-config", "/path/to/gate.yaml"]
+#   }
+#
+# Any MCP-compatible agent that supports stdio transport uses the same pattern:
+# command = portcullis-gate, args = [-config, /path/to/gate.yaml]
+
 keep:
   endpoint: "http://localhost:8080"
   auth:
     type: "bearer"
-    token: "dev-secret-token"  # must match keep's bearer_token
+    token: "dev-secret-token"   # must match keep's bearer_token setting
 
 identity:
-  source: "os"  # Use OS username for local testing
-  # Optional overrides for testing different user scenarios:
-  user_id: "alice@example.com"      # Override OS username
-  display_name: "Alice Developer"   # Override display name
-  groups:                            # Specify groups for policy testing
-    - "developers"
-    - "qa-team"
+  source: "os"                  # uses your OS login; switch to "oidc" in production
 
 sandbox:
-  directory: "."  # Current directory as sandbox
+  directory: "~"                # files under home dir are fast-pathed (no Keep round-trip)
 
-protected_paths:
-  - ".git"
-  - ".portcullis"
+# protected_paths:              # always denied, regardless of sandbox; defaults to ~/.ssh and ~/.portcullis
+#   - "~/.ssh"
+#   - "~/.portcullis"
 
-management_api:
-  port: 7777
+# token_store: "~/.portcullis/tokens.json"   # where escalation tokens are persisted
 
-token_store: ".portcullis/tokens.json"
+# management_api:
+#   port: 7777                  # localhost-only HTTP API for token management
 
-decision_logs:
-  flush_interval: 30  # seconds between sending logs to Keep (default: 30)
-  max_batch_size: 100
+# decision_logs:
+#   flush_interval: 30          # seconds between batched sends to Keep (default: 30)
+#   max_batch_size: 100         # max entries per batch (default: 100)

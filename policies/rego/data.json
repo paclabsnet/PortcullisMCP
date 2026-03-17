@@ -1,6 +1,6 @@
 {
         "config" : {
-                "escalation_secret": "a-string-secret-at-least-256-bits-long"
+		"escalation_secret" : "a-string-secret-at-least-256-bits-long"
         },
   "portcullis": {
 	"mcp" : {
@@ -166,6 +166,19 @@
 
 		},
                 "fetch" : {
+                        "fetch_url": {
+                                "allow" : {
+                                        "groups" : ["*"]
+                                },
+                                "escalate" : {
+                                        "arg_restrictions" :[
+                                               { "type":"prefix","key_path":"host", "data":"STyRa.CoM"},
+                                                { "type":"prefix","key_path":"host", "data":"www.STyRa.CoM"},
+                                              { "type":"prefix","key_path":"host", "data":"www.OpenPolicyAgent.org"},
+                                               { "type":"prefix","key_path":"host", "data":"OpenPolicyAgent.org"}
+                                        ]
+                                }
+                        },
                         "fetch" : {
                                 "allow" : {
                                         "groups" : ["*"]
@@ -192,6 +205,7 @@
                                 }
                         }
                 }
+
 	}
   }
 }

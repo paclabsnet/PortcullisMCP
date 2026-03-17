@@ -264,10 +264,12 @@ func TestVerifyRequest_Malformed(t *testing.T) {
 func TestIssueEscalationToken_Claims(t *testing.T) {
 	s := makeServer(t)
 
-	scope := map[string]any{"repo": "example/repo"}
+	scope := []map[string]any{{"repo": "example/repo"}}
 	requestClaims := &escalationRequestClaims{
 		UserID:          "alice@corp.com",
 		UserDisplayName: "Alice",
+		Server:          "github",
+		Tool:            "create_issue",
 		EscalationScope: scope,
 	}
 
@@ -296,8 +298,14 @@ func TestIssueEscalationToken_Claims(t *testing.T) {
 	if tc.Subject != "alice@corp.com" {
 		t.Errorf("Subject = %q, want alice@corp.com", tc.Subject)
 	}
-	if tc.Portcullis["repo"] != "example/repo" {
-		t.Errorf("Portcullis[repo] = %v, want example/repo", tc.Portcullis["repo"])
+	if len(tc.Portcullis.ArgRestrictions) == 0 || tc.Portcullis.ArgRestrictions[0]["repo"] != "example/repo" {
+		t.Errorf("Portcullis.ArgRestrictions[0][repo] = %v, want example/repo", tc.Portcullis.ArgRestrictions)
+	}
+	if len(tc.Portcullis.Tools) != 1 || tc.Portcullis.Tools[0] != "create_issue" {
+		t.Errorf("Portcullis.Tools = %v, want [create_issue]", tc.Portcullis.Tools)
+	}
+	if len(tc.Portcullis.Services) != 1 || tc.Portcullis.Services[0] != "github" {
+		t.Errorf("Portcullis.Services = %v, want [github]", tc.Portcullis.Services)
 	}
 	if expiry.IsZero() {
 		t.Error("expected non-zero expiry time")
@@ -450,7 +458,7 @@ func TestHandlePost_WrongKey(t *testing.T) {
 func TestHandlePost_ValidApproval(t *testing.T) {
 	s := makeServer(t)
 
-	scope := map[string]any{"resource": "repo:corp/backend"}
+	scope := []map[string]any{{"resource": "repo:corp/backend"}}
 	tokenStr := signKeepJWT(t, escalationRequestClaims{
 		UserID:          "alice@corp.com",
 		Server:          "github",
@@ -547,7 +555,7 @@ func TestHandlePost_GatePortCustom(t *testing.T) {
 func TestHandlePost_IssuedTokenVerifiable(t *testing.T) {
 	s := makeServer(t)
 
-	scope := map[string]any{"action": "deploy"}
+	scope := []map[string]any{{"action": "deploy"}}
 	tokenStr := signKeepJWT(t, escalationRequestClaims{
 		UserID:          "bob@corp.com",
 		EscalationScope: scope,
@@ -589,7 +597,7 @@ func TestHandlePost_IssuedTokenVerifiable(t *testing.T) {
 	if tc.Subject != "bob@corp.com" {
 		t.Errorf("Subject = %q, want bob@corp.com", tc.Subject)
 	}
-	if tc.Portcullis["action"] != "deploy" {
-		t.Errorf("Portcullis[action] = %v, want deploy", tc.Portcullis["action"])
+	if len(tc.Portcullis.ArgRestrictions) == 0 || tc.Portcullis.ArgRestrictions[0]["action"] != "deploy" {
+		t.Errorf("Portcullis.ArgRestrictions[0][action] = %v, want deploy", tc.Portcullis.ArgRestrictions)
 	}
 }

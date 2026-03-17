@@ -155,7 +155,7 @@ type opaResponse struct {
 		Decision        string         `json:"decision"`
 		Reason          string         `json:"reason"`
 		RequestID       string         `json:"request_id"`       // optionally echoed by the PDP
-		EscalationScope map[string]any `json:"escalation_scope"` // claims required for escalation token
+		EscalationScope []map[string]any `json:"escalation_scope"` // claims required for escalation token
 	} `json:"result"`
 }
 

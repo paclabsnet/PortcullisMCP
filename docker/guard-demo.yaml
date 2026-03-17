@@ -1,0 +1,14 @@
+listen:
+  address: "0.0.0.0:8444"
+
+keep:
+  escalation_request_signing_key: "dev-keep-signing-secret"  # must match keep's escalation_request_signing.key
+
+escalation_token_signing:
+  key: "a-string-secret-at-least-256-bits-long"  # PDP must trust tokens signed with this key
+  ttl: 86400
+
+templates:
+  dir: "/templates"
+
+portcullis_gate_management_port: 7777

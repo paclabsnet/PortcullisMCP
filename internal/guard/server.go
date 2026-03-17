@@ -22,15 +22,23 @@ type escalationRequestClaims struct {
 	Server          string         `json:"srv"`
 	Tool            string         `json:"tool"`
 	Reason          string         `json:"reason"`
-	EscalationScope map[string]any `json:"scope,omitempty"`
+	EscalationScope []map[string]any `json:"scope,omitempty"`
+}
+
+// portcullisClaims is the nested object stored under the "portcullis" JWT claim.
+// scope carries the PDP-issued escalation scope constraints.
+// tools and services record exactly what was approved so the PDP can enforce
+// that the token is only used for the escalated operation.
+type portcullisClaims struct {
+	ArgRestrictions []map[string]any `json:"arg_restrictions,omitempty"`
+	Tools           []string         `json:"tools,omitempty"`
+	Services        []string         `json:"services,omitempty"`
 }
 
 // escalationTokenClaims are the JWT claims Guard issues after user approval.
-// The "portcullis" claim carries the granted scope as returned by the PDP in
-// escalation_scope. The PDP verifies this claim to grant elevated access.
 type escalationTokenClaims struct {
 	jwt.RegisteredClaims
-	Portcullis map[string]any `json:"portcullis,omitempty"`
+	Portcullis portcullisClaims `json:"portcullis,omitempty"`
 }
 
 // Server is the portcullis-guard HTTP server.
@@ -135,7 +143,11 @@ func (s *Server) issueEscalationToken(claims *escalationRequestClaims) (string, 
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(expiry),
 		},
-		Portcullis: claims.EscalationScope,
+		Portcullis: portcullisClaims{
+			ArgRestrictions: claims.EscalationScope,
+			Tools:           []string{claims.Tool},
+			Services:        []string{claims.Server},
+		},
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, tokenClaims)
 	signed, err := token.SignedString(s.signingKey)

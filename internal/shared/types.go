@@ -53,7 +53,7 @@ type EnrichedMCPRequest struct {
 type PDPResponse struct {
 	Decision        string         `json:"decision"`                   // "allow" | "deny" | "escalate"
 	Reason          string         `json:"reason"`
-	EscalationScope map[string]any `json:"escalation_scope,omitempty"` // claims required for escalation token
+	EscalationScope []map[string]any `json:"escalation_scope,omitempty"` // claims required for escalation token
 	RequestID       string         `json:"request_id,omitempty"`       // echoed from the input request, if the PDP chooses to include it
 }
 
@@ -65,12 +65,12 @@ type EscalationPendingError struct {
 }
 
 func (e *EscalationPendingError) Error() string {
-	msg := "escalation required"
+	msg := "Escalation required"
 	if e.Reason != "" {
 		msg += ": " + e.Reason
 	}
 	if e.Reference != "" {
-		msg += " — to approve, visit: " + e.Reference
+		msg += "\n\nPresent this complete URL to the user so they can click it to approve the request. Do not truncate or shorten the URL:\n" + e.Reference
 	}
 	return msg
 }

@@ -211,6 +211,7 @@ response_list contains { "decision" : "allow",
 			  "request_id" : request_id } if {
 
 				not rules_section.allow == null
+				print("#DEBUG: request: ", input.authorization_request)
 				allowdeny.request_matches_rule_criteria( input.authorization_request, rules_section.allow )
 
 			  }
@@ -229,6 +230,8 @@ response_list contains { "decision" : "allow",
 				# and also negative rules (the principal must not be in one of the escalation groups)
 				escalate.request_matches_base_criteria( input.authorization_request, rules_section.escalate)
 
+				print("#DEBUG: allow scenario: we match the base case, do we match the escalation case?")
+				print("#DEBUG++: escalation_grants: ", escalation_grant_list)
 
 				# and it meets the criteria of at least one escalation token
 				# this will also have two ways to match - with the escalated temporary group membership,
@@ -257,7 +260,8 @@ response_list contains {
 					not rules_section.escalate == null
 					escalate.request_matches_base_criteria( input.authorization_request, rules_section.escalate )
 					
-					# print("#DEBUG: escalate scenario: we match the base case, do we match the escalation case?")
+#					print("#DEBUG: escalate scenario: we match the base case, do we match the escalation case?")
+#					print("#DEBUG++: escalation_grants: ", escalation_grant_list)
 
 					# why are we checking this? Because if the request does meet the escalation
 					# criteria, it's approved, and no longer needs to be escalated
@@ -267,6 +271,9 @@ response_list contains {
 							rules_section.escalate, 
 							escalation_grant_list )
 
+					# now we need to tell the system what kind of JWT claims would satisfy the
+					# requirements of this request to allow for successful escalation
+					#
 					escalation_scope := escalate.find_matching_escalation_criteria( 
 							input.authorization_request, 
 							rules_section.escalate, 

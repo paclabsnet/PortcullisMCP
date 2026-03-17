@@ -26,6 +26,9 @@ type ManagementServer struct {
 
 // NewManagementServer creates a ManagementServer but does not start it.
 func NewManagementServer(store *TokenStore, identity *IdentityCache, cfg MgmtAPIConfig) *ManagementServer {
+	if cfg.Port == 0 {
+		cfg.Port = 7777
+	}
 	ms := &ManagementServer{store: store, identity: identity, cfg: cfg}
 	mux := http.NewServeMux()
 
@@ -58,17 +61,33 @@ func NewManagementServer(store *TokenStore, identity *IdentityCache, cfg MgmtAPI
 	return ms
 }
 
-// Start begins listening. It returns after the listener is bound.
+// Start begins listening on both IPv4 and IPv6 loopback addresses so that
+// http://localhost:<port> works regardless of how the OS resolves "localhost"
+// (Windows commonly prefers ::1; Linux/macOS commonly prefer 127.0.0.1).
 func (ms *ManagementServer) Start(ctx context.Context) error {
-	ln, err := net.Listen("tcp", ms.server.Addr)
-	if err != nil {
-		return fmt.Errorf("management api listen: %w", err)
+	addrs := []string{
+		fmt.Sprintf("127.0.0.1:%d", ms.cfg.Port),
+		fmt.Sprintf("[::1]:%d", ms.cfg.Port),
 	}
+
+	started := 0
+	for _, addr := range addrs {
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			// Not all systems have IPv6 loopback; skip silently.
+			continue
+		}
+		go func() { _ = ms.server.Serve(ln) }()
+		started++
+	}
+	if started == 0 {
+		return fmt.Errorf("management api: could not listen on any loopback address on port %d", ms.cfg.Port)
+	}
+
 	go func() {
 		<-ctx.Done()
 		_ = ms.server.Shutdown(context.Background())
 	}()
-	go func() { _ = ms.server.Serve(ln) }()
 	return nil
 }
 

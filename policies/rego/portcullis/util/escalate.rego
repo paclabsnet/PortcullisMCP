@@ -112,18 +112,21 @@ request_has_arg_restrictions( request, rules ) := true if {
 #
 request_matches_escalation_criteria( request, rules, escalation_grant_list) := true if {
 
-   escalation_groups := object.get(rules, "escalate_to_groups", ["*"])   
+   # we're getting rid of the group membership, that shouldn't be part of an
+   # escalation token
+   # escalation_groups := object.get(rules, "escalate_to_groups", ["*"])   
 
    print("#DEBUG: request_matches_escalation_criteria: grants: ", escalation_grant_list)
 
    request_arguments := object.get(request, ["resource", "arguments"], [])
 
-   escalation_grant_matches_group_service_tool_and_request_args( 
+   escalation_grant_matches_service_tool_and_request_args( 
             escalation_grant_list, 
-            escalation_groups, 
             request.action.service, 
             request.action.tool_name, 
             request_arguments )   
+
+   print("#DEBUG: request_matches_escalation_criteria: TRUE")
 
 } else := false
 
@@ -211,25 +214,27 @@ find_rule_arg_restrictions_matching_request_args(
 #  appropriate group membership. If the escalation record includes an arg restriction, we iterate over the elements
 #  in the arg restriction and match appropriately 
 #
-escalation_grant_matches_group_service_tool_and_request_args( 
+escalation_grant_matches_service_tool_and_request_args( 
       escalation_grant_list, 
-      escalation_groups, 
       service, 
       tool, 
       request_args) := true if {
 
 
-  print("#DEBUG: escalation_matches_group_service_tool_and_request_args: escalation_groups:",escalation_groups,", service: ",service,", tool:",tool,", request: ", request_args) 
+  print("#DEBUG: escalation_matches_service_tool_and_request_args: service: ",service,", tool:",tool,", request: ", request_args) 
   print("#DEBUG++: escalation grant list: ", escalation_grant_list)
 
   some escalation_grant in escalation_grant_list
 
      print("#DEBUG++: escalation grant: ", escalation_grant)
 
-     # note that the first parameter here is the groups from the 
-     util.has_group_membership( escalation_grant.portcullis.groups, escalation_groups)
-
-     print("#DEBUG++: has group memebership: true")
+     # subtle logical error fixed here - escalation grants do not require groups, and 
+     # in fact, groups should probably be deprecated as something to test during escalation
+     #
+     # The logical check below essentially assumed groups would be in the JWT
+     #
+     # util.has_group_membership( escalation_grant.portcullis.groups, escalation_groups)
+     # print("#DEBUG++: has group memebership: true")
 
      # @TODO: these two tests are probably redundant, TBD 
      service in escalation_grant.portcullis.services
@@ -238,7 +243,10 @@ escalation_grant_matches_group_service_tool_and_request_args(
      print("#DEBUG++: arg restrictions: ", escalation_grant.portcullis.arg_restrictions," request_args: ", request_args)
      util.any_arg_restriction_rule_honored( escalation_grant.portcullis.arg_restrictions, request_args)	
 
-     print("#DEBUG++: any_arg_restriction_honored: TRUE")
+
+
+
+   print("#DEBUG++: escalation_grant_matches_service_tool_and_request_args: TRUE")
 
 } else := false
 

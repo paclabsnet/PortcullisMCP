@@ -1,67 +1,90 @@
-.PHONY: build test clean opa-start opa-stop run-mock run-keep run-gate help
+.PHONY: build install test clean opa-start opa-stop run-mock run-keep help
 
-# Build both binaries
-build:
-	@echo "Building portcullis-keep..."
-	@go build -o bin/portcullis-keep.exe ./cmd/portcullis-keep
+# Detect OS for binary extension
+GOOS     := $(shell go env GOOS)
+GOPATH   := $(shell go env GOPATH)
+
+ifeq ($(GOOS),windows)
+  BIN_EXT := .exe
+else
+  BIN_EXT :=
+endif
+
+GATE_BIN  := bin/portcullis-gate$(BIN_EXT)
+KEEP_BIN  := bin/portcullis-keep$(BIN_EXT)
+GUARD_BIN := bin/portcullis-guard$(BIN_EXT)
+
+VERSION     := $(shell git describe --tags --always --dirty 2>/dev/null || echo "0.1.0-dev")
+VERSION_PKG := github.com/paclabsnet/PortcullisMCP/internal/version
+LDFLAGS     := -ldflags "-X $(VERSION_PKG).Version=$(VERSION)"
+
+# Write .env so docker compose picks up the same version automatically
+.env:
+	@echo "VERSION=$(VERSION)" > .env
+
+# Build all binaries into bin/
+build: .env
 	@echo "Building portcullis-gate..."
-	@go build -o bin/portcullis-gate.exe ./cmd/portcullis-gate
-	@echo "Build complete. Binaries in bin/"
+	@go build $(LDFLAGS) -o $(GATE_BIN) ./cmd/portcullis-gate
+	@echo "Building portcullis-keep..."
+	@go build $(LDFLAGS) -o $(KEEP_BIN) ./cmd/portcullis-keep
+	@echo "Building portcullis-guard..."
+	@go build $(LDFLAGS) -o $(GUARD_BIN) ./cmd/portcullis-guard
+	@echo "Build complete ($(VERSION)). Binaries in bin/"
+
+# Install portcullis-gate to GOPATH/bin so it can be referenced in MCP client config
+install: build
+	@echo "Installing portcullis-gate to $(GOPATH)/bin..."
+	@go install $(LDFLAGS) ./cmd/portcullis-gate
+	@echo ""
+	@echo "portcullis-gate installed. Configure your MCP client to launch it:"
+	@echo '  { "command": "portcullis-gate", "args": ["-config", "~/.portcullis/gate.yaml"] }'
+	@echo ""
+	@echo "The MCP client (Claude, Copilot, etc.) will start gate automatically via stdio."
 
 # Run all tests
 test:
-	@echo "Running tests..."
 	@go test ./...
 
-# Clean build artifacts
+# Remove build artifacts
 clean:
-	@echo "Cleaning..."
-	@if exist bin rmdir /s /q bin
-	@echo "Clean complete."
+	@rm -rf bin/
 
-# Start OPA with docker-compose
+# Start OPA + backends with docker-compose
 opa-start:
-	@echo "Starting OPA..."
 	@docker-compose up -d
 	@echo "OPA running on http://localhost:8181"
 
-# Stop OPA
+# Stop docker-compose services
 opa-stop:
-	@echo "Stopping OPA..."
 	@docker-compose down
 
-# Run mock HTTP MCP server
+# Run the mock enterprise API backend (development only)
 run-mock:
-	@echo "Starting mock HTTP MCP server..."
-	@go run .\examples\mock-enterprise-api
+	@go run ./examples/mock-enterprise-api
 
-# Run portcullis-keep (requires OPA and mock server to be running)
+# Run portcullis-keep with minimal config (development only)
 run-keep:
-	@echo "Starting portcullis-keep..."
-	@.\bin\portcullis-keep.exe -config config/keep-config.minimal.yaml
-
-# Run portcullis-gate (requires keep to be running)
-run-gate:
-	@echo "Starting portcullis-gate..."
-	@.\bin\portcullis-gate.exe -config config/gate-config.minimal.yaml
+	@$(KEEP_BIN) -config config/keep-config.minimal.yaml
 
 # Show help
 help:
 	@echo "PortcullisMCP Makefile"
 	@echo ""
 	@echo "Targets:"
-	@echo "  build      - Build both portcullis-keep and portcullis-gate"
+	@echo "  build      - Compile portcullis-gate and portcullis-keep into bin/"
+	@echo "  install    - Build and install portcullis-gate to GOPATH/bin"
 	@echo "  test       - Run all unit tests"
 	@echo "  clean      - Remove build artifacts"
-	@echo "  opa-start  - Start OPA using docker-compose"
-	@echo "  opa-stop   - Stop OPA"
-	@echo "  run-mock   - Run the mock HTTP MCP server"
-	@echo "  run-keep   - Run portcullis-keep with minimal config"
-	@echo "  run-gate   - Run portcullis-gate with minimal config"
+	@echo "  opa-start  - Start OPA + backends via docker-compose"
+	@echo "  opa-stop   - Stop docker-compose services"
+	@echo "  run-mock   - Run the mock enterprise API backend (dev only)"
+	@echo "  run-keep   - Run portcullis-keep with minimal config (dev only)"
 	@echo ""
-	@echo "Quick start:"
-	@echo "  1. make build"
-	@echo "  2. make opa-start"
-	@echo "  3. make run-mock    (in one terminal)"
-	@echo "  4. make run-keep    (in another terminal)"
-	@echo "  5. make run-gate    (in a third terminal)"
+	@echo "Quick start (development):"
+	@echo "  1. make build        # compile binaries"
+	@echo "  2. make install      # install portcullis-gate to PATH"
+	@echo "  3. make opa-start    # start OPA + demo backends"
+	@echo "  4. make run-keep     # start portcullis-keep"
+	@echo "  5. Configure your MCP client to launch portcullis-gate"
+	@echo "     portcullis-gate is started automatically by the MCP client — do not run it manually"

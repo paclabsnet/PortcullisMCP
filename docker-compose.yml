@@ -1,4 +1,4 @@
-version: '3.8'
+# version: '3.8'
 
 services:
   opa:
@@ -7,13 +7,69 @@ services:
     ports:
       - "8181:8181"
     volumes:
-      - ./policies:/policies
+      - ./policies/rego:/policies
+      - ./docker/opa-config.yaml:/etc/opa/config.yaml:ro
     command:
       - "run"
       - "--server"
       - "--addr=0.0.0.0:8181"
-      - "--log-level=debug"
-      - "/policies"
+      - "--log-level=info"
+      - "--config-file=/etc/opa/config.yaml"
+      - "--watch"
+      - "--bundle"
+      - "/policies/bundle.tar.gz"
+    networks:
+      - portcullis
+
+  keep:
+    build:
+      context: .
+      target: keep
+      args:
+        VERSION: ${VERSION:-0.1.0-dev}
+    container_name: portcullis-keep
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./docker/keep-demo.yaml:/etc/portcullis/keep.yaml:ro
+    command: ["-config", "/etc/portcullis/keep.yaml"]
+    depends_on:
+      - opa
+      - mock-enterprise-api
+      - fetch-mcp
+    networks:
+      - portcullis
+
+  guard:
+    build:
+      context: .
+      target: guard
+      args:
+        VERSION: ${VERSION:-0.1.0-dev}
+    container_name: portcullis-guard
+    ports:
+      - "8444:8444"
+    volumes:
+      - ./docker/guard-demo.yaml:/etc/portcullis/guard.yaml:ro
+    command: ["-config", "/etc/portcullis/guard.yaml"]
+    depends_on:
+      - keep
+    networks:
+      - portcullis
+
+  mock-enterprise-api:
+    build:
+      context: .
+      target: mock-enterprise-api
+    container_name: portcullis-mock-enterprise-api
+    networks:
+      - portcullis
+
+  fetch-mcp:
+    build:
+      context: .
+      target: fetch-mcp
+    container_name: portcullis-fetch-mcp
     networks:
       - portcullis
 

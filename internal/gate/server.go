@@ -2,6 +2,8 @@ package gate
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -143,10 +145,21 @@ func (g *Gate) Run(ctx context.Context) error {
 }
 
 // registerTool adds a single tool to the MCP server with a forwarding handler.
+// Uses the untyped ToolHandler to avoid SDK output-schema processing that is
+// inappropriate for a proxy — we pass the CallToolResult through unchanged.
 func (g *Gate) registerTool(tool *mcp.Tool) {
-	mcp.AddTool(g.server, tool, func(ctx context.Context, req *mcp.CallToolRequest, args map[string]any) (*mcp.CallToolResult, map[string]any, error) {
-		result, err := g.handleToolCall(ctx, req.Params.Name, args)
-		return result, nil, err
+	g.server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		var args map[string]any
+		if req.Params.Arguments != nil {
+			data, err := json.Marshal(req.Params.Arguments)
+			if err != nil {
+				return nil, fmt.Errorf("marshal tool arguments: %w", err)
+			}
+			if err := json.Unmarshal(data, &args); err != nil {
+				return nil, fmt.Errorf("unmarshal tool arguments: %w", err)
+			}
+		}
+		return g.handleToolCall(ctx, req.Params.Name, args)
 	})
 }
 
@@ -234,7 +247,27 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 		SessionID:        g.sessionID,
 		RequestID:        requestID,
 	}
-	return g.forwarder.CallTool(ctx, enriched)
+	result, err := g.forwarder.CallTool(ctx, enriched)
+	if err != nil {
+		// Convert policy errors into MCP tool-level errors so the agent sees
+		// the message and can act on it (e.g. present an escalation URL to the
+		// user) rather than receiving a JSON-RPC protocol error.
+		var escalationErr *shared.EscalationPendingError
+		switch {
+		case errors.As(err, &escalationErr):
+			return &mcp.CallToolResult{
+				IsError: true,
+				Content: []mcp.Content{&mcp.TextContent{Text: escalationErr.Error()}},
+			}, nil
+		case errors.Is(err, shared.ErrDenied):
+			return &mcp.CallToolResult{
+				IsError: true,
+				Content: []mcp.Content{&mcp.TextContent{Text: "Access denied: " + err.Error()}},
+			}, nil
+		}
+		slog.Error("keep call failed", "error", err, "tool", toolName, "server", serverName, "request_id", requestID)
+	}
+	return result, err
 }
 
 // logWorker batches decision log entries and sends them to Keep periodically.

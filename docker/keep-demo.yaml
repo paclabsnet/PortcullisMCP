@@ -1,0 +1,33 @@
+listen:
+  address: "0.0.0.0:8080"
+  auth:
+    bearer_token: "dev-secret-token"
+
+pdp:
+  type: "opa"
+  endpoint: "http://opa:8181/v1/data/portcullis/tabular/decision"
+
+backends:
+  mock-enterprise-api:
+    type: "http"
+    url: "http://mock-enterprise-api:3000/mcp"
+  fetch:
+    type: "http"
+    url: "http://fetch-mcp:8080/mcp"
+
+escalation:
+  workflow:
+    type: "url"
+    url:
+      guard_url: "http://localhost:8444"  # browser-facing; must be reachable from the user's machine
+
+escalation_request_signing:
+  key: "dev-keep-signing-secret"
+  ttl: 86400
+
+decision_logs:
+  enabled: true
+  console: true
+  buffer_size: 100
+  flush_interval: 5
+  max_batch_size: 50

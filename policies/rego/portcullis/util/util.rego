@@ -11,7 +11,9 @@ import rego.v1
 
 arg_restriction_matched_list( arg_restriction_rule_array, request_args) := rule_element_matched_list if {
 
-   # because some of the matches can be an 'and' of multiple rules, we potentially get a mix of
+   # because some of the matches can be an 'and' of multiple rules, we potentially get a mix of arrays
+   # with one element, and arrays with multiple, and we want to flatten those out. The grants don't
+   # need the 'and' criteria, 'and' is built-in to the logic of evaluating claims from the tokens
    # 
    unflattened_rule_element_matched_list := [ rule_element_matched_list |
                                some restriction in arg_restriction_rule_array
@@ -96,6 +98,8 @@ arg_restriction_matched_type_ladder( restriction, request_args ) := rule_element
 #
 arg_restriction_matched_type_ladder_dereference_element( restriction, request_args ) := rule_element_matched_list if {
 
+  print("#DEBUG: arg_restriction_matched_type_ladder_deference_element: args:", request_args, ", restriction:", restriction)
+
   key_path_array := split(restriction.key_path, ".")
    
   element := traverse_json( request_args, key_path_array)
@@ -110,6 +114,8 @@ arg_restriction_matched_type_ladder_dereference_element( restriction, request_ar
 #
 arg_restriction_matched_type_ladder_prefix( restriction, element ) := rule_element_matched_list if {
    
+  print("#DEBUG: arg_restriction_matched_type_ladder_prefix: element:", element, ", ", restriction)
+
    lower(restriction.type) == "prefix"
    
    startswith(lower(element), lower(restriction.data))
@@ -123,6 +129,8 @@ arg_restriction_matched_type_ladder_prefix( restriction, element ) := rule_eleme
 # does the end of the element match the restriction suffix
 #
 arg_restriction_matched_type_ladder_suffix( restriction, element ) := rule_element_matched_list if {
+
+  print("#DEBUG: arg_restriction_matched_type_ladder_suffix: element:", element, ", ", restriction)
 
    lower(restriction.type) == "suffix"
    
@@ -138,15 +146,30 @@ arg_restriction_matched_type_ladder_suffix( restriction, element ) := rule_eleme
 #
 arg_restriction_matched_type_ladder_whole( restriction, element ) := rule_element_matched_list if {
 
+  print("#DEBUG: arg_restriction_matched_type_ladder_whole: element:", element, ", ", restriction)
+
    lower(restriction.type) == "whole"
    
    lower(element) == lower(restriction.data)
 
    rule_element_matched_list := [ { "rule": restriction, "arg": element } ]
 
+} else := arg_restriction_matched_type_ladder_contains( restriction, element)
+
+
+
+
+arg_restriction_matched_type_ladder_contains( restriction, element ) := rule_element_matched_list if {
+
+  print("#DEBUG: arg_restriction_matched_type_ladder_contains: element:", element, ", ", restriction)
+
+   lower(restriction.type) == "contains"
+   
+   contains(lower(element), lower(restriction.data))
+
+   rule_element_matched_list := [ { "rule": restriction, "arg": element } ]
+
 } else := []
-
-
 
 #
 # this is a bit of a 'pro gamer move'.  Rego does not support recursion. so we can't
@@ -224,8 +247,8 @@ has_group_membership( user_groups, allowed_groups) := true if {
 #
 find_applicable_escalation_grants( escalation_tokens, action, jwt_secret ) := escalation_grant_list if {
 
-#   print("#DEBUG: find_applicable_escalation_grants: ", action)
-#   print("#DEBUG++: escalation_tokens: ", escalation_tokens)
+   print("#DEBUG: find_applicable_escalation_grants: ", action)
+   print("#DEBUG++: escalation_tokens: ", escalation_tokens)
 
    escalation_grant_list := [ claims |
       some token in escalation_tokens

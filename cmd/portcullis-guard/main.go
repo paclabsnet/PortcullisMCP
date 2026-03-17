@@ -12,11 +12,14 @@ import (
 
 	"github.com/paclabsnet/PortcullisMCP/internal/guard"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
+	"github.com/paclabsnet/PortcullisMCP/internal/version"
 )
 
 func main() {
 	cfgPath := flag.String("config", "/etc/portcullis/guard.yaml", "path to guard config file")
 	flag.Parse()
+
+	slog.Info("portcullis-guard starting", "version", version.Version)
 
 	cfg, err := loadConfig(*cfgPath)
 	if err != nil {
