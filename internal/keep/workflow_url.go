@@ -3,6 +3,7 @@ package keep
 import (
 	"context"
 	"fmt"
+	"net/url"
 
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 )
@@ -28,5 +29,5 @@ func (h *urlWorkflowHandler) Submit(_ context.Context, _ shared.EnrichedMCPReque
 	if escalationJWT == "" {
 		return "", fmt.Errorf("url workflow: escalation JWT is required (configure keep.signing.key)")
 	}
-	return fmt.Sprintf("%s/approve?token=%s", h.guardURL, escalationJWT), nil
+	return fmt.Sprintf("%s/approve?token=%s", h.guardURL, url.QueryEscape(escalationJWT)), nil
 }
