@@ -101,7 +101,7 @@ response_list contains
    action.service in ["portcullis-localfs"]
    not action.tool_name in ["read_file", "read_text_file", "read_media_file", "read_multiple_files", "write_file", 
    						"edit_file", "create_directory", "list_directory", "list_directory_with_sizes", 
-						"directory_tree", "move_file", "search)files", "copy_file", "delete_file", 
+						"directory_tree", "move_file", "search_files", "copy_file", "delete_file", 
 						"search_within_files", "get_file_info", "list_allowed_directories"]
 
 }
@@ -199,7 +199,7 @@ response_list contains
    action.service in ["portcullis-localfs"]
    action.tool_name in ["write_file"]
    some prefix in [ "C:\\Program Files", "C:\\Program Files (x86)" , "/var" ]
-		startswith(prefix, resource.arguments.path)
+		startswith(resource.arguments.path, prefix)
 	
 	# so we've matched the escalation base case. If we have any tokens that
 	# grant the agent permission, we would fail this case, and pass the
@@ -376,6 +376,7 @@ response_list contains
 response_list contains 
 				{ "decision":"escalate", 
 				  "reason":"escalation required to visit competitor's product API", 
+				  "escalation_scope" : escalation_scope,
 				  "request_id": request_id} if {
 
    action.service in ["fetch"]
@@ -388,6 +389,17 @@ response_list contains
 			action.service,
 			action.tool_name,
 			resource.arguments)
+
+	# now we need to tell the system what kind of JWT claims would satisfy the
+	# requirements of this request to allow for successful escalation
+	#
+	escalation_scope := escalate.find_matching_escalation_criteria( 
+			input.authorization_request, 
+				{"arg_restrictions":[{ "type":"and", "list" :[
+                    { "type":"prefix", "key_path": "host", "data": "competitor.com" },
+                    { "type":"prefix", "key_path": "path", "data": "/v1/products" }
+                ]}]},
+			escalation_grant_list)	
 
 }
 
@@ -414,9 +426,12 @@ response_list contains
 
 
 
+
+
 response_list contains 
 				{ "decision":"escalate", 
 				  "reason":"escalation required to visit styra/open policy agent, for the purposes of testing", 
+				  "escalation_scope" : escalation_scope,
 				  "request_id": request_id} if {
 
    action.service in ["fetch"]
@@ -430,7 +445,28 @@ response_list contains
 			action.tool_name,
 			resource.arguments)
 
+
+	# now we need to tell the system what kind of JWT claims would satisfy the
+	# requirements of this request to allow for successful escalation
+	#
+	escalation_scope := escalate.find_matching_escalation_criteria( 
+			input.authorization_request, 
+			{ "arg_restrictions":[
+				{ "type":"prefix","key_path":"host", "data":"styra.com"},
+				{ "type":"prefix","key_path":"host", "data":"openpolicyagent.com"}
+			]},
+			escalation_grant_list)	
+
+
 }
+
+
+
+
+
+
+
+
 
 
 
@@ -465,6 +501,68 @@ response_list contains
    util.has_group_membership( principal.groups, ["*"])
 
 }
+
+
+
+
+
+
+
+
+response_list contains 
+				{ "decision":"escalate", 
+				  "reason":"escalation required to visit styra/open policy agent, for the purposes of testing", 
+				  "escalation_scope" : escalation_scope,
+				  "request_id": request_id} if {
+
+   action.service in ["fetch"]
+   action.tool_name in ["fetch_url"]
+   some x in ["styra.com", "openpolicyagent.org", "www.styra.com", "www.openpolicyagent.org"]
+     startswith(lower(resource.arguments.host), x)
+
+   not escalate.escalation_grant_matches_service_tool_and_request_args(
+			escalation_grant_list,
+			action.service,
+			action.tool_name,
+			resource.arguments)
+
+
+	# now we need to tell the system what kind of JWT claims would satisfy the
+	# requirements of this request to allow for successful escalation
+	#
+	escalation_scope := escalate.find_matching_escalation_criteria( 
+			input.authorization_request, 
+			{ "arg_restrictions":[
+				{ "type":"prefix","key_path":"host", "data":"styra.com"},
+				{ "type":"prefix","key_path":"host", "data":"openpolicyagent.org"},
+				{ "type":"prefix","key_path":"host", "data":"www.styra.com"},
+				{ "type":"prefix","key_path":"host", "data":"www.openpolicyagent.org"}
+			]},
+			escalation_grant_list)	
+
+
+}
+
+
+
+response_list contains 
+				{ "decision":"allow", 
+				  "reason":"allowed to visit competitor's product page after escalation", 
+				  "request_id": request_id} if {
+
+   action.service in ["fetch"]
+   action.tool_name in ["fetch_url"]
+   some x in ["styra.com", "openpolicyagent.org", "www.styra.com", "www.openpolicyagent.org"]
+     startswith(lower(resource.arguments.host), x)
+
+   escalate.escalation_grant_matches_service_tool_and_request_args(
+			escalation_grant_list,
+			action.service,
+			action.tool_name,
+			resource.arguments)
+
+}
+
 
 
 

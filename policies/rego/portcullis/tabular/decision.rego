@@ -276,7 +276,7 @@ response_list contains {
 					#
 					escalation_scope := escalate.find_matching_escalation_criteria( 
 							input.authorization_request, 
-							rules_section.escalate, 
+							rules_section.escalate,
 							escalation_grant_list)
 				}
 
