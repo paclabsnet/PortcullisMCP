@@ -141,17 +141,35 @@
 			"get_customer": {
 				"allow" : {
 					"groups" : [ "admin", "developer", "clerk" ]
-				},
-				"escalate" : {
-					"escalate_to_groups" : [ "admin", "developer", "clerk" ]
+				}
+			},
+                        "update_customer": {
+				"allow" : {
+					"groups" : [ "admin" ]
+				}, 
+                                "escalate": {
+                                        "arg_restrictions" :[
+                                                { "type":"prefix","key_path":"customer_id", "data":"1"},
+                                                { "type":"prefix","key_path":"customer_id", "data":"2"},
+                                                { "type":"prefix","key_path":"customer_id", "data":"3"},
+                                                { "type":"prefix","key_path":"customer_id", "data":"4"},
+                                                { "type":"prefix","key_path":"customer_id", "data":"5"},
+                                                { "type":"prefix","key_path":"customer_id", "data":"6"},
+                                                { "type":"prefix","key_path":"customer_id", "data":"7"},
+                                                { "type":"prefix","key_path":"customer_id", "data":"8"},
+                                                { "type":"prefix","key_path":"customer_id", "data":"9"}
+                                        ]
+                                }
+
+                        },
+			"query_order": {
+				"allow" : {
+					"groups" : [ "*" ]
 				}
 			},
 			"update_order_status": {
 				"allow" : {
 					"groups" : [ "admin" ]
-				},
-				"escalate" : {
-					"escalate_to_groups" : [ "admin" ]
 				}
 			},
 			"query_inventory": {

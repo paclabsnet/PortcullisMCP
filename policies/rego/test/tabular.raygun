@@ -540,50 +540,6 @@ tests:
         }
 
 
-#
-# {
-#  "portcullis": {
-#    "tools":       ["get_customer", "update_inventory"],
-#    "services":    ["mock-enterprise-api"],
-#    "groups" :     ["blah"],
-#    "arg_restrictions": [
-#    ],
-#    "reason":      "update group membership"     
-#  }
-#}
-#
-
-  - name: mock-enterprise-api - get_customer - returns escalate 
-    skip: false
-    description: the escalation token(s) don't provide the necessary privilege
-    decision-path: /v1/data/portcullis/tabular/decision
-    expects:
-      - substring: '"decision":"escalate"'
-    input:
-      type: inline
-      value: >
-        {
-          "authorization_request": {
-            "action":{
-              "service": "mock-enterprise-api",
-              "tool_name": "get_customer"
-            },
-            "resource":{
-            },
-            "principal": {
-              "user_id": "alice@example.com",
-              "display_name": "Alice Developer",
-              "groups": ["blah"]
-            },
-            "context": {
-              "escalation_tokens":[
-                  { "raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiYWRtaW4iOnRydWUsImlhdCI6MTUxNjIzOTAyMiwicG9ydGN1bGxpcyI6eyJ0b29scyI6WyJ3cml0ZV9maWxlIiwiZWRpdF9maWxlIl0sInNlcnZpY2VzIjpbInBvcnRjdWxsaXMtbG9jYWxmcyJdLCJncm91cHMiOlsiZGV2ZWxvcGVyIl0sImFyZ19yZXN0cmljdGlvbnMiOlt7InR5cGUiOiJwcmVmaXgiLCJrZXlfcGF0aCI6InBhdGgiLCJkYXRhIjoiL3Zhci9sb2cvd2hhdGV2ZXIubG9nIiwicmVxdWlyZWQiOnRydWV9XSwicmVhc29uIjoiQWxsb3cgd3JpdGluZyB0byAvdmFyL2xvZyJ9fQ.hPTYnOWOIy5andqOWhUJCQNumLwL22ypHwhG5Xd8bUg" }
-              ]
-            }
-          },
-          "session_id": "tbd123",
-          "request_id": "req-abc123"
-        }
 
 
 
@@ -1039,49 +995,6 @@ tests:
         }
 
 
-
-# {
-#  "portcullis": {
-#    "tools":       ["get_customer", "update_inventory"],
-#    "services":    ["mock-enterprise-api"],
-#    "groups" :     ["developer"],
-#    "arg_restrictions": [
-#    ],
-#    "reason":      "update group membership"     
-#  }
-# }
-#
-  - name: mock-enterprise-api - get_customer - returns allow after escalation
-    skip: false
-    description: checking that the escalation token provides the appropriate override
-    decision-path: /v1/data/portcullis/tabular/decision
-    expects:
-      - substring: '"decision":"allow"'
-    input:
-      type: inline
-      value: >
-        {
-          "authorization_request": {
-            "action": {
-              "service": "mock-enterprise-api",
-              "tool_name": "get_customer"
-            },
-            "resource":{
-            },
-            "principal": {
-              "user_id": "alice@example.com",
-              "display_name": "Alice Developer",
-              "groups": ["blah"]
-            },
-            "context": {
-              "escalation_tokens":[
-                { "raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJwb3J0Y3VsbGlzIjp7InRvb2xzIjpbImdldF9jdXN0b21lciIsInVwZGF0ZV9pbnZlbnRvcnkiXSwic2VydmljZXMiOlsibW9jay1lbnRlcnByaXNlLWFwaSJdLCJncm91cHMiOlsiZGV2ZWxvcGVyIl0sImFyZ19yZXN0cmljdGlvbnMiOltdLCJyZWFzb24iOiJ1cGRhdGUgZ3JvdXAgbWVtYmVyc2hpcCJ9fQ.LDmDu7qxjrgU9dp_7WKBPCamLfeuj_6ZixN2dCmPmho"}
-              ]
-            }
-          },
-          "session_id": "tbd123",
-          "request_id": "req-abc123"
-        }
 
 
 
