@@ -51,7 +51,15 @@ After all of these are done, we integrate
 
 # Future steps
 
+## JWT ID
 when we hit the escalate path and find a JWT that satisfies the escalation 
 (so it becomes 'allow'), we should consider adding identity information about which
 JWT was used to the response, so it is captured in the decision log.
+
+## identity
+Stop looking at the groups in the Principal. Create the Principal object from the input request if and 
+only if the source_type is "os".  If the type is "oidc", create the principal object from the contents
+of the valid OIDC token, which must be a field in the principal section.  
+
+
 
