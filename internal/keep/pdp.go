@@ -65,12 +65,12 @@ type opaResource struct {
 // parsedURL holds a normalized, structured breakdown of a URL for easy policy authoring.
 // The path is cleaned to prevent traversal attacks before being sent to the PDP.
 type parsedURL struct {
-	Raw    string `json:"raw"`              // normalized form after parsing
-	Scheme string `json:"scheme"`           // e.g. "https"
-	Host   string `json:"host"`             // hostname without port
-	Port   string `json:"port,omitempty"`   // empty when using scheme default
-	Path   string `json:"path"`             // cleaned path, never contains ".."
-	Query  string `json:"query,omitempty"`  // raw query string
+	Raw    string `json:"raw"`             // normalized form after parsing
+	Scheme string `json:"scheme"`          // e.g. "https"
+	Host   string `json:"host"`            // hostname without port
+	Port   string `json:"port,omitempty"`  // empty when using scheme default
+	Path   string `json:"path"`            // cleaned path, never contains ".."
+	Query  string `json:"query,omitempty"` // raw query string
 }
 
 // urlFromArgs extracts a URL string from tool arguments, checking common key
@@ -152,9 +152,9 @@ type opaContext struct {
 // opaResponse is the envelope OPA returns: {"result": <decision>}.
 type opaResponse struct {
 	Result struct {
-		Decision        string         `json:"decision"`
-		Reason          string         `json:"reason"`
-		RequestID       string         `json:"request_id"`       // optionally echoed by the PDP
+		Decision        string           `json:"decision"`
+		Reason          string           `json:"reason"`
+		RequestID       string           `json:"request_id"`       // optionally echoed by the PDP
 		EscalationScope []map[string]any `json:"escalation_scope"` // claims required for escalation token
 	} `json:"result"`
 }

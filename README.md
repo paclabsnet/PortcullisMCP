@@ -34,61 +34,67 @@ Agent (Claude) <--> portcullis-gate <--> portcullis-keep <--> PDP (OPA)
 **Local vs. Enterprise Resources:**
 - **Gate** handles local filesystem access directly (fast-path, no network overhead)
 - **Keep** routes to enterprise HTTP MCP backends (APIs, databases, services that need policy enforcement)
+- **Guard** provides a mechanism for user escalation, granting rights to the agents to perform actions on the user's behalf
 
 This separation ensures:
 - Fast local operations (reads in sandbox)
 - Policy-enforced enterprise access (writes, APIs, databases)
 - Realistic enterprise architecture (no stdio in production)
 
-### 1. Start OPA
 
-```powershell
-docker-compose up -d
+### 1. Build the binaries
+
+```
+make build & make install
 ```
 
-This starts OPA on `http://localhost:8181` with the policies in the `policies/` directory.
 
-### 2. Build the binaries
+### 2. Start OPA, Portcullis (Guard/Keep) and the Fetch & Mock Enterprise MCPs
 
-```powershell
-go build -o bin/portcullis-keep.exe ./cmd/portcullis-keep
-go build -o bin/portcullis-gate.exe ./cmd/portcullis-gate
+```
+docker compose up --build
 ```
 
-### 3. Start the Mock HTTP MCP Server
+This starts OPA on `http://localhost:8181` with the policy bundle found in the `policies/rego` directory.
 
-In a separate terminal:
+It starts Portcullis Keep on port 8080
 
-```powershell
-go run ./examples/mock-enterprise-api
-```
+It starts Portcullis Guard on 8444
 
-This starts a mock enterprise API server on `http://localhost:3000/mcp` with example tools:
-- `get_customer` - Read customer data (allowed by policy)
-- `query_inventory` - Check inventory (allowed by policy)
-- `update_order_status` - Modify orders (requires escalation)
+It starts Mock Enterprise API on an arbitrary port
 
-### 4. Start portcullis-keep
+It starts Fetch on an arbitrary port
 
-```powershell
-.\bin\portcullis-keep.exe -config config/keep-config.minimal.yaml
-```
 
-This starts the Keep server on `http://localhost:8080` (no TLS for local testing).
 
-### 5. Start portcullis-gate
+### 3. Test it
 
-In a separate terminal:
+#### Step 1 - configure Claude Desktop / Goose / Whatever uses MCPs to be aware of Portcullis
 
-```powershell
-.\bin\portcullis-gate.exe -config config/gate-config.minimal.yaml
-```
+Provide the Agent with the location of the binary and the `--config` argument for the location of the
+`gate.yaml` file for configuration.
 
-This starts the Gate sidecar, which will connect to Keep.
+The Gate exposes an MCP server on stdio. It should start automatically once the Agent knows about it.
 
-### 6. Test it
+#### Step 2 - Restart Agent
 
-The Gate exposes an MCP server on stdio. You can test it by connecting an MCP client or using the management API at `http://localhost:7777`.
+The agent should be able to find portcullis if you ask, and it should be able to enumerate the functionality.
+
+You can verify that Gate is running by using the management API at `http://localhost:7777`.
+
+#### Step 3 - Actual tests
+
+"Please use portcullis to fetch the latest news from 'website'"
+
+"Please use portcullis to query orders for customer *random number*"
+
+"Please use portcullis to update the name of customer *random number* to Arbitrary Name"
+
+**this last one should cause an escalation event, which should come back to you in the form of a link**
+
+click the link to approve the request and get a JWT. Use the Gate web interface (port 7777 on localhost) to paste in the JWT.
+
+Now ask the agent to update the name again. This time, it should work.
 
 **Testing the flow:**
 - Local filesystem reads (Gate fast-path) - never reach Keep
@@ -137,10 +143,12 @@ backends:
 
 See `docs/opa-examples.md` for detailed policy examples and testing guidance.
 
-The included `policies/decision.rego` provides a minimal policy that:
+The included `policies/tabular/decision.rego` provides a minimal policy that:
 - Allows filesystem reads in the sandbox
-- Requires escalation for writes
+- Requires escalation for writes to certain directories
 - Denies access to protected paths (.git, .portcullis)
+- allows access to some of the mock enterprise APIs, but not others (without appropriate group access)
+- allows access to websites via fetch, with some that are denied and some that require escalation
 
 ## Features
 
@@ -161,7 +169,7 @@ The included `policies/decision.rego` provides a minimal policy that:
 
 ## Testing
 
-```powershell
+```
 go test ./...
 ```
 
