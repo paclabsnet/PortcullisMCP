@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 )
 
 // escalationRequestClaims are the JWT claims Keep embeds in approval URL tokens.
@@ -132,19 +133,22 @@ func (s *Server) verifyRequest(tokenStr string) (*escalationRequestClaims, error
 	return claims, nil
 }
 
-// issueEscalationToken signs a new escalation token granting the requested scope.
-func (s *Server) issueEscalationToken(claims *escalationRequestClaims) (string, time.Time, error) {
+// issueEscalationToken signs a new escalation token granting scope.
+// scope is typically claims.EscalationScope but may be an edited version
+// supplied by the approving user on the approval page.
+func (s *Server) issueEscalationToken(claims *escalationRequestClaims, scope []map[string]any) (string, time.Time, error) {
 	now := time.Now()
 	expiry := now.Add(s.ttl)
 	tokenClaims := escalationTokenClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        uuid.NewString(),
 			Issuer:    "portcullis-guard",
 			Subject:   claims.UserID,
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(expiry),
 		},
 		Portcullis: portcullisClaims{
-			ArgRestrictions: claims.EscalationScope,
+			ArgRestrictions: scope,
 			Tools:           []string{claims.Tool},
 			Services:        []string{claims.Server},
 		},
@@ -202,14 +206,31 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	escalationToken, expiry, err := s.issueEscalationToken(claims)
+	scope := claims.EscalationScope
+	if overrideStr := r.FormValue("scope_override"); overrideStr != "" {
+		var overrideScope []map[string]any
+		if err := json.Unmarshal([]byte(overrideStr), &overrideScope); err != nil {
+			http.Error(w, "invalid scope JSON in override", http.StatusBadRequest)
+			return
+		}
+		scope = overrideScope
+		slog.Info("approver modified escalation scope",
+			"user_id", claims.UserID,
+			"server", claims.Server,
+			"tool", claims.Tool,
+			"original_scope", claims.EscalationScope,
+			"override_scope", overrideScope,
+		)
+	}
+
+	escalationToken, expiry, err := s.issueEscalationToken(claims, scope)
 	if err != nil {
 		slog.Error("issue escalation token", "error", err)
 		http.Error(w, "failed to generate escalation token", http.StatusInternalServerError)
 		return
 	}
 
-	scopeJSON, _ := json.Marshal(claims.EscalationScope)
+	scopeJSON, _ := json.Marshal(scope)
 	slog.Info("escalation token issued",
 		"user_id", claims.UserID,
 		"user_display_name", claims.UserDisplayName,

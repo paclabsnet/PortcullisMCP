@@ -2,6 +2,7 @@ package keep
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -24,6 +25,7 @@ type escalationRequestClaims struct {
 // Workflow plugins embed these JWTs in approval URLs or workflow tickets.
 // If no signing key is configured, Sign returns an empty string (no JWT).
 type EscalationSigner struct {
+	mu  sync.Mutex
 	key []byte
 	ttl time.Duration
 }
@@ -47,6 +49,8 @@ func (s *EscalationSigner) Sign(req shared.EnrichedMCPRequest, reason string, sc
 	if s == nil {
 		return "", fmt.Errorf("escalation signing not configured")
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	now := time.Now()
 	claims := escalationRequestClaims{
 		RegisteredClaims: jwt.RegisteredClaims{

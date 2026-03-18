@@ -60,9 +60,34 @@
     }
     #token-list li:last-child { border-bottom: none; }
     .token-meta { flex: 1; min-width: 0; }
-    .token-id   { font-family: monospace; font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .token-id-wrap { position: relative; display: inline-block; max-width: 100%; }
+    .token-id   { font-family: monospace; font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: default; }
     .token-by   { font-size: 0.8rem; color: #888; margin-top: 0.1rem; }
     .empty      { color: #999; font-size: 0.9rem; padding: 0.5rem 0; }
+
+    /* Hover tooltip */
+    .token-tooltip {
+      display: none;
+      position: absolute;
+      left: 0; top: calc(100% + 4px);
+      background: #fff;
+      border: 1px solid #d0d0d0;
+      border-radius: 7px;
+      padding: 0.6rem 0.85rem;
+      font-size: 0.8rem;
+      white-space: nowrap;
+      z-index: 100;
+      box-shadow: 0 3px 12px rgba(0,0,0,0.13);
+      min-width: 220px;
+      color: #1a1a1a;
+    }
+    .token-id-wrap:hover .token-tooltip { display: block; }
+    .tip-row { display: flex; gap: 0.5rem; margin-bottom: 0.25rem; }
+    .tip-row:last-child { margin-bottom: 0; }
+    .tip-label { color: #666; min-width: 70px; flex-shrink: 0; }
+    .tip-value { font-family: monospace; }
+    .tip-section { margin-top: 0.4rem; border-top: 1px solid #f0f0f0; padding-top: 0.4rem; }
+    .tip-title { font-weight: 600; color: #555; margin-bottom: 0.25rem; font-family: inherit; }
 
     /* Shared secret field */
     #secret-row {
@@ -240,6 +265,31 @@
 
   // ── Escalation tokens ────────────────────────────────────────────────────────
 
+  function buildTooltip(t) {
+    let rows = '';
+    if (t.expiry)    rows += `<div class="tip-row"><span class="tip-label">Expires</span><span class="tip-value">${esc(t.expiry)}</span></div>`;
+    if (t.subject)   rows += `<div class="tip-row"><span class="tip-label">Subject</span><span class="tip-value">${esc(t.subject)}</span></div>`;
+    if (t.granted_by) rows += `<div class="tip-row"><span class="tip-label">Granted by</span><span class="tip-value">${esc(t.granted_by)}</span></div>`;
+
+    const pc = t.portcullis || {};
+    if ((pc.tools && pc.tools.length) || (pc.services && pc.services.length) || (pc.arg_restrictions && pc.arg_restrictions.length)) {
+      rows += `<div class="tip-section">`;
+      if (pc.tools && pc.tools.length)
+        rows += `<div class="tip-row"><span class="tip-label">Tools</span><span class="tip-value">${pc.tools.map(esc).join(', ')}</span></div>`;
+      if (pc.services && pc.services.length)
+        rows += `<div class="tip-row"><span class="tip-label">Services</span><span class="tip-value">${pc.services.map(esc).join(', ')}</span></div>`;
+      if (pc.arg_restrictions && pc.arg_restrictions.length) {
+        rows += `<div class="tip-title">Restrictions</div>`;
+        pc.arg_restrictions.forEach(r => {
+          const parts = Object.entries(r).map(([k,v]) => `${esc(k)}: ${esc(String(v))}`).join(' · ');
+          rows += `<div class="tip-row"><span class="tip-value">${parts}</span></div>`;
+        });
+      }
+      rows += `</div>`;
+    }
+    return rows ? `<div class="token-tooltip">${rows}</div>` : '';
+  }
+
   async function loadTokens() {
     const list = document.getElementById('token-list');
     try {
@@ -253,15 +303,23 @@
       list.innerHTML = tokens.map(t => `
         <li>
           <div class="token-meta">
-            <div class="token-id" title="${esc(t.token_id)}">${esc(t.token_id)}</div>
+            <div class="token-id-wrap">
+              <div class="token-id">${esc(t.token_id)}</div>
+              ${buildTooltip(t)}
+            </div>
             ${t.granted_by ? `<div class="token-by">Granted by ${esc(t.granted_by)}</div>` : ''}
           </div>
-          <button class="btn-danger" onclick="deleteToken('${esc(t.token_id)}')">Remove</button>
+          <button class="btn-danger" data-id="${esc(t.token_id)}">Remove</button>
         </li>`).join('');
     } catch (e) {
       list.innerHTML = `<li class="empty" style="color:#c5221f">${esc(e.message)}</li>`;
     }
   }
+
+  document.getElementById('token-list').addEventListener('click', e => {
+    const btn = e.target.closest('.btn-danger[data-id]');
+    if (btn) deleteToken(btn.dataset.id);
+  });
 
   async function addToken() {
     const btn = document.getElementById('add-btn');

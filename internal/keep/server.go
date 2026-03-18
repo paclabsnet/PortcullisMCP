@@ -290,7 +290,7 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
 		s.decisionLog.Log(&entries[i])
 	}
 
-	writeJSON(w, http.StatusAccepted, map[string]interface{}{
+	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status": "accepted",
 		"count":  len(entries),
 	})

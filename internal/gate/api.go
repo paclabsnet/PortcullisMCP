@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"time"
 )
 
 //go:embed web/index.html
@@ -96,15 +97,55 @@ func (ms *ManagementServer) handleUI(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write(uiHTML)
 }
 
-func (ms *ManagementServer) handleList(w http.ResponseWriter, r *http.Request) {
+func (ms *ManagementServer) handleList(w http.ResponseWriter, _ *http.Request) {
 	tokens := ms.store.All()
+	type portcullisClaims struct {
+		ArgRestrictions []map[string]any `json:"arg_restrictions,omitempty"`
+		Tools           []string         `json:"tools,omitempty"`
+		Services        []string         `json:"services,omitempty"`
+	}
 	type item struct {
-		TokenID   string `json:"token_id"`
-		GrantedBy string `json:"granted_by"`
+		TokenID    string           `json:"token_id"`
+		GrantedBy  string           `json:"granted_by,omitempty"`
+		Subject    string           `json:"subject,omitempty"`
+		Expiry     string           `json:"expiry,omitempty"`
+		Portcullis portcullisClaims `json:"portcullis,omitempty"`
 	}
 	out := make([]item, len(tokens))
 	for i, t := range tokens {
-		out[i] = item{TokenID: t.TokenID, GrantedBy: t.GrantedBy}
+		it := item{TokenID: t.TokenID, GrantedBy: t.GrantedBy}
+		if claims, err := unsafeParseJWTClaims(t.Raw); err == nil {
+			if exp, ok := claims["exp"].(float64); ok {
+				it.Expiry = time.Unix(int64(exp), 0).Local().Format("2006-01-02 15:04:05")
+			}
+			if sub, ok := claims["sub"].(string); ok && sub != t.TokenID {
+				it.Subject = sub
+			}
+			if pc, ok := claims["portcullis"].(map[string]any); ok {
+				if v, ok := pc["tools"].([]any); ok {
+					for _, s := range v {
+						if str, ok := s.(string); ok {
+							it.Portcullis.Tools = append(it.Portcullis.Tools, str)
+						}
+					}
+				}
+				if v, ok := pc["services"].([]any); ok {
+					for _, s := range v {
+						if str, ok := s.(string); ok {
+							it.Portcullis.Services = append(it.Portcullis.Services, str)
+						}
+					}
+				}
+				if v, ok := pc["arg_restrictions"].([]any); ok {
+					for _, r := range v {
+						if m, ok := r.(map[string]any); ok {
+							it.Portcullis.ArgRestrictions = append(it.Portcullis.ArgRestrictions, m)
+						}
+					}
+				}
+			}
+		}
+		out[i] = it
 	}
 	writeJSON(w, http.StatusOK, out)
 }
