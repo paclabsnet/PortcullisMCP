@@ -61,5 +61,62 @@ Stop looking at the groups in the Principal. Create the Principal object from th
 only if the source_type is "os".  If the type is "oidc", create the principal object from the contents
 of the valid OIDC token, which must be a field in the principal section.  
 
+## additional argument tests
+- contains
+- regexp_match
+- is_equal
+- is_in_range
+- is_gt
+- is_lt
+- is_gte
+- is_lte
+
+
+
+## Redo the argument evaluator using this model:
+
+rules := [
+    {
+        "id": "prefix_check",
+        "type": "prefix",
+        "prefix": "acme-",
+        "description": "Value must start with 'acme-'"
+    },
+    {
+        "id": "range_check", 
+        "type": "range",
+        "min": 1,
+        "max": 100,
+        "description": "Value must be between 1 and 100"
+    },
+    {
+        "id": "regex_check",
+        "type": "regex",
+        "pattern": `^[a-z]+$`,
+        "description": "Value must be lowercase letters only"
+    }
+]
+
+# The dispatcher - one place that knows how to evaluate each type
+rule_passes(input_val, rule) if {
+    rule.type == "prefix"
+    startswith(input_val, rule.prefix)
+}
+
+rule_passes(input_val, rule) if {
+    rule.type == "range"
+    input_val >= rule.min
+    input_val <= rule.max
+}
+
+rule_passes(input_val, rule) if {
+    rule.type == "regex"
+    regex.match(rule.pattern, input_val)
+}
+
+
+
+
+
 
 
