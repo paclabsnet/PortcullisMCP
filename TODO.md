@@ -1,0 +1,134 @@
+# Phase 2
+
+## Tasks
+
+### Task: Open Source It
+- we need to make sure the architecture is designed around the assumption that this is open source.
+- As few opinions as possible. For example:  identity, which PDP to use, how secrets are gathered
+- keep the basic implementation as light as possible, so you don't have to set up a ton of infrastructure to get started
+- move the docker stuff into a subdirectory.  The docker model is useful as a personal sandbox to try it out, not for actual enterprise implementations
+- it is absolutely critical not to turn this into Kubernetes, with a huge learning curve and significant infrastructure just to play around with it
+
+
+### Task: Fix Escalation
+- Modify Guard to hold the escalation tokens in some sort of in-memory keystore, ideally a distributed keystore
+- Modify Gate to detect when Keep has responded with an escalation event, and set it to call Guard on the next outbound MCP call to collect any new e-tokens
+- Use the UserIdentity.UserId field from the JWT as the key. 
+
+### Task: Improve Identity
+- Modify Keep to process identity in whatever format (OIDC, Cert, etc), and normalize them to the Principal object that is sent to the PDP for authorization
+- Need a plugin model for Keep's identity normalization process
+
+### Task: Improve API
+- We need to version Keep's API with Gate, or version the Wrapped MCP Request, or both, so we know what to expect in the contents
+- We need to version the logging API (how Gate sends logs to Keep)
+
+### Task: Improve Secret Management
+- We probably need to support a way to gather secrets (Private keys, shared secrets) from a vault, but don't get rid of the config option for the sandbox model
+
+### Task: Plugabble Logging
+- We need Keep to support multiple decision logging strategies
+- perhaps some sort of LogSink interface with multiple destinations?
+
+### Task: Acquire Human Credentials
+- Support a local token store
+- what about adding credentials to a keychain instead of a local file. Perhaps another option.
+- Device authorization grant
+
+### Task: Improve JWT security at the PDP
+- the PDP should not only verify that the JWTs are valid, but it should also only accept JWTs where the UserID from the Principal matches the Subject embedded in the JWT
+**JB**
+
+### Task: Fail closed for Gate if Keep is unavailable
+- this is not super important, since if Keep is down, no non-local MCP requests can occur
+- Basically, ensure that Gate indicates to the user that the Portcullis server is not available right now, try again later.
+- low priority
+
+### Task: Add telemetry to the standard flow
+- use OpenTelemetry
+- add trace headers to the MCP call from Gate
+- update slog to include trace ids in the log messages
+- add the trace information to the headers going to the PDP
+
+### Task: at the PDP, Get rid of RequestId, use TraceID instead
+- this allows the trace to be included in the deny message
+**JB**
+
+### Task: Optionally Include the traceid in the Deny message back to the user
+- purpose: allows a user to escalate to the enterprise security team if they aren't allowed to do something they think they should be able to
+- low priority
+
+### Task: Optionally create a Gate API to collect the list of DENY responses, along with trace/session information
+- not sure if this is necessary. It might be helpful for troubleshooting
+- low priority
+
+### Task: Tabular -> Custom failover
+- instead of Tabular and Custom being equivalent, perhaps we just use custom when the tabular rules don't come up with an answer
+- basically
+```
+decision := custom.decision if {
+   decision == undefined
+}
+```
+
+An interesting idea if it works. Will need to update the Rego to test.
+**JB**
+
+### Task: Identity at Keep - Demo vs Real
+The default behavior for Keep should be to ignore any identity information sent by Gate except maybe UserId, when the source is `os`.
+When Keep is in demo mode, it will accept forged identity information. It should generate an error message each time it does this unless
+the config says to accept forged identities (dependent on demo mode)
+
+- high priority
+
+### Task: Input sanitizing at Keep and Guard
+- standard good hygiene
+
+- medium-low priority
+
+### Task: Keep should not follow redirects when calling MCPs via HTTP
+- SSRF protection
+- optionally: block RFC 1918, loopback, and link-local ranges at the HTTP client level for backend calls
+
+- medium priority
+
+
+
+## Implementation notes
+
+### Fix Escalation 
+  So the implementation is really just:
+  - An in-memory map[string]PendingEscalation in Gate (keyed by ServerName+ToolName or EscalationID)
+  - One check added to the tools/call path before forwarding to Keep
+  - One POST /tokens/claim endpoint on Guard
+  - Guard holds the token in a simple store (even in-memory with a TTL is fine) until claimed 
+  - in a real enterprise, this would be a distributed cache, perhaps Redis, but that's overkill for now
+
+
+
+
+
+
+### Acquire Human Credentials
+
+#### Option A: Device Authorization Grant (RFC 8628)
+  Gate initiates auth by calling the IdP's device authorization endpoint. The IdP returns a short user code and a URL. Gate prints (or surfaces via the agent) something like:
+
+  "Visit https://login.enterprise.com/activate and enter code: WXYZ-1234"                                                             
+
+  The user visits that URL on any browser, any device. Gate polls the IdP token endpoint until the user completes it. No redirect URI, no localhost web server at all.
+
+  This is how gh auth login, az login, and most CLI tools handle this today. 
+
+#### Option B: Enterprise-injected token file (already in your design)
+  The config already has token file: "~/.portcullis/oidc-token". The enterprise deploys an SSO agent (Okta Device Trust, a custom
+  refresh daemon, etc.) that keeps this file current. Gate reads it. Gate never touches OAuth at all.                              
+  This is the right answer for a mature enterprise deployment where the org already manages endpoint identity.                     
+
+
+#### Recommendation for Portcullis:
+  Why not both?
+  1. Token file — primary, enterprise-managed, zero Gate complexity
+  2. Device flow — fallback when no valid token file exists; works everywhere, no localhost trust issues, fits the CLI/daemon model
+
+

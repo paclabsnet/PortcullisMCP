@@ -4,10 +4,12 @@
 
 PortcullisMCP is a policy enforcement gateway for AI agents. It sits between AI agents (Claude, Copilot, etc.) and MCP servers, enforcing enterprise access policies through an external Policy Decision Point (PDP).
 
+PortcullisMCP tries to avoid being opinionated about anything outside of the core functional loop.
+
 ## Architecture
 
 ```
-Agent (Claude) <--> portcullis-gate <--> portcullis-keep <--> PDP (OPA)
+Agent <--> portcullis-gate <--> portcullis-keep <--> PDP (OPA)
      |                     |                    |
      |                     |                    +--> HTTP MCP Backends
      |                     |                    |    (APIs, DBs, enterprise services)
@@ -63,18 +65,29 @@ It starts Portcullis Guard on 8444
 
 It starts Mock Enterprise API on an arbitrary port
 
-It starts Fetch on an arbitrary port
+It starts Fetch (website digestor) on an arbitrary port
 
 
 
 ### 3. Test it
 
-#### Step 1 - configure Claude Desktop / Goose / Whatever uses MCPs to be aware of Portcullis
+#### Step 1 - configure the agent using MCPs to be aware of Portcullis
 
 Provide the Agent with the location of the binary and the `--config` argument for the location of the
 `gate.yaml` file for configuration.
 
 The Gate exposes an MCP server on stdio. It should start automatically once the Agent knows about it.
+
+example for Claude desktop:
+```
+  "mcpServers": {
+      "portcullis": {
+         "command": "portcullis-gate",
+         "args": ["-config", "/home/johnb/.portcullis/gate.yaml"]
+      }
+
+  },
+```
 
 #### Step 2 - Restart Agent
 
@@ -100,16 +113,30 @@ Now ask the agent to update the name again. This time, it should work.
 - Local filesystem reads (Gate fast-path) - never reach Keep
 - Enterprise API calls (mock-enterprise-api backend) - routed through Keep → OPA → Mock server
 - Policy denies/escalations are visible in Keep logs
-- Check OPA decisions: `curl http://localhost:8181/v1/data/portcullis/decision -d @test-request.json`
+- OPA decisions will show up in the combined Docker log
 
 ## Configuration
 
-### Minimal (for local testing)
-- `config/gate-config.minimal.yaml` - Local testing without TLS
-- `config/keep-config.minimal.yaml` - Local testing without TLS
+### Docker Demo (for local testing)
+- `docker/guard-demo.yaml` - listening on port, shared secrets for OPA and Keep
+- `docker/keep-demo.yaml` - listening on port, shared secrets, OPA path, MCP backends, how to escalate, what to do with decision logs
+- `docker/opa-config.yaml` - sends decision logs to the console
 
-**Testing Group-Based Policies:**
-When using OS identity source (for local testing), you can override user identity fields:
+- `gate.yaml` can be used to set identity information when the source type is `os`. See the *Overriding Identity in gate.yaml* section below for more info.
+
+### Minimal
+- `config/gate-config.minimal.yaml` 
+- `config/keep-config.minimal.yaml`
+- `config/guard-config.minimal.yaml`
+
+
+### Full (for production)
+- `config/gate-config.example.yaml` - Full configuration with mTLS
+- `config/keep-config.example.yaml` - Full configuration with mTLS and all features
+
+
+### Overriding Identity in gate.yaml
+When using OS identity source (for PoC testing), you can override user identity fields:
 ```yaml
 identity:
   source: "os"
@@ -119,11 +146,9 @@ identity:
     - "developers"
     - "admin"
 ```
-This allows testing different user scenarios and group-based OPA policies without OIDC infrastructure. If `user_id` is not specified, it defaults to the OS username.
+This allows testing different user scenarios and group-based OPA policies without OIDC infrastructure. If `user_id` is not specified, it defaults t
+o the OS username.
 
-### Full (for production)
-- `config/gate-config.example.yaml` - Full configuration with mTLS
-- `config/keep-config.example.yaml` - Full configuration with mTLS and all features
 
 ### Environment Variables
 
