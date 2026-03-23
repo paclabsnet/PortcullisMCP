@@ -66,6 +66,7 @@ type EnrichedMCPRequest struct {
 	EscalationTokens []EscalationToken `json:"escalation_tokens"`
 	SessionID        string            `json:"session_id"`
 	RequestID        string            `json:"request_id"`
+	TraceID          string            `json:"trace_id,omitempty"` // W3C trace ID, set by Gate when telemetry is enabled
 }
 
 // PDPResponse is the decision returned by the Policy Decision Point.

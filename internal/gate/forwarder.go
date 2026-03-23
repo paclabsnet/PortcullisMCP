@@ -25,6 +25,9 @@ import (
 	"os"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 )
 
@@ -104,6 +107,8 @@ func (f *Forwarder) post(ctx context.Context, path string, body, out any) error 
 	if f.cfg.Auth.Type == "bearer" && f.cfg.Auth.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+f.cfg.Auth.Token)
 	}
+	// Inject W3C TraceContext headers so Keep continues the same trace.
+	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
 
 	resp, err := f.client.Do(req)
 	if err != nil {

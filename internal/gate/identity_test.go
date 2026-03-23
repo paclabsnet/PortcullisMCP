@@ -26,6 +26,10 @@ import (
 
 // buildJWT creates a structurally valid but signature-less JWT for testing
 // identity parsing (which explicitly skips signature verification).
+//
+// Numeric claims such as "exp" must be passed as float64. Go's encoding/json
+// decodes all JSON numbers into map[string]any as float64, so using float64
+// here matches what real JWT parsing produces at runtime.
 func buildJWT(claims map[string]any) string {
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
 	payload, _ := json.Marshal(claims)

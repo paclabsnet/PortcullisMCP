@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
@@ -126,8 +127,9 @@ func TestServiceNowHandler_Submit(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			// Extract host from TLS URL (remove https://)
-			host := srv.URL[8:]
+			// ServiceNow config takes just the host, not a full URL.
+			// httptest.NewTLSServer always uses "https://", so strip that prefix.
+			host := strings.TrimPrefix(srv.URL, "https://")
 
 			cfg := ServiceNowConfig{
 				Instance:      host,

@@ -20,6 +20,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
+	telemetrycfg "github.com/paclabsnet/PortcullisMCP/internal/telemetry"
 )
 
 // Config holds the full portcullis-keep configuration loaded from keep.yaml.
@@ -32,6 +33,7 @@ type Config struct {
 	EscalationRequestSigning SigningConfig             `yaml:"escalation_request_signing"`
 	Admin                    AdminConfig              `yaml:"admin"`
 	Identity                 IdentityConfig           `yaml:"identity"`
+	Telemetry                telemetrycfg.Config      `yaml:"telemetry"`
 }
 
 // IdentityConfig controls how Keep handles the UserIdentity claims sent by Gate.

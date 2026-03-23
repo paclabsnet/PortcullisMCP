@@ -42,3 +42,14 @@ guard:
   endpoint: "https://guard.internal.example.com"
   bearer_token: "${GUARD_BEARER_TOKEN}"  # must match guard.auth.bearer_token
   poll_interval: 60  # seconds between polls of /token/unclaimed/list (default: 60)
+
+telemetry:
+  # Supported exporters:
+  #   noop   - no telemetry (default)
+  #   stdout - print spans to stdout (development)
+  #   otlp   - send to an OTLP collector (production)
+  exporter: "noop"
+  service_name: "portcullis-gate"
+  # otlp:
+  #   endpoint: "http://otel-collector.internal.example.com:4318"  # OTLP HTTP endpoint
+  #   insecure: true  # set false (default) to require TLS

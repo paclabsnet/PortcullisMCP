@@ -14,16 +14,19 @@
 
 package gate
 
+import telemetrycfg "github.com/paclabsnet/PortcullisMCP/internal/telemetry"
+
 // Config holds the full portcullis-gate configuration loaded from gate.yaml.
 type Config struct {
-	Keep           KeepConfig       `yaml:"keep"`
-	Guard          GuardConfig      `yaml:"guard"`
-	Identity       IdentityConfig   `yaml:"identity"`
-	Sandbox        SandboxConfig    `yaml:"sandbox"`
-	ProtectedPaths []string         `yaml:"protected_paths"`
+	Keep           KeepConfig             `yaml:"keep"`
+	Guard          GuardConfig            `yaml:"guard"`
+	Identity       IdentityConfig         `yaml:"identity"`
+	Sandbox        SandboxConfig          `yaml:"sandbox"`
+	ProtectedPaths []string               `yaml:"protected_paths"`
 	ManagementAPI  MgmtAPIConfig          `yaml:"management_api"`
-	TokenStore     string                `yaml:"token_store"`
+	TokenStore     string                 `yaml:"token_store"`
 	DecisionLogs   DecisionLogBatchConfig `yaml:"decision_logs"`
+	Telemetry      telemetrycfg.Config    `yaml:"telemetry"`
 }
 
 type KeepConfig struct {

@@ -25,8 +25,13 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+
 	"github.com/paclabsnet/PortcullisMCP/internal/gate/localfs"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
+	"github.com/paclabsnet/PortcullisMCP/internal/telemetry"
 )
 
 // DecisionLogEntry is a fast-path decision log entry sent to Keep.
@@ -218,7 +223,15 @@ func (g *Gate) registerTool(tool *mcp.Tool) {
 // handleToolCall applies the fast-path, logs the decision, and routes the call
 // to either the local filesystem server or Keep.
 func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[string]any) (*mcp.CallToolResult, error) {
+	ctx, span := otel.Tracer("portcullis-gate").Start(ctx, "gate.tool_call")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("tool.name", toolName),
+		attribute.String("session.id", g.sessionID),
+	)
+
 	requestID := uuid.New().String()
+	traceID := telemetry.TraceIDFromContext(ctx)
 
 	fpResult, err := g.FastPath(ctx, toolName, args)
 	if err != nil {
@@ -233,7 +246,8 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 
 	switch fpResult {
 	case FastPathAllow:
-		slog.Info("fast-path allow", "tool", toolName, "path", path, "request_id", requestID)
+		span.SetAttributes(attribute.String("pdp.decision", "allow"), attribute.String("pdp.source", "fastpath"))
+		slog.InfoContext(ctx, "fast-path allow", "tool", toolName, "path", path, "request_id", requestID, "trace_id", traceID)
 
 		// Queue decision log entry
 		select {
@@ -261,7 +275,9 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 		})
 
 	case FastPathDeny:
-		slog.Info("fast-path deny", "tool", toolName, "path", path, "request_id", requestID)
+		span.SetAttributes(attribute.String("pdp.decision", "deny"), attribute.String("pdp.source", "fastpath"))
+		span.SetStatus(codes.Error, "fast-path deny")
+		slog.InfoContext(ctx, "fast-path deny", "tool", toolName, "path", path, "request_id", requestID, "trace_id", traceID)
 
 		// Queue decision log entry
 		select {
@@ -296,6 +312,7 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 			EscalationTokens: g.collectEscalationTokens(ctx, shared.LocalFSServerName, toolName),
 			SessionID:        g.sessionID,
 			RequestID:        requestID,
+			TraceID:          traceID,
 		}
 		if err := g.forwarder.Authorize(ctx, enriched); err != nil {
 			g.maybeStorePendingEscalation(shared.LocalFSServerName, toolName, err)
@@ -324,6 +341,7 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 		EscalationTokens: g.collectEscalationTokens(ctx, serverName, toolName),
 		SessionID:        g.sessionID,
 		RequestID:        requestID,
+		TraceID:          traceID,
 	}
 	result, err := g.forwarder.CallTool(ctx, enriched)
 	if err != nil {

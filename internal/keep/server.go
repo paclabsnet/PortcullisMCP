@@ -26,7 +26,13 @@ import (
 	"os"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
+	"github.com/paclabsnet/PortcullisMCP/internal/telemetry"
 )
 
 // MCPRouter defines the interface for routing MCP tool calls to backends.
@@ -136,26 +142,42 @@ func (s *Server) Run(ctx context.Context) error {
 
 // handleCall processes an enriched MCP tool call request from gate.
 func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
+	// Extract trace context propagated by Gate and create a child span.
+	ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+	ctx, span := otel.Tracer("portcullis-keep").Start(ctx, "keep.evaluate")
+	defer span.End()
+
 	var req shared.EnrichedMCPRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
+	traceID := telemetry.TraceIDFromContext(ctx)
+	span.SetAttributes(
+		attribute.String("tool.name", req.ToolName),
+		attribute.String("server.name", req.ServerName),
+		attribute.String("user.id", req.UserIdentity.UserID),
+		attribute.String("request.id", req.RequestID),
+	)
+
 	req.UserIdentity = normalizeIdentity(req.UserIdentity, s.cfg.Identity)
 
-	pdpResp, err := s.pdp.Evaluate(r.Context(), req)
+	pdpResp, err := s.pdp.Evaluate(ctx, req)
 	if err != nil {
-		slog.Error("pdp evaluate failed", "error", err, "request_id", req.RequestID)
+		span.SetStatus(codes.Error, err.Error())
+		slog.ErrorContext(ctx, "pdp evaluate failed", "error", err, "request_id", req.RequestID, "trace_id", traceID)
 		writeError(w, http.StatusServiceUnavailable, shared.ErrPDPUnavailable.Error())
 		return
 	}
 
-	slog.Info("pdp decision",
+	span.SetAttributes(attribute.String("pdp.decision", pdpResp.Decision))
+	slog.InfoContext(ctx, "pdp decision",
 		"decision", pdpResp.Decision,
 		"tool", req.ToolName,
 		"user", req.UserIdentity.UserID,
 		"request_id", req.RequestID,
+		"trace_id", traceID,
 	)
 
 	// Log the decision
@@ -174,16 +196,18 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 
 	switch pdpResp.Decision {
 	case "allow":
-		result, err := s.router.CallTool(r.Context(), req.ServerName, req.ToolName, req.Arguments)
+		result, err := s.router.CallTool(ctx, req.ServerName, req.ToolName, req.Arguments)
 		if err != nil {
-			slog.Error("backend call failed", "error", err, "server", req.ServerName, "tool", req.ToolName, "request_id", req.RequestID)
+			span.SetStatus(codes.Error, err.Error())
+			slog.ErrorContext(ctx, "backend call failed", "error", err, "server", req.ServerName, "tool", req.ToolName, "request_id", req.RequestID, "trace_id", traceID)
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("backend call failed: %s", err))
 			return
 		}
 		writeJSON(w, http.StatusOK, result)
 
 	case "deny":
-		writeError(w, http.StatusForbidden, pdpResp.Reason)
+		span.SetStatus(codes.Error, "denied by policy")
+		writeDeny(w, pdpResp.Reason, traceID)
 
 	case "escalate":
 		escalationJWT := ""
@@ -191,16 +215,17 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		if s.signer != nil {
 			jwtStr, jti, err := s.signer.Sign(req, pdpResp.Reason, pdpResp.EscalationScope)
 			if err != nil {
-				slog.Error("escalation jwt sign failed", "error", err, "request_id", req.RequestID)
+				slog.ErrorContext(ctx, "escalation jwt sign failed", "error", err, "request_id", req.RequestID, "trace_id", traceID)
 				// Non-fatal: continue without JWT; some workflow handlers may still function.
 			} else {
 				escalationJWT = jwtStr
 				escalationJTI = jti
 			}
 		}
-		wfRef, err := s.workflow.Submit(r.Context(), req, escalationJWT)
+		wfRef, err := s.workflow.Submit(ctx, req, escalationJWT)
 		if err != nil {
-			slog.Error("workflow submit failed", "error", err, "request_id", req.RequestID)
+			span.SetStatus(codes.Error, err.Error())
+			slog.ErrorContext(ctx, "workflow submit failed", "error", err, "request_id", req.RequestID, "trace_id", traceID)
 			writeError(w, http.StatusInternalServerError, "escalation submission failed")
 			return
 		}
@@ -214,8 +239,9 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		})
 
 	default:
-		slog.Error("unknown pdp decision", "decision", pdpResp.Decision, "request_id", req.RequestID)
-		writeError(w, http.StatusForbidden, "unknown pdp decision — denied by default")
+		span.SetStatus(codes.Error, "unknown decision")
+		slog.ErrorContext(ctx, "unknown pdp decision", "decision", pdpResp.Decision, "request_id", req.RequestID, "trace_id", traceID)
+		writeDeny(w, "unknown pdp decision — denied by default", traceID)
 	}
 }
 
@@ -223,26 +249,41 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 // decision without executing the tool. Gate uses this for local filesystem ops:
 // it asks Keep "is this allowed?" and, if so, executes the tool locally itself.
 func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
+	ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+	ctx, span := otel.Tracer("portcullis-keep").Start(ctx, "keep.authorize")
+	defer span.End()
+
 	var req shared.EnrichedMCPRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
+	traceID := telemetry.TraceIDFromContext(ctx)
+	span.SetAttributes(
+		attribute.String("tool.name", req.ToolName),
+		attribute.String("server.name", req.ServerName),
+		attribute.String("user.id", req.UserIdentity.UserID),
+		attribute.String("request.id", req.RequestID),
+	)
+
 	req.UserIdentity = normalizeIdentity(req.UserIdentity, s.cfg.Identity)
 
-	pdpResp, err := s.pdp.Evaluate(r.Context(), req)
+	pdpResp, err := s.pdp.Evaluate(ctx, req)
 	if err != nil {
-		slog.Error("pdp evaluate failed", "error", err, "request_id", req.RequestID)
+		span.SetStatus(codes.Error, err.Error())
+		slog.ErrorContext(ctx, "pdp evaluate failed", "error", err, "request_id", req.RequestID, "trace_id", traceID)
 		writeError(w, http.StatusServiceUnavailable, shared.ErrPDPUnavailable.Error())
 		return
 	}
 
-	slog.Info("pdp decision (authorize)",
+	span.SetAttributes(attribute.String("pdp.decision", pdpResp.Decision))
+	slog.InfoContext(ctx, "pdp decision (authorize)",
 		"decision", pdpResp.Decision,
 		"tool", req.ToolName,
 		"user", req.UserIdentity.UserID,
 		"request_id", req.RequestID,
+		"trace_id", traceID,
 	)
 
 	s.decisionLog.Log(&DecisionLogEntry{
@@ -263,7 +304,8 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, pdpResp)
 
 	case "deny":
-		writeError(w, http.StatusForbidden, pdpResp.Reason)
+		span.SetStatus(codes.Error, "denied by policy")
+		writeDeny(w, pdpResp.Reason, traceID)
 
 	case "escalate":
 		escalationJWT := ""
@@ -271,15 +313,16 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		if s.signer != nil {
 			jwtStr, jti, err := s.signer.Sign(req, pdpResp.Reason, pdpResp.EscalationScope)
 			if err != nil {
-				slog.Error("escalation jwt sign failed", "error", err, "request_id", req.RequestID)
+				slog.ErrorContext(ctx, "escalation jwt sign failed", "error", err, "request_id", req.RequestID, "trace_id", traceID)
 			} else {
 				escalationJWT = jwtStr
 				escalationJTI = jti
 			}
 		}
-		wfRef, err := s.workflow.Submit(r.Context(), req, escalationJWT)
+		wfRef, err := s.workflow.Submit(ctx, req, escalationJWT)
 		if err != nil {
-			slog.Error("workflow submit failed", "error", err, "request_id", req.RequestID)
+			span.SetStatus(codes.Error, err.Error())
+			slog.ErrorContext(ctx, "workflow submit failed", "error", err, "request_id", req.RequestID, "trace_id", traceID)
 			writeError(w, http.StatusInternalServerError, "escalation submission failed")
 			return
 		}
@@ -293,8 +336,9 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		})
 
 	default:
-		slog.Error("unknown pdp decision", "decision", pdpResp.Decision, "request_id", req.RequestID)
-		writeError(w, http.StatusForbidden, "unknown pdp decision — denied by default")
+		span.SetStatus(codes.Error, "unknown decision")
+		slog.ErrorContext(ctx, "unknown pdp decision", "decision", pdpResp.Decision, "request_id", req.RequestID, "trace_id", traceID)
+		writeDeny(w, "unknown pdp decision — denied by default", traceID)
 	}
 }
 
@@ -398,6 +442,16 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+// writeDeny writes a 403 response that includes the trace ID when available,
+// so users can reference it when escalating to the security team.
+func writeDeny(w http.ResponseWriter, reason, traceID string) {
+	body := map[string]string{"error": reason}
+	if traceID != "" {
+		body["trace_id"] = traceID
+	}
+	writeJSON(w, http.StatusForbidden, body)
 }
 
 // authMiddleware validates the bearer token if configured.

@@ -26,6 +26,7 @@ import (
 
 	"github.com/paclabsnet/PortcullisMCP/internal/gate"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
+	"github.com/paclabsnet/PortcullisMCP/internal/telemetry"
 	"github.com/paclabsnet/PortcullisMCP/internal/version"
 )
 
@@ -43,6 +44,13 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	shutdownTelemetry, err := telemetry.Setup(ctx, cfg.Telemetry)
+	if err != nil {
+		slog.Error("init telemetry", "error", err)
+		os.Exit(1)
+	}
+	defer func() { _ = shutdownTelemetry(context.Background()) }()
 
 	g, err := gate.New(ctx, cfg)
 	if err != nil {
