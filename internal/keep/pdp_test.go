@@ -22,6 +22,11 @@ import (
 	"strings"
 	"testing"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 )
 
@@ -181,6 +186,59 @@ func TestNewServer_UnknownPDPType(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unknown pdp type") {
 		t.Errorf("error = %q, want it to mention unknown pdp type", err.Error())
+	}
+}
+
+func TestOPAClient_Evaluate_PropagatesTraceContext(t *testing.T) {
+	// Two globals must both be set for header injection to work:
+	//
+	//   1. TracerProvider — the noop provider (OTel's default) returns spans
+	//      with invalid trace IDs, so the propagator has nothing to encode.
+	//      We install a real SDK provider so the span below gets a valid,
+	//      sampled trace ID.
+	//
+	//   2. TextMapPropagator — independently defaults to a noop, so even with
+	//      a real span the Inject call is a no-op unless we also install the
+	//      W3C TraceContext propagator.
+	//
+	// Both are restored to their noop defaults in t.Cleanup so other tests
+	// are not affected.
+	tp := sdktrace.NewTracerProvider()
+	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	t.Cleanup(func() {
+		_ = tp.Shutdown(context.Background())
+		otel.SetTracerProvider(trace.NewNoopTracerProvider())
+		otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator())
+	})
+
+	var capturedTraceparent string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedTraceparent = r.Header.Get("Traceparent")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"result": map[string]any{"decision": "allow"},
+		})
+	}))
+	defer srv.Close()
+
+	ctx, span := otel.Tracer("test").Start(context.Background(), "test-span")
+	defer span.End()
+
+	client := NewOPAClient(srv.URL)
+	_, err := client.Evaluate(ctx, shared.EnrichedMCPRequest{
+		ServerName: "test-server",
+		ToolName:   "test-tool",
+		RequestID:  "req-trace-test",
+	})
+	if err != nil {
+		t.Fatalf("Evaluate() error: %v", err)
+	}
+	if capturedTraceparent == "" {
+		t.Error("expected Traceparent header to be forwarded to OPA, got empty string")
+	}
+	if !strings.HasPrefix(capturedTraceparent, "00-") {
+		t.Errorf("Traceparent header %q does not look like a valid W3C traceparent", capturedTraceparent)
 	}
 }
 

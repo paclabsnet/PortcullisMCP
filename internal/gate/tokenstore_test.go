@@ -34,6 +34,9 @@ func makeTestJWT(claims map[string]any) string {
 	return header + "." + body + ".fakesignature"
 }
 
+// futureExp and expiredExp return JWT "exp" timestamps as float64.
+// Go's encoding/json decodes all JSON numbers into map[string]any as float64,
+// so the claim map must use float64 here to match what real JWT parsing produces.
 func futureExp() float64 {
 	return float64(time.Now().Add(time.Hour).Unix())
 }
