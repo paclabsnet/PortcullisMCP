@@ -7,6 +7,25 @@ type Config struct {
 	EscalationTokenSigning  SigningConfig   `yaml:"escalation_token_signing"`
 	Templates               TemplatesConfig `yaml:"templates"`
 	PortcullisGateManagementPort int          `yaml:"portcullis_gate_management_port"` // gate management API port shown in post-approval instructions (default: 7777)
+	Auth                    AuthConfig      `yaml:"auth"`
+	TokenStore              TokenStoreConfig `yaml:"token_store"`
+}
+
+// AuthConfig controls authentication for the token API endpoints.
+// /token/unclaimed/list and /token/deposit require a valid bearer token.
+// /token/claim does not require auth — the JTI is treated as a capability.
+type AuthConfig struct {
+	BearerToken string `yaml:"bearer_token"`
+}
+
+// TokenStoreConfig controls the in-memory unclaimed token store.
+type TokenStoreConfig struct {
+	// TTL is the default lifetime (in seconds) for unclaimed tokens when no
+	// expiry can be parsed from the token itself (default: 3600 = 1 hour).
+	TTL int `yaml:"ttl"`
+	// CleanupInterval is how often (in seconds) Guard scans for and removes
+	// expired unclaimed tokens (default: 300 = 5 minutes).
+	CleanupInterval int `yaml:"cleanup_interval"`
 }
 
 type ListenConfig struct {

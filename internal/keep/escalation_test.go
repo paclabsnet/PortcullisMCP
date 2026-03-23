@@ -42,12 +42,15 @@ func TestEscalationSigner_Sign(t *testing.T) {
 	}
 	scope := []map[string]any{{"resource": "repo:example"}}
 
-	tokenStr, err := signer.Sign(req, "manager approval needed", scope)
+	tokenStr, jti, err := signer.Sign(req, "manager approval needed", scope)
 	if err != nil {
 		t.Fatalf("Sign returned error: %v", err)
 	}
 	if tokenStr == "" {
 		t.Fatal("expected non-empty token string")
+	}
+	if jti == "" {
+		t.Fatal("expected non-empty JTI")
 	}
 
 	// Parse and verify the signed token.
@@ -61,6 +64,9 @@ func TestEscalationSigner_Sign(t *testing.T) {
 	claims, ok := token.Claims.(*escalationRequestClaims)
 	if !ok || !token.Valid {
 		t.Fatal("expected valid token claims")
+	}
+	if claims.ID != jti {
+		t.Errorf("JTI in claims = %q, want returned jti %q", claims.ID, jti)
 	}
 	if claims.UserID != "user@example.com" {
 		t.Errorf("UserID = %q, want user@example.com", claims.UserID)
@@ -97,7 +103,7 @@ func TestEscalationSigner_Sign_DefaultTTL(t *testing.T) {
 		ToolName:     "t",
 	}
 
-	tokenStr, err := signer.Sign(req, "", nil)
+	tokenStr, _, err := signer.Sign(req, "", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -128,7 +134,7 @@ func TestEscalationSigner_Sign_CustomTTL(t *testing.T) {
 		ToolName:     "t",
 	}
 
-	tokenStr, _ := signer.Sign(req, "", nil)
+	tokenStr, _, _ := signer.Sign(req, "", nil)
 	token, _ := jwt.ParseWithClaims(tokenStr, &escalationRequestClaims{}, func(t *jwt.Token) (any, error) {
 		return []byte("k"), nil
 	})
@@ -146,7 +152,7 @@ func TestEscalationSigner_Sign_CustomTTL(t *testing.T) {
 
 func TestEscalationSigner_Sign_NilSigner(t *testing.T) {
 	var s *EscalationSigner
-	_, err := s.Sign(shared.EnrichedMCPRequest{}, "", nil)
+	_, _, err := s.Sign(shared.EnrichedMCPRequest{}, "", nil)
 	if err == nil {
 		t.Error("expected error from nil signer, got nil")
 	}
@@ -160,7 +166,7 @@ func TestEscalationSigner_Sign_NilScope(t *testing.T) {
 		ServerName:   "s",
 		ToolName:     "t",
 	}
-	_, err := signer.Sign(req, "reason", nil)
+	_, _, err := signer.Sign(req, "reason", nil)
 	if err != nil {
 		t.Fatalf("Sign with nil scope returned error: %v", err)
 	}

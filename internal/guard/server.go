@@ -2,12 +2,15 @@ package guard
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"html/template"
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -42,6 +45,15 @@ type escalationTokenClaims struct {
 	Portcullis portcullisClaims `json:"portcullis,omitempty"`
 }
 
+// unclaimedToken is a Guard-issued escalation token that has been approved but
+// not yet collected by Gate. Keyed by JTI in the unclaimedTokens map.
+type unclaimedToken struct {
+	UserID    string
+	JTI       string
+	Raw       string
+	ExpiresAt time.Time
+}
+
 // Server is the portcullis-guard HTTP server.
 type Server struct {
 	cfg        Config
@@ -49,6 +61,11 @@ type Server struct {
 	signingKey []byte
 	ttl        time.Duration
 	templates  *template.Template
+
+	// unclaimedTokens holds approved escalation tokens not yet claimed by Gate.
+	// Outer key: UserID. Inner key: JTI.
+	unclaimedMu     sync.Mutex
+	unclaimedTokens map[string]map[string]unclaimedToken
 }
 
 // NewServer creates a Guard server from config.
@@ -70,11 +87,12 @@ func NewServer(cfg Config) (*Server, error) {
 	}
 
 	return &Server{
-		cfg:        cfg,
-		keepKey:    []byte(cfg.Keep.EscalationRequestSigningKey),
-		signingKey: []byte(cfg.EscalationTokenSigning.Key),
-		ttl:        ttl,
-		templates:  tmpl,
+		cfg:             cfg,
+		keepKey:         []byte(cfg.Keep.EscalationRequestSigningKey),
+		signingKey:      []byte(cfg.EscalationTokenSigning.Key),
+		ttl:             ttl,
+		templates:       tmpl,
+		unclaimedTokens: make(map[string]map[string]unclaimedToken),
 	}, nil
 }
 
@@ -101,6 +119,18 @@ func (s *Server) Run(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /approve", s.handleGet)
 	mux.HandleFunc("POST /approve", s.handlePost)
+
+	// Token API endpoints — used by Gate to claim approved tokens.
+	// /token/unclaimed/list and /token/deposit require bearer auth.
+	// /token/claim does not require auth: the JTI acts as a capability token.
+	// An attacker would need to already know the random UUID JTI to attempt a
+	// claim, and the resulting token is still validated by the PDP.
+	mux.HandleFunc("GET /token/unclaimed/list", s.requireTokenAuth(s.handleTokenUnclaimedList))
+	mux.HandleFunc("POST /token/deposit", s.requireTokenAuth(s.handleTokenDeposit))
+	mux.HandleFunc("POST /token/claim", s.handleTokenClaim)
+
+	// Start background cleanup of expired unclaimed tokens.
+	go s.cleanupWorker(ctx)
 
 	srv := &http.Server{
 		Addr:    s.cfg.Listen.Address,
@@ -136,12 +166,26 @@ func (s *Server) verifyRequest(tokenStr string) (*escalationRequestClaims, error
 // issueEscalationToken signs a new escalation token granting scope.
 // scope is typically claims.EscalationScope but may be an edited version
 // supplied by the approving user on the approval page.
-func (s *Server) issueEscalationToken(claims *escalationRequestClaims, scope []map[string]any) (string, time.Time, error) {
+//
+// The issued token's JTI is set to requestJTI (the ID of the Keep-signed
+// pending escalation request JWT). Gate tracks pending escalations by this JTI
+// so it can correlate the approved token back to the original request.
+// NOTE: the JTI is shared between the pending request JWT (issued by Keep) and
+// the escalation token JWT (issued by Guard). This is intentional for correlation
+// purposes and does not violate RFC 7519 — the tokens have different issuers.
+func (s *Server) issueEscalationToken(claims *escalationRequestClaims, requestJTI string, scope []map[string]any) (string, time.Time, error) {
 	now := time.Now()
 	expiry := now.Add(s.ttl)
+
+	// If the pending request JWT has no JTI (e.g. older Keep version), generate one.
+	jti := requestJTI
+	if jti == "" {
+		jti = uuid.NewString()
+	}
+
 	tokenClaims := escalationTokenClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
-			ID:        uuid.NewString(),
+			ID:        jti,
 			Issuer:    "portcullis-guard",
 			Subject:   claims.UserID,
 			IssuedAt:  jwt.NewNumericDate(now),
@@ -223,12 +267,16 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 
-	escalationToken, expiry, err := s.issueEscalationToken(claims, scope)
+	escalationToken, expiry, err := s.issueEscalationToken(claims, claims.ID, scope)
 	if err != nil {
 		slog.Error("issue escalation token", "error", err)
 		http.Error(w, "failed to generate escalation token", http.StatusInternalServerError)
 		return
 	}
+
+	// Add the issued token to the unclaimed list so Gate can collect it
+	// automatically without the user needing to paste it manually.
+	s.addUnclaimed(claims.UserID, claims.ID, escalationToken, expiry)
 
 	scopeJSON, _ := json.Marshal(scope)
 	slog.Info("escalation token issued",
@@ -238,6 +286,7 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request) {
 		"tool", claims.Tool,
 		"reason", claims.Reason,
 		"escalation_scope", string(scopeJSON),
+		"jti", claims.ID,
 		"issuer", "portcullis-guard",
 		"expires_at", expiry.UTC().Format(time.RFC3339),
 		"remote", r.RemoteAddr,
@@ -257,6 +306,212 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request) {
 	if err := s.templates.ExecuteTemplate(w, "token.html", data); err != nil {
 		slog.Error("render token page", "error", err)
 	}
+}
+
+// ---- unclaimed token store -------------------------------------------------
+
+// addUnclaimed adds an approved escalation token to the unclaimed list for userID.
+func (s *Server) addUnclaimed(userID, jti, raw string, expiresAt time.Time) {
+	s.unclaimedMu.Lock()
+	defer s.unclaimedMu.Unlock()
+
+	if s.unclaimedTokens[userID] == nil {
+		s.unclaimedTokens[userID] = make(map[string]unclaimedToken)
+	}
+	s.unclaimedTokens[userID][jti] = unclaimedToken{
+		UserID:    userID,
+		JTI:       jti,
+		Raw:       raw,
+		ExpiresAt: expiresAt,
+	}
+}
+
+// cleanupWorker periodically removes expired unclaimed tokens.
+func (s *Server) cleanupWorker(ctx context.Context) {
+	interval := 300 * time.Second
+	if s.cfg.TokenStore.CleanupInterval > 0 {
+		interval = time.Duration(s.cfg.TokenStore.CleanupInterval) * time.Second
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.cleanupExpired()
+		}
+	}
+}
+
+func (s *Server) cleanupExpired() {
+	now := time.Now()
+	s.unclaimedMu.Lock()
+	defer s.unclaimedMu.Unlock()
+
+	for userID, tokens := range s.unclaimedTokens {
+		for jti, tok := range tokens {
+			if tok.ExpiresAt.Before(now) {
+				delete(tokens, jti)
+			}
+		}
+		if len(tokens) == 0 {
+			delete(s.unclaimedTokens, userID)
+		}
+	}
+}
+
+// requireTokenAuth is middleware that requires a valid bearer token for the
+// /token/unclaimed/list and /token/deposit endpoints.
+func (s *Server) requireTokenAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.cfg.Auth.BearerToken == "" {
+			// No token configured — allow all (development / open deployments).
+			next(w, r)
+			return
+		}
+		auth := r.Header.Get("Authorization")
+		expected := "Bearer " + s.cfg.Auth.BearerToken
+		if subtle.ConstantTimeCompare([]byte(auth), []byte(expected)) != 1 {
+			slog.Warn("unauthorized token API request", "remote", r.RemoteAddr, "path", r.URL.Path)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next(w, r)
+	}
+}
+
+// handleTokenUnclaimedList returns the list of unclaimed tokens for a given user.
+// GET /token/unclaimed/list?user_id={userID}
+// Called by Gate (bearer auth) and by remote workflow agents (e.g. ServiceNow).
+func (s *Server) handleTokenUnclaimedList(w http.ResponseWriter, r *http.Request) {
+	userID := r.URL.Query().Get("user_id")
+	if userID == "" {
+		http.Error(w, "user_id is required", http.StatusBadRequest)
+		return
+	}
+
+	s.unclaimedMu.Lock()
+	userTokens := s.unclaimedTokens[userID]
+	result := make([]struct {
+		JTI string `json:"jti"`
+		Raw string `json:"raw"`
+	}, 0, len(userTokens))
+	for _, tok := range userTokens {
+		result = append(result, struct {
+			JTI string `json:"jti"`
+			Raw string `json:"raw"`
+		}{JTI: tok.JTI, Raw: tok.Raw})
+	}
+	s.unclaimedMu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(result)
+}
+
+// handleTokenDeposit accepts a Keep-signed pending escalation JWT from a remote
+// workflow system (e.g. ServiceNow). Guard validates it, issues an escalation
+// token, and adds it to the unclaimed list for Gate to collect via polling.
+// POST /token/deposit  body: {"pending_jwt": "...", "user_id": "..."}
+func (s *Server) handleTokenDeposit(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		PendingJWT string `json:"pending_jwt"`
+		UserID     string `json:"user_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if body.PendingJWT == "" || body.UserID == "" {
+		http.Error(w, "pending_jwt and user_id are required", http.StatusBadRequest)
+		return
+	}
+
+	claims, err := s.verifyRequest(body.PendingJWT)
+	if err != nil {
+		slog.Warn("deposit: invalid pending escalation JWT", "error", err, "user_id", body.UserID, "remote", r.RemoteAddr)
+		http.Error(w, "invalid or expired pending JWT", http.StatusUnauthorized)
+		return
+	}
+
+	// Validate that the user_id in the body matches the uid in the JWT.
+	if !strings.EqualFold(claims.UserID, body.UserID) {
+		slog.Warn("deposit: user_id mismatch", "jwt_uid", claims.UserID, "body_uid", body.UserID)
+		http.Error(w, "user_id does not match JWT uid claim", http.StatusBadRequest)
+		return
+	}
+
+	escalationToken, expiry, err := s.issueEscalationToken(claims, claims.ID, claims.EscalationScope)
+	if err != nil {
+		slog.Error("deposit: issue escalation token", "error", err)
+		http.Error(w, "failed to generate escalation token", http.StatusInternalServerError)
+		return
+	}
+
+	s.addUnclaimed(claims.UserID, claims.ID, escalationToken, expiry)
+
+	slog.Info("escalation token deposited via workflow",
+		"user_id", claims.UserID,
+		"server", claims.Server,
+		"tool", claims.Tool,
+		"jti", claims.ID,
+		"expires_at", expiry.UTC().Format(time.RFC3339),
+		"remote", r.RemoteAddr,
+	)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"status": "deposited",
+		"jti":    claims.ID,
+	})
+}
+
+// handleTokenClaim atomically removes and returns the unclaimed token identified
+// by jti. Returns 404 when the token is not in the unclaimed list (either not yet
+// approved, already claimed, or expired). Each token may only be claimed once.
+// POST /token/claim  body: {"jti": "..."}
+func (s *Server) handleTokenClaim(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		JTI string `json:"jti"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if body.JTI == "" {
+		http.Error(w, "jti is required", http.StatusBadRequest)
+		return
+	}
+
+	s.unclaimedMu.Lock()
+	var found *unclaimedToken
+	for _, userTokens := range s.unclaimedTokens {
+		if tok, ok := userTokens[body.JTI]; ok {
+			cp := tok
+			found = &cp
+			delete(userTokens, body.JTI)
+			break
+		}
+	}
+	s.unclaimedMu.Unlock()
+
+	if found == nil {
+		// Not yet approved, already claimed, or expired — not an error from
+		// Gate's perspective; Gate will retry on the next tool call.
+		http.NotFound(w, r)
+		return
+	}
+
+	slog.Info("escalation token claimed",
+		"jti", body.JTI, "user_id", found.UserID)
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"raw": found.Raw,
+	})
 }
 
 // ---- template data types ---------------------------------------------------

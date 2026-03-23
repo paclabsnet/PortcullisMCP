@@ -104,11 +104,16 @@ func (f *Forwarder) post(ctx context.Context, path string, body, out any) error 
 		return shared.ErrDenied
 	case http.StatusAccepted:
 		var body struct {
-			Reason    string `json:"reason"`
-			Reference string `json:"workflow_reference"`
+			Reason        string `json:"reason"`
+			Reference     string `json:"workflow_reference"`
+			EscalationJTI string `json:"escalation_jti"`
 		}
 		_ = json.NewDecoder(resp.Body).Decode(&body)
-		return &shared.EscalationPendingError{Reason: body.Reason, Reference: body.Reference}
+		return &shared.EscalationPendingError{
+			Reason:        body.Reason,
+			Reference:     body.Reference,
+			EscalationJTI: body.EscalationJTI,
+		}
 	case http.StatusServiceUnavailable:
 		return shared.ErrPDPUnavailable
 	default:

@@ -1,0 +1,129 @@
+package gate
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/url"
+)
+
+// GuardClient calls the portcullis-guard token API on behalf of Gate.
+// It is used to claim approved escalation tokens and to poll for tokens that
+// were approved by remote workflows (e.g. ServiceNow) without user interaction.
+type GuardClient struct {
+	endpoint    string
+	bearerToken string
+	client      *http.Client
+}
+
+// NewGuardClient creates a GuardClient for the given Guard endpoint.
+func NewGuardClient(cfg GuardConfig) *GuardClient {
+	return &GuardClient{
+		endpoint:    cfg.Endpoint,
+		bearerToken: cfg.BearerToken,
+		client:      &http.Client{},
+	}
+}
+
+// unclaimedTokenInfo describes a single unclaimed token returned by Guard.
+type unclaimedTokenInfo struct {
+	JTI string `json:"jti"`
+	Raw string `json:"raw"`
+}
+
+// ListUnclaimedTokens returns all tokens that Guard holds for userID but have
+// not yet been claimed. These include tokens approved via the web UI or by a
+// remote workflow (e.g. ServiceNow posting to /token/deposit).
+// Requires auth: bearer token.
+func (g *GuardClient) ListUnclaimedTokens(ctx context.Context, userID string) ([]unclaimedTokenInfo, error) {
+	u, err := url.Parse(g.endpoint + "/token/unclaimed/list")
+	if err != nil {
+		return nil, fmt.Errorf("parse guard url: %w", err)
+	}
+	q := u.Query()
+	q.Set("user_id", userID)
+	u.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("build guard request: %w", err)
+	}
+	if g.bearerToken != "" {
+		req.Header.Set("Authorization", "Bearer "+g.bearerToken)
+	}
+
+	resp, err := g.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("guard request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		var errBody struct {
+			Error string `json:"error"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&errBody)
+		return nil, fmt.Errorf("guard returned %d: %s", resp.StatusCode, errBody.Error)
+	}
+
+	var tokens []unclaimedTokenInfo
+	if err := json.NewDecoder(resp.Body).Decode(&tokens); err != nil {
+		return nil, fmt.Errorf("decode guard response: %w", err)
+	}
+	return tokens, nil
+}
+
+// ClaimToken atomically removes the token identified by jti from Guard's
+// unclaimed list and returns its raw JWT. Returns an empty string (and no
+// error) when the token does not exist in the unclaimed list — this is the
+// normal case when the user has not yet approved the escalation request.
+//
+// No authentication is required for this endpoint: the JTI serves as a
+// capability token — an attacker would need to already know the JTI (a random
+// UUID) to make a meaningful claim, and the token itself is still validated
+// by the PDP before being honoured. This design follows the principle that the
+// security boundary is the JTI secret, not a transport credential.
+func (g *GuardClient) ClaimToken(ctx context.Context, jti string) (string, error) {
+	u := g.endpoint + "/token/claim"
+
+	body, err := json.Marshal(map[string]string{"jti": jti})
+	if err != nil {
+		return "", fmt.Errorf("marshal claim request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u,
+		bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("build guard claim request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := g.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("guard claim request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// 404 means the token is not (yet) in the unclaimed list — not an error.
+	if resp.StatusCode == http.StatusNotFound {
+		return "", nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		var errBody struct {
+			Error string `json:"error"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&errBody)
+		return "", fmt.Errorf("guard claim returned %d: %s", resp.StatusCode, errBody.Error)
+	}
+
+	var result struct {
+		Raw string `json:"raw"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("decode guard claim response: %w", err)
+	}
+	return result.Raw, nil
+}
+

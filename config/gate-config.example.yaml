@@ -33,3 +33,12 @@ token_store: "~/.portcullis/tokens.json"
 decision_logs:
   flush_interval: 30  # seconds between sending logs to Keep (default: 30)
   max_batch_size: 100 # max entries per batch (default: 100)
+
+# Guard endpoint for automatic escalation token collection.
+# When configured, Gate will automatically claim tokens approved via the Guard
+# web UI or deposited by remote workflows (e.g. ServiceNow), without the user
+# needing to paste tokens manually via the management API.
+guard:
+  endpoint: "https://guard.internal.example.com"
+  bearer_token: "${GUARD_BEARER_TOKEN}"  # must match guard.auth.bearer_token
+  poll_interval: 60  # seconds between polls of /token/unclaimed/list (default: 60)

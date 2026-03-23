@@ -64,9 +64,12 @@ type PDPResponse struct {
 
 // EscalationPendingError is returned when the PDP requires escalation approval.
 // Reference is a workflow-specific identifier — an approval URL, ticket ID, etc.
+// EscalationJTI is the JWT ID of the pending escalation request, used by Gate
+// to track and later claim the approved token from Guard.
 type EscalationPendingError struct {
-	Reason    string
-	Reference string
+	Reason        string
+	Reference     string
+	EscalationJTI string
 }
 
 func (e *EscalationPendingError) Error() string {

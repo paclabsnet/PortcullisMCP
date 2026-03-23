@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 )
 
@@ -44,16 +45,20 @@ func NewEscalationSigner(cfg SigningConfig) (*EscalationSigner, error) {
 }
 
 // Sign creates a signed JWT encoding the full escalation request context.
-// Returns an error only if JWT signing fails; missing scope is allowed.
-func (s *EscalationSigner) Sign(req shared.EnrichedMCPRequest, reason string, scope []map[string]any) (string, error) {
+// Returns the signed JWT string, the JWT ID (jti), and any error.
+// The JTI is stable and must be copied into the issued escalation token by Guard
+// so Gate can correlate the approved token back to the pending escalation.
+func (s *EscalationSigner) Sign(req shared.EnrichedMCPRequest, reason string, scope []map[string]any) (jwtStr string, jti string, err error) {
 	if s == nil {
-		return "", fmt.Errorf("escalation signing not configured")
+		return "", "", fmt.Errorf("escalation signing not configured")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
+	jti = uuid.NewString()
 	claims := escalationRequestClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        jti,
 			Issuer:    "portcullis-keep",
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(now.Add(s.ttl)),
@@ -66,5 +71,6 @@ func (s *EscalationSigner) Sign(req shared.EnrichedMCPRequest, reason string, sc
 		EscalationScope: scope,
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(s.key)
+	signed, signErr := token.SignedString(s.key)
+	return signed, jti, signErr
 }

@@ -163,13 +163,15 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 
 	case "escalate":
 		escalationJWT := ""
+		escalationJTI := ""
 		if s.signer != nil {
-			jwtStr, err := s.signer.Sign(req, pdpResp.Reason, pdpResp.EscalationScope)
+			jwtStr, jti, err := s.signer.Sign(req, pdpResp.Reason, pdpResp.EscalationScope)
 			if err != nil {
 				slog.Error("escalation jwt sign failed", "error", err, "request_id", req.RequestID)
 				// Non-fatal: continue without JWT; some workflow handlers may still function.
 			} else {
 				escalationJWT = jwtStr
+				escalationJTI = jti
 			}
 		}
 		wfRef, err := s.workflow.Submit(r.Context(), req, escalationJWT)
@@ -184,6 +186,7 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 			"status":             "escalation_pending",
 			"reason":             pdpResp.Reason,
 			"workflow_reference": wfRef,
+			"escalation_jti":     escalationJTI,
 		})
 
 	default:
@@ -238,12 +241,14 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 
 	case "escalate":
 		escalationJWT := ""
+		escalationJTI := ""
 		if s.signer != nil {
-			jwtStr, err := s.signer.Sign(req, pdpResp.Reason, pdpResp.EscalationScope)
+			jwtStr, jti, err := s.signer.Sign(req, pdpResp.Reason, pdpResp.EscalationScope)
 			if err != nil {
 				slog.Error("escalation jwt sign failed", "error", err, "request_id", req.RequestID)
 			} else {
 				escalationJWT = jwtStr
+				escalationJTI = jti
 			}
 		}
 		wfRef, err := s.workflow.Submit(r.Context(), req, escalationJWT)
@@ -258,6 +263,7 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 			"status":             "escalation_pending",
 			"reason":             pdpResp.Reason,
 			"workflow_reference": wfRef,
+			"escalation_jti":     escalationJTI,
 		})
 
 	default:

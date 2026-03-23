@@ -28,6 +28,19 @@ type DecisionLogEntry struct {
 	Arguments map[string]any `json:"arguments,omitempty"`
 }
 
+// pendingEscalation tracks an in-flight escalation request that Gate is waiting
+// on the user to approve at Guard. Keyed by serverName+"/"+toolName in Gate's
+// pendingEscalations map.
+type pendingEscalation struct {
+	ServerName string
+	ToolName   string
+	// JTI is the JWT ID of the Keep-signed pending escalation request JWT.
+	// Guard will copy this JTI into the issued escalation token so Gate can
+	// correlate the approved token back to this pending entry.
+	JTI       string
+	ExpiresAt time.Time
+}
+
 // Gate is the portcullis-gate MCP proxy server.
 // It presents itself to the agent as an MCP server, applies the local
 // fast-path for filesystem operations, and forwards everything else to Keep.
@@ -36,6 +49,7 @@ type Gate struct {
 	identity      *IdentityCache
 	store         *TokenStore
 	forwarder     *Forwarder
+	guardClient   *GuardClient // nil if Guard endpoint not configured
 	server        *mcp.Server
 	localFS       *mcp.ClientSession // in-process filesystem backend
 	sessionID     string
@@ -44,6 +58,11 @@ type Gate struct {
 	logChan       chan DecisionLogEntry
 	logDone       chan struct{}
 	logWg         sync.WaitGroup
+
+	// pendingEscalations tracks escalation requests awaiting user approval.
+	// Key: serverName+"/"+toolName. Protected by pendingMu.
+	pendingMu          sync.Mutex
+	pendingEscalations map[string]pendingEscalation
 }
 
 // New creates a Gate from the given config. Call Run to start serving.
@@ -80,17 +99,24 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 		}
 	}
 
+	var guardClient *GuardClient
+	if cfg.Guard.Endpoint != "" {
+		guardClient = NewGuardClient(cfg.Guard)
+	}
+
 	g := &Gate{
-		cfg:           cfg,
-		identity:      identity,
-		store:         store,
-		forwarder:     fwd,
-		localFS:       localFSSession,
-		sessionID:     uuid.New().String(),
-		toolServerMap: make(map[string]string),
-		localFSTools:  make(map[string]bool),
-		logChan:       make(chan DecisionLogEntry, 1000),
-		logDone:       make(chan struct{}),
+		cfg:                cfg,
+		identity:           identity,
+		store:              store,
+		forwarder:          fwd,
+		guardClient:        guardClient,
+		localFS:            localFSSession,
+		sessionID:          uuid.New().String(),
+		toolServerMap:      make(map[string]string),
+		localFSTools:       make(map[string]bool),
+		logChan:            make(chan DecisionLogEntry, 1000),
+		logDone:            make(chan struct{}),
+		pendingEscalations: make(map[string]pendingEscalation),
 	}
 
 	// Start decision log worker
@@ -137,6 +163,13 @@ func (g *Gate) Run(ctx context.Context) error {
 	mgmt := NewManagementServer(g.store, g.identity, g.cfg.ManagementAPI)
 	if err := mgmt.Start(ctx); err != nil {
 		return fmt.Errorf("start management api: %w", err)
+	}
+
+	// Start the Guard poll worker if a Guard endpoint is configured.
+	// This discovers tokens approved via remote workflows (e.g. ServiceNow)
+	// that Gate would not otherwise learn about until the next tool call.
+	if g.guardClient != nil {
+		go g.pollGuardWorker(ctx)
 	}
 
 	// Shutdown decision log worker on context cancellation
@@ -246,11 +279,12 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 			ToolName:         toolName,
 			Arguments:        args,
 			UserIdentity:     currentIdentity,
-			EscalationTokens: g.store.All(),
+			EscalationTokens: g.collectEscalationTokens(ctx, shared.LocalFSServerName, toolName),
 			SessionID:        g.sessionID,
 			RequestID:        requestID,
 		}
 		if err := g.forwarder.Authorize(ctx, enriched); err != nil {
+			g.maybeStorePendingEscalation(shared.LocalFSServerName, toolName, err)
 			return policyErrToResult(err, toolName, requestID)
 		}
 		if g.localFS == nil {
@@ -273,15 +307,178 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 		ToolName:         toolName,
 		Arguments:        args,
 		UserIdentity:     currentIdentity,
-		EscalationTokens: g.store.All(),
+		EscalationTokens: g.collectEscalationTokens(ctx, serverName, toolName),
 		SessionID:        g.sessionID,
 		RequestID:        requestID,
 	}
 	result, err := g.forwarder.CallTool(ctx, enriched)
 	if err != nil {
+		g.maybeStorePendingEscalation(serverName, toolName, err)
 		return policyErrToResult(err, toolName, requestID)
 	}
 	return result, err
+}
+
+// collectEscalationTokens returns the tokens to include on an outbound request.
+// If Guard is configured and there is a pending escalation for this server/tool,
+// it attempts to claim the approved token from Guard and adds it to the list.
+// The claimed token is also persisted to the local store for future calls.
+func (g *Gate) collectEscalationTokens(ctx context.Context, serverName, toolName string) []shared.EscalationToken {
+	tokens := g.store.All()
+
+	if g.guardClient == nil {
+		return tokens
+	}
+
+	key := serverName + "/" + toolName
+	g.pendingMu.Lock()
+	pending, hasPending := g.pendingEscalations[key]
+	g.pendingMu.Unlock()
+
+	if !hasPending {
+		return tokens
+	}
+	if pending.ExpiresAt.Before(time.Now()) {
+		// Pending entry has expired; remove it.
+		g.pendingMu.Lock()
+		delete(g.pendingEscalations, key)
+		g.pendingMu.Unlock()
+		return tokens
+	}
+
+	claimCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	raw, err := g.guardClient.ClaimToken(claimCtx, pending.JTI)
+	if err != nil {
+		slog.Warn("guard claim token failed", "jti", pending.JTI, "error", err)
+		return tokens
+	}
+	if raw == "" {
+		// Token not yet approved — proceed without it.
+		return tokens
+	}
+
+	tok, err := g.store.Add(ctx, raw)
+	if err != nil {
+		slog.Warn("store claimed escalation token failed", "jti", pending.JTI, "error", err)
+		return tokens
+	}
+
+	slog.Info("claimed escalation token from guard",
+		"jti", pending.JTI, "token_id", tok.TokenID,
+		"server", serverName, "tool", toolName)
+
+	// Remove from pending — token is now in the store.
+	g.pendingMu.Lock()
+	delete(g.pendingEscalations, key)
+	g.pendingMu.Unlock()
+
+	return g.store.All()
+}
+
+// maybeStorePendingEscalation records a pending escalation in the in-memory map
+// when Keep responds with an escalation-required error that carries a JTI.
+func (g *Gate) maybeStorePendingEscalation(serverName, toolName string, err error) {
+	var escalationErr *shared.EscalationPendingError
+	if !errors.As(err, &escalationErr) {
+		return
+	}
+	if escalationErr.EscalationJTI == "" {
+		return
+	}
+
+	key := serverName + "/" + toolName
+	// Default TTL of 24 hours; the JWT's own exp will enforce the real deadline at Guard.
+	expiry := time.Now().Add(24 * time.Hour)
+
+	g.pendingMu.Lock()
+	g.pendingEscalations[key] = pendingEscalation{
+		ServerName: serverName,
+		ToolName:   toolName,
+		JTI:        escalationErr.EscalationJTI,
+		ExpiresAt:  expiry,
+	}
+	g.pendingMu.Unlock()
+
+	slog.Info("stored pending escalation",
+		"server", serverName, "tool", toolName, "jti", escalationErr.EscalationJTI)
+}
+
+// pollGuardWorker periodically fetches the unclaimed token list from Guard for
+// the current user. This discovers tokens approved by remote workflows (e.g.
+// ServiceNow calling /token/deposit) that Gate would not otherwise learn about.
+func (g *Gate) pollGuardWorker(ctx context.Context) {
+	interval := 60 * time.Second
+	if g.cfg.Guard.PollInterval > 0 {
+		interval = time.Duration(g.cfg.Guard.PollInterval) * time.Second
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			g.claimAllUnclaimedTokens(ctx)
+		}
+	}
+}
+
+// claimAllUnclaimedTokens fetches the unclaimed token list from Guard and
+// claims every token it finds, adding each to the local store and removing the
+// corresponding entry from the pending escalations map.
+func (g *Gate) claimAllUnclaimedTokens(ctx context.Context) {
+	userID := g.identity.Get(ctx).UserID
+	if userID == "" {
+		return
+	}
+
+	listCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	unclaimed, err := g.guardClient.ListUnclaimedTokens(listCtx, userID)
+	if err != nil {
+		slog.Warn("poll guard unclaimed tokens failed", "error", err)
+		return
+	}
+	if len(unclaimed) == 0 {
+		return
+	}
+
+	for _, entry := range unclaimed {
+		claimCtx, claimCancel := context.WithTimeout(ctx, 5*time.Second)
+		raw, claimErr := g.guardClient.ClaimToken(claimCtx, entry.JTI)
+		claimCancel()
+
+		if claimErr != nil {
+			slog.Warn("guard poll claim failed", "jti", entry.JTI, "error", claimErr)
+			continue
+		}
+		if raw == "" {
+			continue
+		}
+
+		tok, storeErr := g.store.Add(ctx, raw)
+		if storeErr != nil {
+			slog.Warn("store polled token failed", "jti", entry.JTI, "error", storeErr)
+			continue
+		}
+
+		slog.Info("claimed escalation token via poll", "jti", entry.JTI, "token_id", tok.TokenID)
+
+		// Remove any matching pending escalation entry by JTI.
+		g.pendingMu.Lock()
+		for key, p := range g.pendingEscalations {
+			if p.JTI == entry.JTI {
+				delete(g.pendingEscalations, key)
+				break
+			}
+		}
+		g.pendingMu.Unlock()
+	}
 }
 
 // policyErrToResult converts a policy error (deny or escalation) from Keep into

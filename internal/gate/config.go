@@ -3,6 +3,7 @@ package gate
 // Config holds the full portcullis-gate configuration loaded from gate.yaml.
 type Config struct {
 	Keep           KeepConfig       `yaml:"keep"`
+	Guard          GuardConfig      `yaml:"guard"`
 	Identity       IdentityConfig   `yaml:"identity"`
 	Sandbox        SandboxConfig    `yaml:"sandbox"`
 	ProtectedPaths []string         `yaml:"protected_paths"`
@@ -48,4 +49,13 @@ type MgmtAPIConfig struct {
 type DecisionLogBatchConfig struct {
 	FlushInterval int `yaml:"flush_interval"` // seconds between flushes (default: 30)
 	MaxBatchSize  int `yaml:"max_batch_size"` // max entries per batch (default: 100)
+}
+
+// GuardConfig holds connection settings for the portcullis-guard token claim API.
+// If Endpoint is empty, the automatic token-claim flow is disabled and users must
+// add escalation tokens manually via the management API.
+type GuardConfig struct {
+	Endpoint     string `yaml:"endpoint"`      // e.g. "https://guard.internal.example.com"
+	BearerToken  string `yaml:"bearer_token"`  // for /token/unclaimed/list and /token/deposit
+	PollInterval int    `yaml:"poll_interval"` // seconds between polls of /token/unclaimed/list (default: 60)
 }

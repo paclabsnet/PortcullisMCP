@@ -273,7 +273,7 @@ func TestIssueEscalationToken_Claims(t *testing.T) {
 		EscalationScope: scope,
 	}
 
-	tokenStr, expiry, err := s.issueEscalationToken(requestClaims)
+	tokenStr, expiry, err := s.issueEscalationToken(requestClaims, "test-jti-123", scope)
 	if err != nil {
 		t.Fatalf("issueEscalationToken: %v", err)
 	}
@@ -297,6 +297,11 @@ func TestIssueEscalationToken_Claims(t *testing.T) {
 	}
 	if tc.Subject != "alice@corp.com" {
 		t.Errorf("Subject = %q, want alice@corp.com", tc.Subject)
+	}
+	// The JTI of the issued token must match the request JTI so Gate can
+	// correlate the approved token with its pending escalation entry.
+	if tc.ID != "test-jti-123" {
+		t.Errorf("JTI = %q, want test-jti-123", tc.ID)
 	}
 	if len(tc.Portcullis.ArgRestrictions) == 0 || tc.Portcullis.ArgRestrictions[0]["repo"] != "example/repo" {
 		t.Errorf("Portcullis.ArgRestrictions[0][repo] = %v, want example/repo", tc.Portcullis.ArgRestrictions)
@@ -324,7 +329,7 @@ func TestIssueEscalationToken_TTL(t *testing.T) {
 		Templates:              TemplatesConfig{Dir: dir},
 	})
 
-	_, expiry, err := s.issueEscalationToken(&escalationRequestClaims{UserID: "u"})
+	_, expiry, err := s.issueEscalationToken(&escalationRequestClaims{UserID: "u"}, "", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
