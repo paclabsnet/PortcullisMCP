@@ -2,7 +2,7 @@
 
 ## Tasks
 
-### Task: Open Source It
+### Task: Open Source It [DONE]
 - we need to make sure the architecture is designed around the assumption that this is open source.
 - As few opinions as possible. For example:  identity, which PDP to use, how secrets are gathered
 - keep the basic implementation as light as possible, so you don't have to set up a ton of infrastructure to get started
@@ -32,7 +32,7 @@
 
 ### Task: Improve JWT security at the PDP
 - the PDP should not only verify that the JWTs are valid, but it should also only accept JWTs where the UserID from the Principal matches the Subject embedded in the JWT
-**JB**
+(owner: @johndbro1)
 
 ### Task: Fail closed for Gate if Keep is unavailable
 - this is not super important, since if Keep is down, no non-local MCP requests can occur
@@ -47,7 +47,7 @@
 
 ### Task: at the PDP, Get rid of RequestId, use TraceID instead
 - this allows the trace to be included in the deny message
-**JB**
+(owner: @johndbro1)
 
 ### Task: Optionally Include the traceid in the Deny message back to the user
 - purpose: allows a user to escalate to the enterprise security team if they aren't allowed to do something they think they should be able to
@@ -67,7 +67,7 @@ decision := custom.decision if {
 ```
 
 An interesting idea if it works. Will need to update the Rego to test.
-**JB**
+(owner: @johndbro1)
 
 
 ### Task: Input sanitizing at Keep and Guard

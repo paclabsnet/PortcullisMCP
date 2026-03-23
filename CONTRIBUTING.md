@@ -21,7 +21,7 @@ make test
 make demo-start
 ```
 
-See `config/` for example configurations and `demo/` for the Docker-based sandbox.
+See `config/` for example configurations and `deploy/docker-sandbox/` for the Docker-based sandbox.
 
 ## Guidelines
 

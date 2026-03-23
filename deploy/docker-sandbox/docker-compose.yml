@@ -7,7 +7,7 @@ services:
     ports:
       - "8181:8181"
     volumes:
-      - ../policies/rego:/policies
+      - ../../policies/rego:/policies
       - ./opa-config.yaml:/etc/opa/config.yaml:ro
     command:
       - "run"
@@ -24,7 +24,7 @@ services:
   keep:
     build:
       context: ..
-      dockerfile: demo/Dockerfile
+      dockerfile: deploy/docker-sandbox/Dockerfile
       target: keep
       args:
         VERSION: ${VERSION:-0.1.0-dev}
@@ -44,7 +44,7 @@ services:
   guard:
     build:
       context: ..
-      dockerfile: demo/Dockerfile
+      dockerfile: deploy/docker-sandbox/Dockerfile
       target: guard
       args:
         VERSION: ${VERSION:-0.1.0-dev}
@@ -62,7 +62,7 @@ services:
   mock-enterprise-api:
     build:
       context: ..
-      dockerfile: demo/Dockerfile
+      dockerfile: deploy/docker-sandbox/Dockerfile
       target: mock-enterprise-api
     container_name: portcullis-mock-enterprise-api
     networks:
@@ -71,7 +71,7 @@ services:
   fetch-mcp:
     build:
       context: ..
-      dockerfile: demo/Dockerfile
+      dockerfile: deploy/docker-sandbox/Dockerfile
       target: fetch-mcp
     container_name: portcullis-fetch-mcp
     networks:

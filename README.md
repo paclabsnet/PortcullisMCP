@@ -8,6 +8,8 @@ PortcullisMCP is designed to be unopinionated: bring your own PDP, your own iden
 
 ## Architecture
 
+For a detailed breakdown of components and communication flows, see [ARCHITECTURE.md](./ARCHITECTURE.md).
+
 ```
 Agent <--> portcullis-gate <--> portcullis-keep <--> PDP (OPA or custom)
                           |                    |
@@ -106,9 +108,9 @@ make demo-stop
 
 ### Demo stack configs
 
-- `demo/keep-demo.yaml` — Keep config for the Docker demo
-- `demo/guard-demo.yaml` — Guard config for the Docker demo
-- `demo/opa-config.yaml` — OPA config for the Docker demo
+- `deploy/docker-sandbox/keep-demo.yaml` — Keep config for the Docker demo
+- `deploy/docker-sandbox/guard-demo.yaml` — Guard config for the Docker demo
+- `deploy/docker-sandbox/opa-config.yaml` — OPA config for the Docker demo
 
 ### Overriding identity in gate.yaml
 
@@ -150,7 +152,7 @@ The included policy in `policies/` provides a working starting point:
 - Allows access to some mock enterprise API tools, denies or escalates others based on group membership
 - Allows access to some websites via fetch, denies or escalates others
 
-See `docs/opa-examples.md` for detailed policy examples and testing guidance.
+See `docs/policy/opa-examples.md` for detailed policy examples and testing guidance.
 
 ## Features
 
