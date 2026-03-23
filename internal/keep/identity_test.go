@@ -109,6 +109,54 @@ func TestStrictNormalizer_OSStripsDirectoryClaims(t *testing.T) {
 	}
 }
 
+func TestStrictNormalizer_OSStripsAllUnverifiedFields(t *testing.T) {
+	n := &strictNormalizer{}
+	id := osIdentity()
+	// Ensure all fields are populated before stripping
+	id.Email = "alice@example.com"
+	id.Department = "Security"
+	id.Roles = []string{"admin"}
+	id.AuthMethod = []string{"password"}
+	id.TokenExpiry = 123456789
+	id.RawToken = "secret"
+
+	got, err := n.Normalize(context.Background(), id)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// List of fields that MUST be stripped for "os" source
+	if got.Email != "" {
+		t.Errorf("Email should be stripped, got %q", got.Email)
+	}
+	if got.DisplayName != "" {
+		t.Errorf("DisplayName should be stripped, got %q", got.DisplayName)
+	}
+	if len(got.Groups) != 0 {
+		t.Errorf("Groups should be stripped, got %v", got.Groups)
+	}
+	if len(got.Roles) != 0 {
+		t.Errorf("Roles should be stripped, got %v", got.Roles)
+	}
+	if got.Department != "" {
+		t.Errorf("Department should be stripped, got %q", got.Department)
+	}
+	if len(got.AuthMethod) != 0 {
+		t.Errorf("AuthMethod should be stripped, got %v", got.AuthMethod)
+	}
+	if got.TokenExpiry != 0 {
+		t.Errorf("TokenExpiry should be stripped, got %d", got.TokenExpiry)
+	}
+
+	// Fields that MUST remain
+	if got.UserID != "alice" {
+		t.Errorf("UserID should remain, got %q", got.UserID)
+	}
+	if got.SourceType != "os" {
+		t.Errorf("SourceType should remain, got %q", got.SourceType)
+	}
+}
+
 // --- passthroughNormalizer tests ---
 
 func TestPassthroughNormalizer_AcceptsAll(t *testing.T) {
