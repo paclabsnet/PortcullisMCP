@@ -158,7 +158,7 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		attribute.String("tool.name", req.ToolName),
 		attribute.String("server.name", req.ServerName),
 		attribute.String("user.id", req.UserIdentity.UserID),
-		attribute.String("request.id", req.RequestID),
+		attribute.String("request.id", req.TraceID),
 	)
 
 	req.UserIdentity = normalizeIdentity(req.UserIdentity, s.cfg.Identity)
@@ -166,7 +166,7 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 	pdpResp, err := s.pdp.Evaluate(ctx, req)
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
-		slog.ErrorContext(ctx, "pdp evaluate failed", "error", err, "request_id", req.RequestID, "trace_id", traceID)
+		slog.ErrorContext(ctx, "pdp evaluate failed", "error", err, "trace_id", traceID)
 		writeError(w, http.StatusServiceUnavailable, shared.ErrPDPUnavailable.Error())
 		return
 	}
@@ -176,14 +176,14 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		"decision", pdpResp.Decision,
 		"tool", req.ToolName,
 		"user", req.UserIdentity.UserID,
-		"request_id", req.RequestID,
+		"trace_id", req.TraceID,
 		"trace_id", traceID,
 	)
 
 	// Log the decision
 	s.decisionLog.Log(&DecisionLogEntry{
 		SessionID:    req.SessionID,
-		RequestID:    req.RequestID,
+		TraceID:      req.TraceID,
 		UserID:       req.UserIdentity.UserID,
 		ServerName:   req.ServerName,
 		ToolName:     req.ToolName,
@@ -199,7 +199,7 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		result, err := s.router.CallTool(ctx, req.ServerName, req.ToolName, req.Arguments)
 		if err != nil {
 			span.SetStatus(codes.Error, err.Error())
-			slog.ErrorContext(ctx, "backend call failed", "error", err, "server", req.ServerName, "tool", req.ToolName, "request_id", req.RequestID, "trace_id", traceID)
+			slog.ErrorContext(ctx, "backend call failed", "error", err, "server", req.ServerName, "tool", req.ToolName, "trace_id", traceID)
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("backend call failed: %s", err))
 			return
 		}
@@ -215,7 +215,7 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		if s.signer != nil {
 			jwtStr, jti, err := s.signer.Sign(req, pdpResp.Reason, pdpResp.EscalationScope)
 			if err != nil {
-				slog.ErrorContext(ctx, "escalation jwt sign failed", "error", err, "request_id", req.RequestID, "trace_id", traceID)
+				slog.ErrorContext(ctx, "escalation jwt sign failed", "error", err, "trace_id", traceID)
 				// Non-fatal: continue without JWT; some workflow handlers may still function.
 			} else {
 				escalationJWT = jwtStr
@@ -225,7 +225,7 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		wfRef, err := s.workflow.Submit(ctx, req, escalationJWT)
 		if err != nil {
 			span.SetStatus(codes.Error, err.Error())
-			slog.ErrorContext(ctx, "workflow submit failed", "error", err, "request_id", req.RequestID, "trace_id", traceID)
+			slog.ErrorContext(ctx, "workflow submit failed", "error", err, "trace_id", traceID)
 			writeError(w, http.StatusInternalServerError, "escalation submission failed")
 			return
 		}
@@ -240,7 +240,7 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 
 	default:
 		span.SetStatus(codes.Error, "unknown decision")
-		slog.ErrorContext(ctx, "unknown pdp decision", "decision", pdpResp.Decision, "request_id", req.RequestID, "trace_id", traceID)
+		slog.ErrorContext(ctx, "unknown pdp decision", "decision", pdpResp.Decision, "trace_id", traceID)
 		writeDeny(w, "unknown pdp decision — denied by default", traceID)
 	}
 }
@@ -264,7 +264,7 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		attribute.String("tool.name", req.ToolName),
 		attribute.String("server.name", req.ServerName),
 		attribute.String("user.id", req.UserIdentity.UserID),
-		attribute.String("request.id", req.RequestID),
+		attribute.String("request.id", req.TraceID),
 	)
 
 	req.UserIdentity = normalizeIdentity(req.UserIdentity, s.cfg.Identity)
@@ -272,7 +272,7 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	pdpResp, err := s.pdp.Evaluate(ctx, req)
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
-		slog.ErrorContext(ctx, "pdp evaluate failed", "error", err, "request_id", req.RequestID, "trace_id", traceID)
+		slog.ErrorContext(ctx, "pdp evaluate failed", "error", err, "trace_id", traceID)
 		writeError(w, http.StatusServiceUnavailable, shared.ErrPDPUnavailable.Error())
 		return
 	}
@@ -282,13 +282,13 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		"decision", pdpResp.Decision,
 		"tool", req.ToolName,
 		"user", req.UserIdentity.UserID,
-		"request_id", req.RequestID,
+		"trace_id", req.TraceID,
 		"trace_id", traceID,
 	)
 
 	s.decisionLog.Log(&DecisionLogEntry{
 		SessionID:    req.SessionID,
-		RequestID:    req.RequestID,
+		TraceID:      req.TraceID,
 		UserID:       req.UserIdentity.UserID,
 		ServerName:   req.ServerName,
 		ToolName:     req.ToolName,
@@ -313,7 +313,7 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		if s.signer != nil {
 			jwtStr, jti, err := s.signer.Sign(req, pdpResp.Reason, pdpResp.EscalationScope)
 			if err != nil {
-				slog.ErrorContext(ctx, "escalation jwt sign failed", "error", err, "request_id", req.RequestID, "trace_id", traceID)
+				slog.ErrorContext(ctx, "escalation jwt sign failed", "error", err, "trace_id", traceID)
 			} else {
 				escalationJWT = jwtStr
 				escalationJTI = jti
@@ -322,7 +322,7 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		wfRef, err := s.workflow.Submit(ctx, req, escalationJWT)
 		if err != nil {
 			span.SetStatus(codes.Error, err.Error())
-			slog.ErrorContext(ctx, "workflow submit failed", "error", err, "request_id", req.RequestID, "trace_id", traceID)
+			slog.ErrorContext(ctx, "workflow submit failed", "error", err, "trace_id", traceID)
 			writeError(w, http.StatusInternalServerError, "escalation submission failed")
 			return
 		}
@@ -337,7 +337,7 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 
 	default:
 		span.SetStatus(codes.Error, "unknown decision")
-		slog.ErrorContext(ctx, "unknown pdp decision", "decision", pdpResp.Decision, "request_id", req.RequestID, "trace_id", traceID)
+		slog.ErrorContext(ctx, "unknown pdp decision", "decision", pdpResp.Decision, "trace_id", traceID)
 		writeDeny(w, "unknown pdp decision — denied by default", traceID)
 	}
 }

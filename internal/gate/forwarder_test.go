@@ -175,7 +175,7 @@ func TestCallTool_Allow(t *testing.T) {
 	f := newTestForwarder(t, srv)
 	result, err := f.CallTool(context.Background(), shared.EnrichedMCPRequest{
 		ToolName: "read_file",
-		RequestID: "req-1",
+		TraceID: "req-1",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -192,7 +192,7 @@ func TestCallTool_Deny(t *testing.T) {
 	defer srv.Close()
 
 	f := newTestForwarder(t, srv)
-	_, err := f.CallTool(context.Background(), shared.EnrichedMCPRequest{RequestID: "req-deny"})
+	_, err := f.CallTool(context.Background(), shared.EnrichedMCPRequest{TraceID: "req-deny"})
 	if err != shared.ErrDenied {
 		t.Errorf("error = %v, want ErrDenied", err)
 	}
@@ -209,7 +209,7 @@ func TestCallTool_EscalationPending(t *testing.T) {
 	defer srv.Close()
 
 	f := newTestForwarder(t, srv)
-	_, err := f.CallTool(context.Background(), shared.EnrichedMCPRequest{RequestID: "req-esc"})
+	_, err := f.CallTool(context.Background(), shared.EnrichedMCPRequest{TraceID: "req-esc"})
 	if err == nil {
 		t.Fatal("expected error for escalation pending, got nil")
 	}
@@ -232,7 +232,7 @@ func TestCallTool_PDPUnavailable(t *testing.T) {
 	defer srv.Close()
 
 	f := newTestForwarder(t, srv)
-	_, err := f.CallTool(context.Background(), shared.EnrichedMCPRequest{RequestID: "req-503"})
+	_, err := f.CallTool(context.Background(), shared.EnrichedMCPRequest{TraceID: "req-503"})
 	if err != shared.ErrPDPUnavailable {
 		t.Errorf("error = %v, want ErrPDPUnavailable", err)
 	}
@@ -246,7 +246,7 @@ func TestCallTool_UnexpectedStatus(t *testing.T) {
 	defer srv.Close()
 
 	f := newTestForwarder(t, srv)
-	_, err := f.CallTool(context.Background(), shared.EnrichedMCPRequest{RequestID: "req-500"})
+	_, err := f.CallTool(context.Background(), shared.EnrichedMCPRequest{TraceID: "req-500"})
 	if err == nil {
 		t.Fatal("expected error for 500 response, got nil")
 	}
@@ -255,7 +255,7 @@ func TestCallTool_UnexpectedStatus(t *testing.T) {
 func TestCallTool_NetworkError(t *testing.T) {
 	// Point at a port nothing is listening on.
 	f, _ := NewForwarder(KeepConfig{Endpoint: "http://127.0.0.1:1"})
-	_, err := f.CallTool(context.Background(), shared.EnrichedMCPRequest{RequestID: "req-net"})
+	_, err := f.CallTool(context.Background(), shared.EnrichedMCPRequest{TraceID: "req-net"})
 	if err == nil {
 		t.Fatal("expected network error, got nil")
 	}
@@ -271,7 +271,7 @@ func TestCallTool_ContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := f.CallTool(ctx, shared.EnrichedMCPRequest{RequestID: "req-cancel"})
+	_, err := f.CallTool(ctx, shared.EnrichedMCPRequest{TraceID: "req-cancel"})
 	if err == nil {
 		t.Fatal("expected error from cancelled context, got nil")
 	}
@@ -406,8 +406,8 @@ func TestSendLogs_Success(t *testing.T) {
 
 	f := newTestForwarder(t, srv)
 	entries := []DecisionLogEntry{
-		{RequestID: "req-1", Decision: "allow", Source: "gate-fastpath"},
-		{RequestID: "req-2", Decision: "deny", Source: "gate-fastpath"},
+		{TraceID: "req-1", Decision: "allow", Source: "gate-fastpath"},
+		{TraceID: "req-2", Decision: "deny", Source: "gate-fastpath"},
 	}
 	if err := f.SendLogs(context.Background(), entries); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -425,7 +425,7 @@ func TestSendLogs_ServerError(t *testing.T) {
 	defer srv.Close()
 
 	f := newTestForwarder(t, srv)
-	entries := []DecisionLogEntry{{RequestID: "req-1", Decision: "allow"}}
+	entries := []DecisionLogEntry{{TraceID: "req-1", Decision: "allow"}}
 	err := f.SendLogs(context.Background(), entries)
 	if err == nil {
 		t.Fatal("expected error from server error response, got nil")

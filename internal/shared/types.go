@@ -65,8 +65,11 @@ type EnrichedMCPRequest struct {
 	UserIdentity     UserIdentity      `json:"user_identity"`
 	EscalationTokens []EscalationToken `json:"escalation_tokens"`
 	SessionID        string            `json:"session_id"`
-	RequestID        string            `json:"request_id"`
-	TraceID          string            `json:"trace_id,omitempty"` // W3C trace ID, set by Gate when telemetry is enabled
+	// TraceID is the single correlation identifier for this request.
+	// When OTel telemetry is enabled it is the W3C trace ID from the active span.
+	// When telemetry is disabled (noop exporter) Gate generates a UUID so this
+	// field is always non-empty and can be used for log correlation and deny messages.
+	TraceID string `json:"trace_id"`
 }
 
 // PDPResponse is the decision returned by the Policy Decision Point.

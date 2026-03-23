@@ -127,7 +127,7 @@ func TestOPAClient_Evaluate(t *testing.T) {
 					SourceType:  "oidc",
 				},
 				SessionID: "session-123",
-				RequestID: "request-456",
+				TraceID: "request-456",
 			}
 
 			resp, err := client.Evaluate(context.Background(), req)
@@ -158,20 +158,17 @@ func TestNoopPDP_AlwaysAllows(t *testing.T) {
 	pdp := NewNoopPDPClient()
 
 	requests := []shared.EnrichedMCPRequest{
-		{ServerName: "s", ToolName: "t", RequestID: "r1"},
-		{ServerName: "s", ToolName: "delete_everything", RequestID: "r2",
+		{ServerName: "s", ToolName: "t", TraceID: "r1"},
+		{ServerName: "s", ToolName: "delete_everything", TraceID: "r2",
 			UserIdentity: shared.UserIdentity{UserID: "attacker", Groups: []string{"nobody"}}},
 	}
 	for _, req := range requests {
 		resp, err := pdp.Evaluate(context.Background(), req)
 		if err != nil {
-			t.Errorf("req %s: unexpected error: %v", req.RequestID, err)
+			t.Errorf("req %s: unexpected error: %v", req.TraceID, err)
 		}
 		if resp.Decision != "allow" {
-			t.Errorf("req %s: decision = %q, want allow", req.RequestID, resp.Decision)
-		}
-		if resp.RequestID != req.RequestID {
-			t.Errorf("req %s: RequestID not echoed, got %q", req.RequestID, resp.RequestID)
+			t.Errorf("req %s: decision = %q, want allow", req.TraceID, resp.Decision)
 		}
 	}
 }
@@ -229,7 +226,7 @@ func TestOPAClient_Evaluate_PropagatesTraceContext(t *testing.T) {
 	_, err := client.Evaluate(ctx, shared.EnrichedMCPRequest{
 		ServerName: "test-server",
 		ToolName:   "test-tool",
-		RequestID:  "req-trace-test",
+		TraceID:  "req-trace-test",
 	})
 	if err != nil {
 		t.Fatalf("Evaluate() error: %v", err)
@@ -253,7 +250,7 @@ func TestOPAClient_Evaluate_ContextCancellation(t *testing.T) {
 	req := shared.EnrichedMCPRequest{
 		ServerName: "test-server",
 		ToolName:   "test-tool",
-		RequestID:  "request-123",
+		TraceID:  "request-123",
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

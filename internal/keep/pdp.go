@@ -51,11 +51,10 @@ func NewNoopPDPClient() PolicyDecisionPoint {
 	return &noopPDP{}
 }
 
-func (n *noopPDP) Evaluate(_ context.Context, req shared.EnrichedMCPRequest) (shared.PDPResponse, error) {
+func (n *noopPDP) Evaluate(_ context.Context, _ shared.EnrichedMCPRequest) (shared.PDPResponse, error) {
 	return shared.PDPResponse{
-		Decision:  "allow",
-		Reason:    "noop pdp: policy enforcement disabled",
-		RequestID: req.RequestID,
+		Decision: "allow",
+		Reason:   "noop pdp: policy enforcement disabled",
 	}, nil
 }
 
@@ -207,7 +206,7 @@ func (c *opaClient) Evaluate(ctx context.Context, req shared.EnrichedMCPRequest)
 	span.SetAttributes(
 		attribute.String("pdp.type", "opa"),
 		attribute.String("pdp.endpoint", c.endpoint),
-		attribute.String("request.id", req.RequestID),
+		attribute.String("trace.id", req.TraceID),
 		attribute.String("tool.name", req.ToolName),
 	)
 	traceID := telemetry.TraceIDFromContext(ctx)
@@ -239,7 +238,7 @@ func (c *opaClient) Evaluate(ctx context.Context, req shared.EnrichedMCPRequest)
 				},
 			},
 			SessionID: req.SessionID,
-			RequestID: req.RequestID,
+			RequestID: req.TraceID, // OPA receives trace_id as the correlation ID
 		},
 	})
 	if err != nil {
@@ -280,7 +279,7 @@ func (c *opaClient) Evaluate(ctx context.Context, req shared.EnrichedMCPRequest)
 	}
 
 	span.SetAttributes(attribute.String("pdp.decision", decision))
-	slog.InfoContext(ctx, "keep: pdp decision", "decision", decision, "request_id", req.RequestID, "trace_id", traceID)
+	slog.InfoContext(ctx, "keep: pdp decision", "decision", decision, "trace_id", traceID)
 
 	return shared.PDPResponse{
 		Decision:        decision,

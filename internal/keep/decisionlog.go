@@ -31,13 +31,13 @@ import (
 type DecisionLogEntry struct {
 	Timestamp  time.Time      `json:"timestamp"`
 	SessionID  string         `json:"session_id"`
-	RequestID  string         `json:"request_id"`
+	TraceID    string         `json:"trace_id"`
 	UserID     string         `json:"user_id"`
 	ServerName string         `json:"server_name,omitempty"`
 	ToolName   string         `json:"tool_name"`
 	Decision   string         `json:"decision"` // "allow" | "deny" | "escalate"
 	Reason     string         `json:"reason,omitempty"`
-	PDPRequestID string       `json:"pdp_request_id,omitempty"` // request_id echoed by the PDP, if any
+	PDPRequestID string       `json:"pdp_request_id,omitempty"` // reference ID echoed by the PDP, if any
 	Source     string         `json:"source"`             // "gate-fastpath" | "pdp"
 	Arguments  map[string]any `json:"arguments,omitempty"`
 	Result     string         `json:"result,omitempty"` // summary of tool result

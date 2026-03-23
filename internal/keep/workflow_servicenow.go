@@ -57,10 +57,10 @@ func (h *serviceNowHandler) Submit(ctx context.Context, req shared.EnrichedMCPRe
 			req.ServerName, req.ToolName, req.UserIdentity.UserID,
 		),
 		"description": fmt.Sprintf(
-			"Tool: %s\nServer: %s\nUser: %s (%s)\nRequest ID: %s\nSession ID: %s\nEscalation JWT: %s",
+			"Tool: %s\nServer: %s\nUser: %s (%s)\nTrace ID: %s\nSession ID: %s\nEscalation JWT: %s",
 			req.ToolName, req.ServerName,
 			req.UserIdentity.DisplayName, req.UserIdentity.UserID,
-			req.RequestID, req.SessionID, escalationJWT,
+			req.TraceID, req.SessionID, escalationJWT,
 		),
 		"caller_id":  req.UserIdentity.UserID,
 		"category":   "AI Agent Access Request",

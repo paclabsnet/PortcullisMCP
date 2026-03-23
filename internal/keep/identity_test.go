@@ -186,7 +186,7 @@ func TestNormalizeIdentity_HandleCallIntegration(t *testing.T) {
 			Groups:     []string{"admins"},
 			SourceType: "os",
 		},
-		RequestID: "req-1",
+		TraceID: "req-1",
 	}
 	body, _ := json.Marshal(req)
 

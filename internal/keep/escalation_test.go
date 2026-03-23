@@ -52,7 +52,7 @@ func TestEscalationSigner_Sign(t *testing.T) {
 			UserID:      "user@example.com",
 			DisplayName: "Test User",
 		},
-		RequestID: "req-123",
+		TraceID: "req-123",
 	}
 	scope := []map[string]any{{"resource": "repo:example"}}
 

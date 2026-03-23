@@ -45,7 +45,7 @@ func newWebhookHandler(cfg WebhookConfig) (*webhookHandler, error) {
 // or forward the token to the user via the enterprise's own notification system.
 func (h *webhookHandler) Submit(ctx context.Context, req shared.EnrichedMCPRequest, escalationJWT string) (string, error) {
 	payload := map[string]any{
-		"request_id":     req.RequestID,
+		"trace_id":       req.TraceID,
 		"session_id":     req.SessionID,
 		"server":         req.ServerName,
 		"tool":           req.ToolName,
@@ -91,5 +91,5 @@ func (h *webhookHandler) Submit(ctx context.Context, req shared.EnrichedMCPReque
 	if result.RequestID != "" {
 		return result.RequestID, nil
 	}
-	return req.RequestID, nil
+	return req.TraceID, nil
 }

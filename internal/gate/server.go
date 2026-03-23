@@ -38,7 +38,7 @@ import (
 type DecisionLogEntry struct {
 	Timestamp time.Time      `json:"timestamp"`
 	SessionID string         `json:"session_id"`
-	RequestID string         `json:"request_id"`
+	TraceID   string         `json:"trace_id"`
 	UserID    string         `json:"user_id"`
 	ToolName  string         `json:"tool_name"`
 	Decision  string         `json:"decision"` // "allow" | "deny"
@@ -230,8 +230,12 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 		attribute.String("session.id", g.sessionID),
 	)
 
-	requestID := uuid.New().String()
+	// TraceID is the single correlation identifier. Use the OTel trace ID when
+	// telemetry is active; fall back to a UUID so logs are always correlatable.
 	traceID := telemetry.TraceIDFromContext(ctx)
+	if traceID == "" {
+		traceID = uuid.New().String()
+	}
 
 	fpResult, err := g.FastPath(ctx, toolName, args)
 	if err != nil {
@@ -247,14 +251,14 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 	switch fpResult {
 	case FastPathAllow:
 		span.SetAttributes(attribute.String("pdp.decision", "allow"), attribute.String("pdp.source", "fastpath"))
-		slog.InfoContext(ctx, "fast-path allow", "tool", toolName, "path", path, "request_id", requestID, "trace_id", traceID)
+		slog.InfoContext(ctx, "fast-path allow", "tool", toolName, "path", path, "trace_id", traceID)
 
 		// Queue decision log entry
 		select {
 		case g.logChan <- DecisionLogEntry{
 			Timestamp: time.Now().UTC(),
 			SessionID: g.sessionID,
-			RequestID: requestID,
+			TraceID:   traceID,
 			UserID:    g.identity.Get(ctx).UserID,
 			ToolName:  toolName,
 			Decision:  "allow",
@@ -277,14 +281,14 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 	case FastPathDeny:
 		span.SetAttributes(attribute.String("pdp.decision", "deny"), attribute.String("pdp.source", "fastpath"))
 		span.SetStatus(codes.Error, "fast-path deny")
-		slog.InfoContext(ctx, "fast-path deny", "tool", toolName, "path", path, "request_id", requestID, "trace_id", traceID)
+		slog.InfoContext(ctx, "fast-path deny", "tool", toolName, "path", path, "trace_id", traceID)
 
 		// Queue decision log entry
 		select {
 		case g.logChan <- DecisionLogEntry{
 			Timestamp: time.Now().UTC(),
 			SessionID: g.sessionID,
-			RequestID: requestID,
+			TraceID:   traceID,
 			UserID:    g.identity.Get(ctx).UserID,
 			ToolName:  toolName,
 			Decision:  "deny",
@@ -311,12 +315,11 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 			UserIdentity:     currentIdentity,
 			EscalationTokens: g.collectEscalationTokens(ctx, shared.LocalFSServerName, toolName),
 			SessionID:        g.sessionID,
-			RequestID:        requestID,
 			TraceID:          traceID,
 		}
 		if err := g.forwarder.Authorize(ctx, enriched); err != nil {
 			g.maybeStorePendingEscalation(shared.LocalFSServerName, toolName, err)
-			return policyErrToResult(err, toolName, requestID)
+			return policyErrToResult(err, toolName, traceID)
 		}
 		if g.localFS == nil {
 			return nil, fmt.Errorf("local filesystem server not configured")
@@ -340,13 +343,12 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 		UserIdentity:     currentIdentity,
 		EscalationTokens: g.collectEscalationTokens(ctx, serverName, toolName),
 		SessionID:        g.sessionID,
-		RequestID:        requestID,
 		TraceID:          traceID,
 	}
 	result, err := g.forwarder.CallTool(ctx, enriched)
 	if err != nil {
 		g.maybeStorePendingEscalation(serverName, toolName, err)
-		return policyErrToResult(err, toolName, requestID)
+		return policyErrToResult(err, toolName, traceID)
 	}
 	return result, err
 }

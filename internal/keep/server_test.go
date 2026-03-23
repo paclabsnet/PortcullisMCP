@@ -110,7 +110,7 @@ func TestServer_HandleCall_Allow(t *testing.T) {
 		UserIdentity: shared.UserIdentity{
 			UserID: "user@example.com",
 		},
-		RequestID: "req-123",
+		TraceID: "req-123",
 		SessionID: "session-456",
 	}
 
@@ -150,7 +150,7 @@ func TestServer_HandleCall_Deny(t *testing.T) {
 	reqBody := shared.EnrichedMCPRequest{
 		ServerName: "test-server",
 		ToolName:   "test-tool",
-		RequestID:  "req-123",
+		TraceID:  "req-123",
 	}
 
 	body, _ := json.Marshal(reqBody)
@@ -202,7 +202,7 @@ func TestServer_HandleCall_Escalate(t *testing.T) {
 	reqBody := shared.EnrichedMCPRequest{
 		ServerName: "test-server",
 		ToolName:   "test-tool",
-		RequestID:  "req-123",
+		TraceID:  "req-123",
 	}
 
 	body, _ := json.Marshal(reqBody)
@@ -245,7 +245,7 @@ func TestServer_HandleCall_PDPError(t *testing.T) {
 	reqBody := shared.EnrichedMCPRequest{
 		ServerName: "test-server",
 		ToolName:   "test-tool",
-		RequestID:  "req-123",
+		TraceID:  "req-123",
 	}
 
 	body, _ := json.Marshal(reqBody)
@@ -323,7 +323,7 @@ func TestServer_HandleLog(t *testing.T) {
 	entries := []DecisionLogEntry{
 		{
 			SessionID:  "session-123",
-			RequestID:  "req-123",
+			TraceID:  "req-123",
 			UserID:     "user@example.com",
 			ServerName: "test-server",
 			ToolName:   "test-tool",
@@ -333,7 +333,7 @@ func TestServer_HandleLog(t *testing.T) {
 		},
 		{
 			SessionID:  "session-456",
-			RequestID:  "req-456",
+			TraceID:  "req-456",
 			UserID:     "user2@example.com",
 			ServerName: "test-server",
 			ToolName:   "test-tool2",

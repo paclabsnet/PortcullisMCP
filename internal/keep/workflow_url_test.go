@@ -41,7 +41,7 @@ func TestNewURLWorkflowHandler_Valid(t *testing.T) {
 
 func TestURLWorkflowHandler_Submit_MissingJWT(t *testing.T) {
 	h, _ := newURLWorkflowHandler(URLWorkflowConfig{GuardURL: "https://guard.example.com"})
-	_, err := h.Submit(context.Background(), shared.EnrichedMCPRequest{RequestID: "r"}, "")
+	_, err := h.Submit(context.Background(), shared.EnrichedMCPRequest{TraceID: "r"}, "")
 	if err == nil {
 		t.Fatal("expected error for missing escalation JWT, got nil")
 	}
@@ -50,7 +50,7 @@ func TestURLWorkflowHandler_Submit_MissingJWT(t *testing.T) {
 func TestURLWorkflowHandler_Submit_URLConstruction(t *testing.T) {
 	h, _ := newURLWorkflowHandler(URLWorkflowConfig{GuardURL: "https://guard.example.com"})
 
-	ref, err := h.Submit(context.Background(), shared.EnrichedMCPRequest{RequestID: "r"}, "my.jwt.token")
+	ref, err := h.Submit(context.Background(), shared.EnrichedMCPRequest{TraceID: "r"}, "my.jwt.token")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestURLWorkflowHandler_Submit_RequestIgnored(t *testing.T) {
 	req := shared.EnrichedMCPRequest{
 		ServerName: "github",
 		ToolName:   "push_code",
-		RequestID:  "req-xyz",
+		TraceID:  "req-xyz",
 	}
 	ref, err := h.Submit(context.Background(), req, "token.payload.sig")
 	if err != nil {
