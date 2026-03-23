@@ -2,157 +2,133 @@
 
 **Enterprise MCP (Model Context Protocol) Policy Gateway**
 
-PortcullisMCP is a policy enforcement gateway for AI agents. It sits between AI agents (Claude, Copilot, etc.) and MCP servers, enforcing enterprise access policies through an external Policy Decision Point (PDP).
+PortcullisMCP is a policy enforcement gateway for AI agents. It sits between AI agents (Claude, Copilot, etc.) and MCP servers, enforcing access policies through an external Policy Decision Point (PDP).
 
-PortcullisMCP tries to avoid being opinionated about anything outside of the core functional loop.
+PortcullisMCP is designed to be unopinionated: bring your own PDP, your own identity provider, your own workflow system, and your own secret management. The core loop stays minimal so you can get started without heavy infrastructure.
 
 ## Architecture
 
 ```
-Agent <--> portcullis-gate <--> portcullis-keep <--> PDP (OPA)
-     |                     |                    |
-     |                     |                    +--> HTTP MCP Backends
-     |                     |                    |    (APIs, DBs, enterprise services)
-     |                     |                    |
-     |                     |                    +--> Workflow (escalations)
-     |                     |
-     |                     +--> Local Filesystem (fast-path, no network)
+Agent <--> portcullis-gate <--> portcullis-keep <--> PDP (OPA or custom)
+                          |                    |
+                          |                    +--> HTTP MCP Backends
+                          |                         (APIs, databases, enterprise services)
+                          |
+                          +--> Local Filesystem (fast-path, no network)
 ```
 
-- **portcullis-gate**: Local sidecar on the user's machine. Handles local filesystem access via fast-path rules and forwards requests requiring policy enforcement to Keep.
-- **portcullis-keep**: Central policy enforcement service. Calls the PDP and routes to HTTP MCP backends (enterprise APIs, databases, etc.).
-- **PDP (OPA)**: Policy Decision Point that evaluates requests against enterprise policy rules.
-- **MCP Backends**: Enterprise services exposed via HTTP/SSE transport (not stdio, which is development-only).
+- **portcullis-gate**: Local sidecar on the user's machine. Handles local filesystem access via fast-path rules and forwards all other requests to Keep with full identity context.
+- **portcullis-keep**: Central policy enforcement service. Calls the PDP, routes allowed requests to MCP backends, and handles escalations.
+- **portcullis-guard**: Web UI for escalation approvals. Users click a link, review what the agent is requesting, and approve or deny.
+- **PDP**: Policy Decision Point. The default integration is OPA (Open Policy Agent), but any HTTP service implementing the same interface works. A built-in `noop` PDP allows all requests — useful for getting started without a policy engine.
 
-## Quick Start (Local POC)
+## Quick Start
 
-### Prerequisites
-- Go 1.24+
-- Docker (for OPA)
-- An HTTP MCP server for testing (see below)
+### Minimal (no Docker, no OPA)
 
-### Architecture Note
+This path runs Keep with the `noop` PDP, which allows all requests. Useful for understanding the flow before adding policy enforcement.
 
-**Local vs. Enterprise Resources:**
-- **Gate** handles local filesystem access directly (fast-path, no network overhead)
-- **Keep** routes to enterprise HTTP MCP backends (APIs, databases, services that need policy enforcement)
-- **Guard** provides a mechanism for user escalation, granting rights to the agents to perform actions on the user's behalf
+**Prerequisites:** Go 1.24+
 
-This separation ensures:
-- Fast local operations (reads in sandbox)
-- Policy-enforced enterprise access (writes, APIs, databases)
-- Realistic enterprise architecture (no stdio in production)
+```sh
+# Build and install
+make build && make install
 
-
-### 1. Build the binaries
-
-```
-make build & make install
+# Run Keep with the minimal config (noop PDP, no OPA required)
+make run-keep
 ```
 
+Then configure your MCP client to launch Gate. Example for Claude Desktop (`claude_desktop_config.json`):
 
-### 2. Start OPA, Portcullis (Guard/Keep) and the Fetch & Mock Enterprise MCPs
-
-```
-docker compose up --build
-```
-
-This starts OPA on `http://localhost:8181` with the policy bundle found in the `policies/rego` directory.
-
-It starts Portcullis Keep on port 8080
-
-It starts Portcullis Guard on 8444
-
-It starts Mock Enterprise API on an arbitrary port
-
-It starts Fetch (website digestor) on an arbitrary port
-
-
-
-### 3. Test it
-
-#### Step 1 - configure the agent using MCPs to be aware of Portcullis
-
-Provide the Agent with the location of the binary and the `--config` argument for the location of the
-`gate.yaml` file for configuration.
-
-The Gate exposes an MCP server on stdio. It should start automatically once the Agent knows about it.
-
-example for Claude desktop:
-```
-  "mcpServers": {
-      "portcullis": {
-         "command": "portcullis-gate",
-         "args": ["-config", "/home/johnb/.portcullis/gate.yaml"]
-      }
-
-  },
+```json
+"mcpServers": {
+    "portcullis": {
+        "command": "portcullis-gate",
+        "args": ["-config", "/home/you/.portcullis/gate.yaml"]
+    }
+}
 ```
 
-#### Step 2 - Restart Agent
+Copy `config/gate-config.minimal.yaml` to `~/.portcullis/gate.yaml` and adjust paths. Gate starts automatically when the MCP client launches.
 
-The agent should be able to find portcullis if you ask, and it should be able to enumerate the functionality.
+Verify Gate is running via the management API at `http://localhost:7777`.
 
-You can verify that Gate is running by using the management API at `http://localhost:7777`.
+### Full Demo Stack (Docker)
 
-#### Step 3 - Actual tests
+This path runs the complete stack: OPA with a sample policy, Keep, Guard, and two example MCP backends (a mock enterprise API and a web fetch server).
 
-"Please use portcullis to fetch the latest news from 'website'"
+**Prerequisites:** Go 1.24+, Docker
 
-"Please use portcullis to query orders for customer *random number*"
+```sh
+# Build binaries and start the demo stack
+make build && make demo-start
+```
 
-"Please use portcullis to update the name of customer *random number* to Arbitrary Name"
+Services started:
+- Keep on `http://localhost:8080`
+- Guard on `http://localhost:8444`
+- OPA on `http://localhost:8181`
+- Mock enterprise API and fetch-mcp (internal to Docker network)
 
-**this last one should cause an escalation event, which should come back to you in the form of a link**
+Configure Gate as above, then try these prompts with your agent:
 
-click the link to approve the request and get a JWT. Use the Gate web interface (port 7777 on localhost) to paste in the JWT.
+```
+"Please use portcullis to fetch the latest news from <website>"
 
-Now ask the agent to update the name again. This time, it should work.
+"Please use portcullis to query orders for customer <id>"
 
-**Testing the flow:**
-- Local filesystem reads (Gate fast-path) - never reach Keep
-- Enterprise API calls (mock-enterprise-api backend) - routed through Keep → OPA → Mock server
-- Policy denies/escalations are visible in Keep logs
-- OPA decisions will show up in the combined Docker log
+"Please use portcullis to update the name of customer <id> to Arbitrary Name"
+```
+
+The last request should trigger an escalation. The agent will surface a link. Click it, review the request in Guard, and approve it to receive a JWT. Paste the JWT into the Gate management UI at `http://localhost:7777`. Then ask the agent to try again — this time it should succeed.
+
+```sh
+# Stop the demo stack
+make demo-stop
+```
 
 ## Configuration
 
-### Docker Demo (for local testing)
-- `docker/guard-demo.yaml` - listening on port, shared secrets for OPA and Keep
-- `docker/keep-demo.yaml` - listening on port, shared secrets, OPA path, MCP backends, how to escalate, what to do with decision logs
-- `docker/opa-config.yaml` - sends decision logs to the console
+### Gate (`~/.portcullis/gate.yaml`)
 
-- `gate.yaml` can be used to set identity information when the source type is `os`. See the *Overriding Identity in gate.yaml* section below for more info.
+- `config/gate-config.minimal.yaml` — minimal config for local testing
+- `config/gate-config.example.yaml` — full production config with mTLS
 
-### Minimal
-- `config/gate-config.minimal.yaml` 
-- `config/keep-config.minimal.yaml`
-- `config/guard-config.minimal.yaml`
+### Keep
 
+- `config/keep-config.minimal.yaml` — minimal config; uses `noop` PDP by default
+- `config/keep-config.example.yaml` — full production config with mTLS and OPA
 
-### Full (for production)
-- `config/gate-config.example.yaml` - Full configuration with mTLS
-- `config/keep-config.example.yaml` - Full configuration with mTLS and all features
+### Guard
 
+- `config/guard-config.minimal.yaml` — minimal config for local testing
+- `config/guard-config.example.yaml` — full production config
 
-### Overriding Identity in gate.yaml
-When using OS identity source (for PoC testing), you can override user identity fields:
+### Demo stack configs
+
+- `demo/keep-demo.yaml` — Keep config for the Docker demo
+- `demo/guard-demo.yaml` — Guard config for the Docker demo
+- `demo/opa-config.yaml` — OPA config for the Docker demo
+
+### Overriding identity in gate.yaml
+
+When using the OS identity source (for local testing), you can override user identity fields to simulate different users and group memberships without OIDC infrastructure:
+
 ```yaml
 identity:
   source: "os"
-  user_id: "alice@example.com"      # Override OS username
-  display_name: "Alice Developer"   # Override display name
+  user_id: "alice@example.com"
+  display_name: "Alice Developer"
   groups:
     - "developers"
     - "admin"
 ```
-This allows testing different user scenarios and group-based OPA policies without OIDC infrastructure. If `user_id` is not specified, it defaults t
-o the OS username.
 
+If `user_id` is not specified, it defaults to the OS username.
 
-### Environment Variables
+### Environment variables
 
-Both configs support environment variable expansion using `${VAR}` syntax:
+Both Gate and Keep configs support `${VAR}` syntax for environment variable expansion. Use this for secrets rather than hardcoding them:
 
 ```yaml
 backends:
@@ -164,38 +140,44 @@ backends:
       GITHUB_TOKEN: "${GITHUB_TOKEN}"
 ```
 
-## Policy Examples
+## Policy
+
+The included policy in `policies/` provides a working starting point:
+
+- Allows filesystem reads within the sandbox
+- Requires escalation for writes to certain directories
+- Denies access to protected paths (`.git`, `.portcullis`)
+- Allows access to some mock enterprise API tools, denies or escalates others based on group membership
+- Allows access to some websites via fetch, denies or escalates others
 
 See `docs/opa-examples.md` for detailed policy examples and testing guidance.
 
-The included `policies/tabular/decision.rego` provides a minimal policy that:
-- Allows filesystem reads in the sandbox
-- Requires escalation for writes to certain directories
-- Denies access to protected paths (.git, .portcullis)
-- allows access to some of the mock enterprise APIs, but not others (without appropriate group access)
-- allows access to websites via fetch, with some that are denied and some that require escalation
-
 ## Features
 
-✅ **Fast-path local rules** - Sandbox containment without network round-trips  
-✅ **User identity** - OIDC/OAuth2 or OS fallback  
-✅ **Escalation tokens** - Pre-authorized operations via JWTs  
-✅ **PDP integration** - OPA policy enforcement  
-✅ **Workflow integration** - ServiceNow, webhooks for approvals  
-✅ **Audit logging** - Batched decision logs to SIEM  
-✅ **Transport support** - stdio and HTTP (SSE) for MCP backends  
-✅ **Optional TLS** - mTLS for production, HTTP for development  
-✅ **Bearer auth** - Defense-in-depth authentication  
-
-## Documentation
-
-- [CLAUDE.md](CLAUDE.md) - Full architecture and design document
-- [docs/opa-examples.md](docs/opa-examples.md) - OPA policy examples and testing
+- Fast-path local rules — sandbox containment without network round-trips
+- User identity — OIDC/OAuth2 or OS fallback (OS identity is for testing only; Keep strips unverifiable claims in strict mode)
+- Escalation tokens — pre-authorized operations via signed JWTs
+- Pluggable PDP — OPA integration included; noop PDP for getting started
+- Workflow integration — ServiceNow, webhooks, or URL-based approval via Guard
+- Audit logging — batched decision logs to SIEM or console
+- Transport support — stdio and HTTP (Streamable HTTP, SSE) for MCP backends
+- Optional TLS — mTLS for production, plain HTTP for development
+- Bearer auth — shared secret authentication between Gate and Keep
 
 ## Testing
 
-```
+```sh
 go test ./...
 ```
 
-All 121 tests should pass.
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Security
+
+To report a vulnerability, see [SECURITY.md](SECURITY.md).
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).
