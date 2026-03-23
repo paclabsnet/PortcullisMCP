@@ -1,3 +1,17 @@
+// Copyright 2026 Policy-as-Code Laboratories (PAC.Labs)
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package keep
 
 import (
@@ -5,6 +19,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
@@ -131,6 +146,41 @@ func TestOPAClient_Evaluate(t *testing.T) {
 				t.Errorf("reason = %q, want %q", resp.Reason, tt.expectedReason)
 			}
 		})
+	}
+}
+
+func TestNoopPDP_AlwaysAllows(t *testing.T) {
+	pdp := NewNoopPDPClient()
+
+	requests := []shared.EnrichedMCPRequest{
+		{ServerName: "s", ToolName: "t", RequestID: "r1"},
+		{ServerName: "s", ToolName: "delete_everything", RequestID: "r2",
+			UserIdentity: shared.UserIdentity{UserID: "attacker", Groups: []string{"nobody"}}},
+	}
+	for _, req := range requests {
+		resp, err := pdp.Evaluate(context.Background(), req)
+		if err != nil {
+			t.Errorf("req %s: unexpected error: %v", req.RequestID, err)
+		}
+		if resp.Decision != "allow" {
+			t.Errorf("req %s: decision = %q, want allow", req.RequestID, resp.Decision)
+		}
+		if resp.RequestID != req.RequestID {
+			t.Errorf("req %s: RequestID not echoed, got %q", req.RequestID, resp.RequestID)
+		}
+	}
+}
+
+func TestNewServer_UnknownPDPType(t *testing.T) {
+	cfg := Config{
+		PDP: PDPConfig{Type: "unknown-pdp"},
+	}
+	_, err := NewServer(cfg, "")
+	if err == nil {
+		t.Fatal("expected error for unknown PDP type, got nil")
+	}
+	if !strings.Contains(err.Error(), "unknown pdp type") {
+		t.Errorf("error = %q, want it to mention unknown pdp type", err.Error())
 	}
 }
 

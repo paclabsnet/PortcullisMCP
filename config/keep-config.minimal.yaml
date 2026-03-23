@@ -9,8 +9,10 @@ listen:
     bearer_token: "dev-secret-token"  # shared secret for local testing
 
 pdp:
-  type: "opa"
-  endpoint: "http://localhost:8181/v1/data/portcullis/decision"
+  # type: "noop" allows all requests without a policy engine - useful for getting started.
+  # Switch to type: "opa" with a real endpoint for any real deployment.
+  type: "noop"
+  # endpoint: "http://localhost:8181/v1/data/portcullis/decision"
 
 # Demo mode: accept OS-sourced identities with all claims intact.
 # Change to mode: "strict" for production deployments.

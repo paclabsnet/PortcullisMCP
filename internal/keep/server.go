@@ -1,3 +1,17 @@
+// Copyright 2026 Policy-as-Code Laboratories (PAC.Labs)
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package keep
 
 import (
@@ -39,7 +53,15 @@ type Server struct {
 // NewServer creates a Keep server. configPath is retained so the admin reload
 // handler can re-read the file on demand.
 func NewServer(cfg Config, configPath string) (*Server, error) {
-	pdp := NewOPAClient(cfg.PDP.Endpoint)
+	var pdp PolicyDecisionPoint
+	switch cfg.PDP.Type {
+	case "noop":
+		pdp = NewNoopPDPClient()
+	case "opa", "":
+		pdp = NewOPAClient(cfg.PDP.Endpoint)
+	default:
+		return nil, fmt.Errorf("unknown pdp type %q; supported types: opa, noop", cfg.PDP.Type)
+	}
 
 	router := NewRouter(cfg.Backends)
 

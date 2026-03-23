@@ -9,6 +9,9 @@ listen:
                        # use mTLS (client_ca) or bearer_token, or both for defense-in-depth; omit to use bearer only
 
 pdp:
+  # Supported types:
+  #   opa  - Open Policy Agent REST API (recommended for production)
+  #   noop - allow all requests unconditionally (getting started / local dev only)
   type: "opa"
   endpoint: "http://opa.internal.example.com:8181/v1/data/portcullis/decision"
 

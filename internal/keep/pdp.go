@@ -1,3 +1,17 @@
+// Copyright 2026 Policy-as-Code Laboratories (PAC.Labs)
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package keep
 
 import (
@@ -5,6 +19,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"path"
@@ -16,6 +31,26 @@ import (
 // PolicyDecisionPoint evaluates an enriched MCP request and returns a decision.
 type PolicyDecisionPoint interface {
 	Evaluate(ctx context.Context, req shared.EnrichedMCPRequest) (shared.PDPResponse, error)
+}
+
+// noopPDP is a PolicyDecisionPoint that allows every request unconditionally.
+// It is intended for local evaluation and getting-started scenarios only.
+// Do not use in production — it provides no access control whatsoever.
+type noopPDP struct{}
+
+// NewNoopPDPClient returns a PolicyDecisionPoint that allows all requests.
+// A warning is logged at startup to make clear that policy enforcement is disabled.
+func NewNoopPDPClient() PolicyDecisionPoint {
+	slog.Warn("keep: PDP type is \"noop\" — all requests will be allowed without policy evaluation; do not use in production")
+	return &noopPDP{}
+}
+
+func (n *noopPDP) Evaluate(_ context.Context, req shared.EnrichedMCPRequest) (shared.PDPResponse, error) {
+	return shared.PDPResponse{
+		Decision:  "allow",
+		Reason:    "noop pdp: policy enforcement disabled",
+		RequestID: req.RequestID,
+	}, nil
 }
 
 // opaClient calls the OPA REST API to evaluate policy.

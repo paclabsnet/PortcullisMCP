@@ -2,13 +2,6 @@
 
 ## Tasks
 
-### Task: Open Source It
-- we need to make sure the architecture is designed around the assumption that this is open source.
-- As few opinions as possible. For example:  identity, which PDP to use, how secrets are gathered
-- keep the basic implementation as light as possible, so you don't have to set up a ton of infrastructure to get started
-- move the docker stuff into a subdirectory.  The docker model is useful as a personal sandbox to try it out, not for actual enterprise implementations
-- it is absolutely critical not to turn this into Kubernetes, with a huge learning curve and significant infrastructure just to play around with it
-
 
 
 ### Task: Improve Identity
@@ -33,7 +26,7 @@
 
 ### Task: Improve JWT security at the PDP
 - the PDP should not only verify that the JWTs are valid, but it should also only accept JWTs where the UserID from the Principal matches the Subject embedded in the JWT
-**JB**
+(owner: @johndbro1)
 
 ### Task: Fail closed for Gate if Keep is unavailable
 - this is not super important, since if Keep is down, no non-local MCP requests can occur
@@ -48,7 +41,7 @@
 
 ### Task: at the PDP, Get rid of RequestId, use TraceID instead
 - this allows the trace to be included in the deny message
-**JB**
+(owner: @johndbro1)
 
 ### Task: Optionally Include the traceid in the Deny message back to the user
 - purpose: allows a user to escalate to the enterprise security team if they aren't allowed to do something they think they should be able to
@@ -68,25 +61,14 @@ decision := custom.decision if {
 ```
 
 An interesting idea if it works. Will need to update the Rego to test.
-**JB**
+(owner: @johndbro1)
 
-### Task: Identity at Keep - Demo vs Real
-The default behavior for Keep should be to ignore any identity information sent by Gate except maybe UserId, when the source is `os`.
-When Keep is in demo mode, it will accept forged identity information. It should generate an error message each time it does this unless
-the config says to accept forged identities (dependent on demo mode)
-
-- high priority
 
 ### Task: Input sanitizing at Keep and Guard
 - standard good hygiene
 
 - medium-low priority
 
-### Task: Keep should not follow redirects when calling MCPs via HTTP
-- SSRF protection
-- optionally: block RFC 1918, loopback, and link-local ranges at the HTTP client level for backend calls
-
-- medium priority
 
 ### Task: set enterprise logging configuration to redact
 - all keys should be redacted
