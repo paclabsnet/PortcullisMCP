@@ -12,12 +12,19 @@ pdp:
   type: "opa"
   endpoint: "http://localhost:8181/v1/data/portcullis/decision"
 
+# Demo mode: accept OS-sourced identities with all claims intact.
+# Change to mode: "strict" for production deployments.
+identity:
+  mode: "demo"
+  accept_forged_identities: true  # suppress per-request warnings in local dev
+
 backends:
   # HTTP MCP backend for demo - run the mock server with:
   #   go run ./examples/mock-enterprise-api
   mock-enterprise-api:
     type: "http"
     url: "http://localhost:3000/mcp"
+    allow_private_addresses: true  # localhost is loopback; fine for local dev
 
 escalation:
   workflow:

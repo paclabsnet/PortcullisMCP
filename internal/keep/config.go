@@ -17,6 +17,26 @@ type Config struct {
 	DecisionLog              DecisionLogConfig        `yaml:"decision_logs"`
 	EscalationRequestSigning SigningConfig             `yaml:"escalation_request_signing"`
 	Admin                    AdminConfig              `yaml:"admin"`
+	Identity                 IdentityConfig           `yaml:"identity"`
+}
+
+// IdentityConfig controls how Keep handles the UserIdentity claims sent by Gate.
+type IdentityConfig struct {
+	// Mode controls how Keep treats incoming identity claims.
+	//   "strict" (default) — OS-sourced identities are stripped down to user_id
+	//                        only; groups, roles, and other directory claims are
+	//                        discarded because Gate cannot verify them locally.
+	//   "demo"             — All identity fields are accepted as-is. Intended for
+	//                        local evaluation and sandbox use only. Keep logs a
+	//                        warning on every request unless AcceptForgedIdentities
+	//                        is also true.
+	Mode string `yaml:"mode"` // "strict" | "demo"
+
+	// AcceptForgedIdentities suppresses the per-request warning that is emitted
+	// in demo mode. Has no effect in strict mode. Set to true only when you
+	// intentionally want to test with fabricated identity data and do not want
+	// the log noise.
+	AcceptForgedIdentities bool `yaml:"accept_forged_identities"`
 }
 
 // AdminConfig holds credentials for the Keep admin API.
@@ -57,6 +77,12 @@ type BackendConfig struct {
 	Args    []string          `yaml:"args"`
 	Env     map[string]string `yaml:"env"`
 	URL     string            `yaml:"url"` // for http
+
+	// AllowPrivateAddresses opts this backend out of the RFC 1918 / loopback /
+	// link-local address check. Set to true for backends that are intentionally
+	// deployed on internal networks (e.g. Docker Compose, on-premises services).
+	// Redirects are still refused regardless of this setting.
+	AllowPrivateAddresses bool `yaml:"allow_private_addresses"`
 }
 
 type EscalationConfig struct {

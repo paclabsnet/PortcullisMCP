@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"sync"
@@ -179,17 +182,96 @@ func buildBackendTransport(cfg BackendConfig) (mcp.Transport, error) {
 		if cfg.URL == "" {
 			return nil, fmt.Errorf("http backend requires a URL")
 		}
+		if err := checkBackendURL(cfg.URL, cfg.AllowPrivateAddresses); err != nil {
+			return nil, fmt.Errorf("http backend URL rejected: %w", err)
+		}
 		return &mcp.StreamableClientTransport{
-			Endpoint: cfg.URL,
+			Endpoint:   cfg.URL,
+			HTTPClient: noRedirectHTTPClient(),
 		}, nil
 	case "sse":
 		if cfg.URL == "" {
 			return nil, fmt.Errorf("sse backend requires a URL")
 		}
+		if err := checkBackendURL(cfg.URL, cfg.AllowPrivateAddresses); err != nil {
+			return nil, fmt.Errorf("sse backend URL rejected: %w", err)
+		}
 		return &mcp.SSEClientTransport{
-			Endpoint: cfg.URL,
+			Endpoint:   cfg.URL,
+			HTTPClient: noRedirectHTTPClient(),
 		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported backend type %q", cfg.Type)
 	}
+}
+
+// noRedirectHTTPClient returns an http.Client that refuses to follow any
+// redirect. This prevents SSRF attacks where a legitimate MCP backend
+// redirects Keep to an internal service or metadata endpoint.
+func noRedirectHTTPClient() *http.Client {
+	return &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return fmt.Errorf("redirects are not permitted for MCP backend calls (attempted redirect to %s)", req.URL)
+		},
+	}
+}
+
+// privateRanges lists the CIDR blocks that must not be reachable via HTTP
+// backend URLs: RFC 1918 private ranges, loopback, and link-local.
+var privateRanges = func() []*net.IPNet {
+	var ranges []*net.IPNet
+	for _, cidr := range []string{
+		"10.0.0.0/8",
+		"172.16.0.0/12",
+		"192.168.0.0/16",
+		"127.0.0.0/8",
+		"::1/128",
+		"169.254.0.0/16", // IPv4 link-local
+		"fe80::/10",      // IPv6 link-local
+		"fc00::/7",       // IPv6 unique-local
+	} {
+		_, network, _ := net.ParseCIDR(cidr)
+		ranges = append(ranges, network)
+	}
+	return ranges
+}()
+
+// checkBackendURL validates that a backend URL is an absolute HTTP/HTTPS URL.
+// Unless allowPrivate is true, it also rejects hosts that resolve to RFC 1918,
+// loopback, or link-local addresses. This is a config-load-time check; the
+// no-redirect client handles runtime SSRF regardless of this setting.
+func checkBackendURL(rawURL string, allowPrivate bool) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("scheme %q not allowed; use http or https", u.Scheme)
+	}
+	if allowPrivate {
+		return nil
+	}
+	hostname := u.Hostname()
+	ips, err := net.LookupHost(hostname)
+	if err != nil {
+		// DNS failure at config time is non-fatal: the host may not be
+		// resolvable in the build/test environment. Log and allow.
+		slog.Warn("backend URL: could not resolve host at config time",
+			"host", hostname, "error", err)
+		return nil
+	}
+	for _, ipStr := range ips {
+		ip := net.ParseIP(ipStr)
+		if ip == nil {
+			continue
+		}
+		for _, private := range privateRanges {
+			if private.Contains(ip) {
+				return fmt.Errorf("host %q resolves to private/loopback address %s — "+
+					"set allow_private_addresses: true if this backend is intentionally on an internal network",
+					hostname, ipStr)
+			}
+		}
+	}
+	return nil
 }

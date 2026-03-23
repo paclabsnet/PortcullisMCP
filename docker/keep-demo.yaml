@@ -7,13 +7,20 @@ pdp:
   type: "opa"
   endpoint: "http://opa:8181/v1/data/portcullis/tabular/decision"
 
+# Demo mode: accept OS-sourced identities with all claims intact.
+identity:
+  mode: "demo"
+  accept_forged_identities: true  # suppress per-request warnings in demo stack
+
 backends:
   mock-enterprise-api:
     type: "http"
     url: "http://mock-enterprise-api:3000/mcp"
+    allow_private_addresses: true  # Docker internal network
   fetch:
     type: "http"
     url: "http://fetch-mcp:8080/mcp"
+    allow_private_addresses: true  # Docker internal network
 
 escalation:
   workflow:
