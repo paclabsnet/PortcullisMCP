@@ -45,7 +45,7 @@ import data.portcullis.escalate
 #        }
 #      ],
 #      "session_id": "session-abc123",
-#      "request_id": "req-xyz789"
+#      "trace_id": "req-xyz789"
 #    }
 #  }
 # }
@@ -59,7 +59,7 @@ import data.portcullis.escalate
 default decision := {
 	"decision":   "deny",
 	"reason":     "policy processing error, default deny",
-	"request_id": 0
+	"trace_id": 0
 }
 
 principal := input.authorization_request.principal
@@ -67,7 +67,7 @@ action    := input.authorization_request.action
 resource  := input.authorization_request.resource
 context   := input.authorization_request.context
 
-request_id := object.get(input, "request_id", 0)
+trace_id := object.get(input, "trace_id", 0)
 
 
 
@@ -86,7 +86,7 @@ escalation_grant_list := util.find_applicable_escalation_grants( context.escalat
 response_list contains 
 				{ "decision":"deny", 
 				  "reason":"Denied - MCP is not in scope", 
-				  "request_id": request_id} if {
+				  "trace_id": trace_id} if {
 
    not input.service in ["portcullis-localfs", "mock-enterprise-api", "fetch"]
 
@@ -96,7 +96,7 @@ response_list contains
 response_list contains 
 				{ "decision":"deny", 
 				  "reason":"Denied - localfs tool is not recognized", 
-				  "request_id": request_id} if {
+				  "trace_id": trace_id} if {
 
    action.service in ["portcullis-localfs"]
    not action.tool_name in ["read_file", "read_text_file", "read_media_file", "read_multiple_files", "write_file", 
@@ -110,7 +110,7 @@ response_list contains
 response_list contains 
 				{ "decision":"deny", 
 				  "reason":"Denied - mock-enterprise-api tool is not recognized", 
-				  "request_id": request_id} if {
+				  "trace_id": trace_id} if {
 
    action.service in ["mock-enterprise-api"]
    not action.tool_name in ["get_customer", "update_order_status", "query_inventory", "delete_order"]
@@ -127,7 +127,7 @@ response_list contains
 response_list contains 
 				{ "decision":"deny", 
 				  "reason":"Denied - media file extension not allowed", 
-				  "request_id": request_id} if {
+				  "trace_id": trace_id} if {
 
    action.service in ["portcullis-localfs"]
    action.tool_name in ["read_media_file"]
@@ -139,7 +139,7 @@ response_list contains
 response_list contains 
 				{ "decision":"deny", 
 				  "reason":"Denied - write destination not allowed", 
-				  "request_id": request_id} if {
+				  "trace_id": trace_id} if {
 
    action.service in ["portcullis-localfs"]
    action.tool_name in ["write_file"]
@@ -169,7 +169,7 @@ response_list contains
 response_list contains 
 				{ "decision":"escalate", 
 				  "reason":"This request requires escalated privilege", 
-				  "request_id": request_id} if {
+				  "trace_id": trace_id} if {
 
    action.service in ["portcullis-localfs"]
    action.tool_name in ["write_file"]
@@ -194,7 +194,7 @@ response_list contains
 response_list contains 
 				{ "decision":"allow", 
 				  "reason":"This request is allowed because of escalated privilege", 
-				  "request_id": request_id} if {
+				  "trace_id": trace_id} if {
 
    action.service in ["portcullis-localfs"]
    action.tool_name in ["write_file"]
@@ -223,7 +223,7 @@ response_list contains
 response_list contains 
 				{ "decision":"escalate", 
 				  "reason":"This request requires escalated privilege", 
-				  "request_id": request_id} if {
+				  "trace_id": trace_id} if {
 
 	action.service in ["mock-enterprise-api"]
 	action.tool_name in ["get_customer"]
@@ -247,7 +247,7 @@ response_list contains
 response_list contains 
 				{ "decision":"allow", 
 				  "reason":"This request is allowed because of escalated privileges", 
-				  "request_id": request_id} if {
+				  "trace_id": trace_id} if {
 
 	action.service in ["mock-enterprise-api"]
 	action.tool_name in ["get_customer"]
@@ -276,7 +276,7 @@ response_list contains
 response_list contains 
 				{ "decision":"allow", 
 				  "reason":"Allowed - in authorized group", 
-				  "request_id": request_id} if {
+				  "trace_id": trace_id} if {
 
    action.service in ["portcullis-localfs"]
    action.tool_name in ["delete_file"]
@@ -290,7 +290,7 @@ response_list contains
 response_list contains 
 				{ "decision":"allow", 
 				  "reason":"Allowed - in authorized group", 
-				  "request_id": request_id} if {
+				  "trace_id": trace_id} if {
 
 	action.service in ["portcullis-localfs"]
     action.tool_name in ["read_file", "read_text_file", "read_media_file", "read_multiple_files", 
@@ -310,7 +310,7 @@ response_list contains
 response_list contains 
 				{ "decision":"allow", 
 				  "reason":"Allowed - in authorized group", 
-				  "request_id": request_id} if {
+				  "trace_id": trace_id} if {
 
    action.service in ["mock-enterprise-api"]
    action.tool_name in ["update_order_status"]
@@ -321,7 +321,7 @@ response_list contains
 response_list contains 
 				{ "decision":"allow", 
 				  "reason":"Allowed - in authorized group", 
-				  "request_id": request_id} if {
+				  "trace_id": trace_id} if {
 
    action.service in ["mock-enterprise-api"]
    action.tool_name in ["delete_order"]
@@ -333,7 +333,7 @@ response_list contains
 response_list contains 
 				{ "decision":"allow", 
 				  "reason":"Allowed - in authorized group", 
-				  "request_id": request_id} if {
+				  "trace_id": trace_id} if {
 
    action.service in ["mock-enterprise-api"]
    action.tool_name in ["query_inventory"]
@@ -346,7 +346,7 @@ response_list contains
 response_list contains 
 				{ "decision":"allow", 
 				  "reason":"Allowed - in authorized group", 
-				  "request_id": request_id} if {
+				  "trace_id": trace_id} if {
 
    action.service in ["mock-enterprise-api"]
    action.tool_name in ["get_customer"]
@@ -363,7 +363,7 @@ response_list contains
 response_list contains 
 				{ "decision":"deny", 
 				  "reason":"denied - competitive website job listing", 
-				  "request_id": request_id} if {
+				  "trace_id": trace_id} if {
 
    action.service in ["fetch"]
    action.tool_name in ["fetch"]
@@ -377,7 +377,7 @@ response_list contains
 				{ "decision":"escalate", 
 				  "reason":"escalation required to visit competitor's product API", 
 				  "escalation_scope" : escalation_scope,
-				  "request_id": request_id} if {
+				  "trace_id": trace_id} if {
 
    action.service in ["fetch"]
    action.tool_name in ["fetch"]
@@ -408,7 +408,7 @@ response_list contains
 response_list contains 
 				{ "decision":"allow", 
 				  "reason":"allowed to visit competitor's product page after escalation", 
-				  "request_id": request_id} if {
+				  "trace_id": trace_id} if {
 
    action.service in ["fetch"]
    action.tool_name in ["fetch"]
@@ -432,7 +432,7 @@ response_list contains
 				{ "decision":"escalate", 
 				  "reason":"escalation required to visit styra/open policy agent, for the purposes of testing", 
 				  "escalation_scope" : escalation_scope,
-				  "request_id": request_id} if {
+				  "trace_id": trace_id} if {
 
    action.service in ["fetch"]
    action.tool_name in ["fetch"]
@@ -473,7 +473,7 @@ response_list contains
 response_list contains 
 				{ "decision":"allow", 
 				  "reason":"allowed to visit competitor's product page after escalation", 
-				  "request_id": request_id} if {
+				  "trace_id": trace_id} if {
 
    action.service in ["fetch"]
    action.tool_name in ["fetch"]
@@ -494,7 +494,7 @@ response_list contains
 response_list contains 
 				{ "decision":"allow", 
 				  "reason":"Allowed - in authorized group", 
-				  "request_id": request_id} if {
+				  "trace_id": trace_id} if {
 
    action.service in ["fetch"]
    action.tool_name in ["fetch"]
@@ -513,7 +513,7 @@ response_list contains
 				{ "decision":"escalate", 
 				  "reason":"escalation required to visit styra/open policy agent, for the purposes of testing", 
 				  "escalation_scope" : escalation_scope,
-				  "request_id": request_id} if {
+				  "trace_id": trace_id} if {
 
    action.service in ["fetch"]
    action.tool_name in ["fetch_url"]
@@ -548,7 +548,7 @@ response_list contains
 response_list contains 
 				{ "decision":"allow", 
 				  "reason":"allowed to visit competitor's product page after escalation", 
-				  "request_id": request_id} if {
+				  "trace_id": trace_id} if {
 
    action.service in ["fetch"]
    action.tool_name in ["fetch_url"]
@@ -571,7 +571,7 @@ response_list contains
 # non-business-hours request
 # response_list contains { "decision" : "deny", 
 #				"reason" : "no access during non-business hours: (Mon–Fri 08:00–18:00 UTC)", 
-#				"request_id" : request_id } if {
+#				"trace_id" : trace_id } if {
 #    now := time.now_ns()
 #    day  := time.weekday(now)   # 0=Sunday, 6=Saturday
 #    hour := time.clock(now)[0]
@@ -602,7 +602,7 @@ response_list contains
 # no response, deny
 decision := { "decision" : "deny", 
 				"reason" : "no matching rule found", 
-				"request_id" : request_id } if {
+				"trace_id" : trace_id } if {
 					count(response_list) == 0
 }
 
@@ -613,7 +613,7 @@ decision := { "decision" : "deny",
 #
 response_list contains { "decision":   "deny",	
 			  "reason":  "invalid input request",
-			  "request_id": request_id } if {
+			  "trace_id": trace_id } if {
 
 				not util.is_valid_request( input )
 

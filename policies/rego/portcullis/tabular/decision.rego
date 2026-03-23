@@ -68,7 +68,7 @@ import data.portcullis.escalate
 default decision := {
 	"decision":   "deny",
 	"reason":     "no policy matched, default deny",
-	"request_id": 0
+	"trace_id": 0
 }
 
 
@@ -160,7 +160,7 @@ default decision := {
 #        ]
 #    },
 #    "session_id": "session-abc123",
-#    "request_id": "req-xyz789"    
+#    "trace_id": "req-xyz789"    
 #  }
 # 
 
@@ -170,7 +170,7 @@ action    := input.authorization_request.action
 resource  := input.authorization_request.resource
 context   := input.authorization_request.context
 
-request_id := object.get(input, "request_id", 0)
+trace_id := object.get(input, "trace_id", 0)
 
 
 
@@ -179,7 +179,7 @@ escalation_grant_list := util.find_applicable_escalation_grants( context.escalat
 
 response_list contains { "decision":   "deny",	
 			  "reason":  "invalid input request",
-			  "request_id": request_id } if {
+			  "trace_id": trace_id } if {
 
 				not util.is_valid_request( input )
 
@@ -190,14 +190,14 @@ rules_section := object.get(data.portcullis.mcp, [action.service, action.tool_na
 
 response_list contains { "decision":   "deny",	
 			  "reason":  sprintf("no policy rules found for mcp: %s, tool: %s", [action.service, action.tool_name]),
-			  "request_id": request_id } if {
+			  "trace_id": trace_id } if {
 
 				rules_section == null
 			  }
 
 response_list contains { "decision" : "deny", 
 			  "reason" : "Denied by rule",
-			  "request_id": request_id } if {
+			  "trace_id": trace_id } if {
 
 
 				not rules_section.deny == null
@@ -208,7 +208,7 @@ response_list contains { "decision" : "deny",
 
 response_list contains { "decision" : "allow",
 			  "reason" : "Allowed by rule",
-			  "request_id" : request_id } if {
+			  "trace_id" : trace_id } if {
 
 				not rules_section.allow == null
 				print("#DEBUG: request: ", input.authorization_request)
@@ -219,7 +219,7 @@ response_list contains { "decision" : "allow",
 
 response_list contains { "decision" : "allow",
 			  "reason" : "Allowed by escalation token",
-			  "request_id" : request_id } if {
+			  "trace_id" : trace_id } if {
 
 				not rules_section.escalate == null
 
@@ -255,7 +255,7 @@ response_list contains {
 				"decision" : "escalate",
 			  	"reason" : "Request is not approved, but can be escalated",
 				"escalation_scope" : escalation_scope,
-			  	"request_id" : request_id } if {
+			  	"trace_id" : trace_id } if {
 
 					not rules_section.escalate == null
 					escalate.request_matches_base_criteria( input.authorization_request, rules_section.escalate )
@@ -284,7 +284,7 @@ response_list contains {
 # no response, deny
 decision := { "decision" : "deny", 
 				"reason" : "no matching rule found", 
-				"request_id" : request_id } if {
+				"trace_id" : trace_id } if {
 					count(response_list) == 0
 }
 
