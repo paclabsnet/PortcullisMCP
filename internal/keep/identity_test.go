@@ -17,12 +17,17 @@ package keep
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 )
@@ -55,12 +60,15 @@ func osIdentity() shared.UserIdentity {
 	}
 }
 
-// makeJWT builds a minimal unsigned JWT with the given claims for testing.
-func makeJWT(claims map[string]any) string {
-	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","typ":"JWT"}`))
-	payload, _ := json.Marshal(claims)
-	body := base64.RawURLEncoding.EncodeToString(payload)
-	return header + "." + body + ".fakesig"
+// signToken generates a signed JWT for testing using the provided RSA key and claims.
+func signToken(t *testing.T, key *rsa.PrivateKey, kid string, claims jwt.MapClaims) string {
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	token.Header["kid"] = kid
+	tokenString, err := token.SignedString(key)
+	if err != nil {
+		t.Fatalf("failed to sign token: %v", err)
+	}
+	return tokenString
 }
 
 // --- strictNormalizer tests ---
@@ -176,13 +184,46 @@ func TestPassthroughNormalizer_AcceptsAll(t *testing.T) {
 // --- oidcVerifyingNormalizer tests ---
 
 func TestOIDCVerifyingNormalizer_ValidToken(t *testing.T) {
-	exp := time.Now().Add(time.Hour).Unix()
-	raw := makeJWT(map[string]any{"iss": "https://idp.example.com", "sub": "alice", "exp": exp})
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kid := "test-kid"
+	issuer := "https://idp.example.com"
+	
+	jwksHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := base64.RawURLEncoding.EncodeToString(privateKey.N.Bytes())
+		e := base64.RawURLEncoding.EncodeToString(bigIntToBytes(privateKey.E))
+		keys := jwks{
+			Keys: []jwk{
+				{Kid: kid, Kty: "RSA", Alg: "RS256", N: n, E: e},
+			},
+		}
+		json.NewEncoder(w).Encode(keys)
+	})
+	server := httptest.NewServer(jwksHandler)
+	defer server.Close()
 
-	n := &oidcVerifyingNormalizer{issuer: "https://idp.example.com", strict: &strictNormalizer{}}
-	id := oidcIdentity()
-	id.RawToken = raw
-	id.TokenExpiry = exp
+	exp := time.Now().Add(time.Hour).Truncate(time.Second)
+	claims := jwt.MapClaims{
+		"iss":    issuer,
+		"sub":    "alice@corp.com",
+		"exp":    exp.Unix(),
+		"name":   "Alice",
+		"groups": []any{"devs"},
+	}
+	raw := signToken(t, privateKey, kid, claims)
+
+	n := &oidcVerifyingNormalizer{
+		issuer:  issuer,
+		jwksURL: server.URL,
+		strict:  &strictNormalizer{},
+	}
+	id := shared.UserIdentity{
+		UserID:     "alice@corp.com",
+		SourceType: "oidc",
+		RawToken:   raw,
+	}
 
 	got, err := n.Normalize(context.Background(), id)
 	if err != nil {
@@ -191,25 +232,83 @@ func TestOIDCVerifyingNormalizer_ValidToken(t *testing.T) {
 	if got.UserID != id.UserID {
 		t.Errorf("UserID = %q, want %q", got.UserID, id.UserID)
 	}
+	if got.DisplayName != "Alice" {
+		t.Errorf("DisplayName = %q, want Alice", got.DisplayName)
+	}
+	if len(got.Groups) != 1 || got.Groups[0] != "devs" {
+		t.Errorf("Groups = %v, want [devs]", got.Groups)
+	}
+	if got.TokenExpiry != exp.Unix() {
+		t.Errorf("TokenExpiry = %d, want %d", got.TokenExpiry, exp.Unix())
+	}
+}
+
+func bigIntToBytes(i int) []byte {
+	b := make([]byte, 4)
+	b[0] = byte(i >> 24)
+	b[1] = byte(i >> 16)
+	b[2] = byte(i >> 8)
+	b[3] = byte(i)
+	// Strip leading zeros
+	for len(b) > 0 && b[0] == 0 {
+		b = b[1:]
+	}
+	return b
 }
 
 func TestOIDCVerifyingNormalizer_ExpiredToken(t *testing.T) {
-	n := &oidcVerifyingNormalizer{issuer: "https://idp.example.com", strict: &strictNormalizer{}}
-	id := oidcIdentity()
-	id.TokenExpiry = time.Now().Add(-time.Minute).Unix() // expired
+	privateKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	kid := "test-kid"
+	issuer := "https://idp.example.com"
+	
+	jwksHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := base64.RawURLEncoding.EncodeToString(privateKey.N.Bytes())
+		e := base64.RawURLEncoding.EncodeToString(bigIntToBytes(privateKey.E))
+		json.NewEncoder(w).Encode(jwks{Keys: []jwk{{Kid: kid, Kty: "RSA", Alg: "RS256", N: n, E: e}}})
+	})
+	server := httptest.NewServer(jwksHandler)
+	defer server.Close()
+
+	claims := jwt.MapClaims{
+		"iss": issuer,
+		"sub": "alice",
+		"exp": time.Now().Add(-time.Hour).Unix(),
+	}
+	raw := signToken(t, privateKey, kid, claims)
+
+	n := &oidcVerifyingNormalizer{issuer: issuer, jwksURL: server.URL, strict: &strictNormalizer{}}
+	id := shared.UserIdentity{SourceType: "oidc", RawToken: raw}
 
 	_, err := n.Normalize(context.Background(), id)
 	if err == nil {
 		t.Fatal("expected error for expired token, got nil")
 	}
+	if !strings.Contains(err.Error(), "expired") {
+		t.Errorf("error = %q, want it to mention expired", err.Error())
+	}
 }
 
 func TestOIDCVerifyingNormalizer_WrongIssuer(t *testing.T) {
-	raw := makeJWT(map[string]any{"iss": "https://attacker.example.com", "sub": "alice"})
+	privateKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	kid := "test-kid"
+	
+	jwksHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := base64.RawURLEncoding.EncodeToString(privateKey.N.Bytes())
+		e := base64.RawURLEncoding.EncodeToString(bigIntToBytes(privateKey.E))
+		json.NewEncoder(w).Encode(jwks{Keys: []jwk{{Kid: kid, Kty: "RSA", Alg: "RS256", N: n, E: e}}})
+	})
+	server := httptest.NewServer(jwksHandler)
+	defer server.Close()
 
-	n := &oidcVerifyingNormalizer{issuer: "https://idp.example.com", strict: &strictNormalizer{}}
-	id := oidcIdentity()
-	id.RawToken = raw
+	claims := jwt.MapClaims{
+		"iss": "https://attacker.example.com",
+		"sub": "alice",
+		"exp": time.Now().Add(time.Hour).Unix(),
+	}
+	raw := signToken(t, privateKey, kid, claims)
+
+	n := &oidcVerifyingNormalizer{issuer: "https://idp.example.com", jwksURL: server.URL, strict: &strictNormalizer{}}
+	id := shared.UserIdentity{SourceType: "oidc", RawToken: raw}
 
 	_, err := n.Normalize(context.Background(), id)
 	if err == nil {
@@ -218,7 +317,7 @@ func TestOIDCVerifyingNormalizer_WrongIssuer(t *testing.T) {
 }
 
 func TestOIDCVerifyingNormalizer_OSAppliesStrict(t *testing.T) {
-	n := &oidcVerifyingNormalizer{issuer: "https://idp.example.com", strict: &strictNormalizer{}}
+	n := &oidcVerifyingNormalizer{issuer: "https://idp.example.com", jwksURL: "http://localhost", strict: &strictNormalizer{}}
 	id := osIdentity()
 
 	got, err := n.Normalize(context.Background(), id)
@@ -255,7 +354,7 @@ func TestBuildIdentityNormalizer_Passthrough(t *testing.T) {
 func TestBuildIdentityNormalizer_OIDCVerify(t *testing.T) {
 	n, err := buildIdentityNormalizer(IdentityConfig{
 		Normalizer: "oidc-verify",
-		OIDCVerify: OIDCVerifyConfig{Issuer: "https://idp.example.com"},
+		OIDCVerify: OIDCVerifyConfig{Issuer: "https://idp.example.com", JWKSURL: "http://localhost"},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -266,9 +365,16 @@ func TestBuildIdentityNormalizer_OIDCVerify(t *testing.T) {
 }
 
 func TestBuildIdentityNormalizer_OIDCVerifyMissingIssuer(t *testing.T) {
-	_, err := buildIdentityNormalizer(IdentityConfig{Normalizer: "oidc-verify"})
+	_, err := buildIdentityNormalizer(IdentityConfig{Normalizer: "oidc-verify", OIDCVerify: OIDCVerifyConfig{JWKSURL: "http://localhost"}})
 	if err == nil {
 		t.Fatal("expected error when issuer is missing, got nil")
+	}
+}
+
+func TestBuildIdentityNormalizer_OIDCVerifyMissingJWKS(t *testing.T) {
+	_, err := buildIdentityNormalizer(IdentityConfig{Normalizer: "oidc-verify", OIDCVerify: OIDCVerifyConfig{Issuer: "http://localhost"}})
+	if err == nil {
+		t.Fatal("expected error when JWKS URL is missing, got nil")
 	}
 }
 

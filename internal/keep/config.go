@@ -15,6 +15,7 @@
 package keep
 
 import (
+	"bytes"
 	"os"
 
 	"gopkg.in/yaml.v3"
@@ -62,6 +63,10 @@ type OIDCVerifyConfig struct {
 	// "https://login.microsoftonline.com/<tenant-id>/v2.0". Required when
 	// normalizer is "oidc-verify".
 	Issuer string `yaml:"issuer"`
+
+	// JWKSURL is the URL to the issuer's JSON Web Key Set (JWKS) for signature
+	// verification. Required when normalizer is "oidc-verify".
+	JWKSURL string `yaml:"jwks_url"`
 }
 
 // AdminConfig holds credentials for the Keep admin API.
@@ -148,6 +153,8 @@ type DecisionLogConfig struct {
 }
 
 // LoadConfig reads and parses a keep config file, expanding environment variables.
+// It uses strict unmarshaling to ensure that unknown or deprecated fields
+// cause a configuration error at startup.
 func LoadConfig(path string) (Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -155,5 +162,7 @@ func LoadConfig(path string) (Config, error) {
 	}
 	data = shared.ExpandEnvVarsInYAML(data)
 	var cfg Config
-	return cfg, yaml.Unmarshal(data, &cfg)
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	return cfg, dec.Decode(&cfg)
 }

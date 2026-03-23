@@ -172,7 +172,7 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 	if normErr != nil {
 		span.SetStatus(codes.Error, normErr.Error())
 		slog.ErrorContext(ctx, "identity normalization failed", "error", normErr, "trace_id", traceID)
-		writeError(w, http.StatusServiceUnavailable, fmt.Sprintf("identity normalization failed: %s", normErr))
+		writeError(w, http.StatusServiceUnavailable, "identity normalization failed")
 		return
 	}
 
@@ -189,7 +189,6 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		"decision", pdpResp.Decision,
 		"tool", req.ToolName,
 		"user", principal.UserID,
-		"trace_id", req.TraceID,
 		"trace_id", traceID,
 	)
 
@@ -212,7 +211,7 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			span.SetStatus(codes.Error, err.Error())
 			slog.ErrorContext(ctx, "backend call failed", "error", err, "server", req.ServerName, "tool", req.ToolName, "trace_id", traceID)
-			writeError(w, http.StatusInternalServerError, fmt.Sprintf("backend call failed: %s", err))
+			writeError(w, http.StatusInternalServerError, "backend MCP call failed")
 			return
 		}
 		writeJSON(w, http.StatusOK, result)
@@ -283,7 +282,7 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	if normErr != nil {
 		span.SetStatus(codes.Error, normErr.Error())
 		slog.ErrorContext(ctx, "identity normalization failed", "error", normErr, "trace_id", traceID)
-		writeError(w, http.StatusServiceUnavailable, fmt.Sprintf("identity normalization failed: %s", normErr))
+		writeError(w, http.StatusServiceUnavailable, "identity normalization failed")
 		return
 	}
 
@@ -300,7 +299,6 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		"decision", pdpResp.Decision,
 		"tool", req.ToolName,
 		"user", principal.UserID,
-		"trace_id", req.TraceID,
 		"trace_id", traceID,
 	)
 

@@ -16,14 +16,18 @@ package keep
 
 import (
 	"context"
+	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math/big"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 )
 
@@ -64,16 +68,20 @@ func init() {
 		if cfg.OIDCVerify.Issuer == "" {
 			return nil, fmt.Errorf("normalizer oidc-verify requires identity.oidc_verify.issuer to be set")
 		}
+		if cfg.OIDCVerify.JWKSURL == "" {
+			return nil, fmt.Errorf("normalizer oidc-verify requires identity.oidc_verify.jwks_url to be set")
+		}
 		return &oidcVerifyingNormalizer{
-			issuer: cfg.OIDCVerify.Issuer,
-			strict: &strictNormalizer{},
+			issuer:  cfg.OIDCVerify.Issuer,
+			jwksURL: cfg.OIDCVerify.JWKSURL,
+			strict:  &strictNormalizer{},
 		}, nil
 	})
 }
 
 // strictNormalizer passes OIDC-sourced identity through unchanged and strips
 // all directory claims from OS-sourced identity, retaining only user_id and
-// source_type. This prevents Gate from injecting unverified group claims.
+// source_type. This prevents Gate from injections unverified group claims.
 type strictNormalizer struct{}
 
 func (n *strictNormalizer) Normalize(_ context.Context, id shared.UserIdentity) (shared.Principal, error) {
@@ -131,12 +139,26 @@ func (n *passthroughNormalizer) Normalize(_ context.Context, id shared.UserIdent
 // the PDP. It rejects expired tokens and, when an issuer is configured,
 // tokens not issued by that issuer. OS-sourced identities are handled by
 // the embedded strictNormalizer.
-//
-// Note: JWT signature verification against JWKS is not yet implemented.
-// The PDP is the authority on cryptographic token validity.
 type oidcVerifyingNormalizer struct {
-	issuer string
-	strict *strictNormalizer
+	issuer  string
+	jwksURL string
+	strict  *strictNormalizer
+
+	jwksMu sync.RWMutex
+	jwks   *jwks
+	last   time.Time
+}
+
+type jwks struct {
+	Keys []jwk `json:"keys"`
+}
+
+type jwk struct {
+	Kid string `json:"kid"`
+	N   string `json:"n"`
+	E   string `json:"e"`
+	Kty string `json:"kty"`
+	Alg string `json:"alg"`
 }
 
 func (n *oidcVerifyingNormalizer) Normalize(ctx context.Context, id shared.UserIdentity) (shared.Principal, error) {
@@ -148,31 +170,159 @@ func (n *oidcVerifyingNormalizer) Normalize(ctx context.Context, id shared.UserI
 		return shared.Principal{}, fmt.Errorf("oidc identity missing raw token")
 	}
 
-	if id.TokenExpiry != 0 && time.Now().Unix() > id.TokenExpiry {
-		return shared.Principal{}, fmt.Errorf("oidc token is expired (exp=%d)", id.TokenExpiry)
+	// 1. Verify signature and parse claims
+	token, err := jwt.Parse(id.RawToken, n.keyFunc)
+	if err != nil {
+		return shared.Principal{}, fmt.Errorf("verify oidc token: %w", err)
 	}
 
-	if n.issuer != "" && id.RawToken != "" {
-		iss, err := jwtIssuer(id.RawToken)
-		if err != nil {
-			return shared.Principal{}, fmt.Errorf("parse oidc token issuer: %w", err)
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok || !token.Valid {
+		return shared.Principal{}, fmt.Errorf("invalid oidc token claims")
+	}
+
+	// 2. Validate Issuer
+	iss, _ := claims.GetIssuer()
+	if n.issuer != "" && iss != n.issuer {
+		return shared.Principal{}, fmt.Errorf("oidc token issuer %q does not match configured issuer %q", iss, n.issuer)
+	}
+
+	// 3. Validate Expiry
+	exp, err := claims.GetExpirationTime()
+	if err != nil {
+		return shared.Principal{}, fmt.Errorf("parse oidc token expiry: %w", err)
+	}
+	if exp != nil && time.Now().After(exp.Time) {
+		return shared.Principal{}, fmt.Errorf("oidc token is expired (exp=%v)", exp.Time)
+	}
+
+	// Use claims from the verified token
+	email, _ := claims["email"].(string)
+	displayName, _ := claims["name"].(string)
+	
+	var groups []string
+	if g, ok := claims["groups"].([]any); ok {
+		for _, v := range g {
+			if s, ok := v.(string); ok {
+				groups = append(groups, s)
+			}
 		}
-		if iss != n.issuer {
-			return shared.Principal{}, fmt.Errorf("oidc token issuer %q does not match configured issuer %q", iss, n.issuer)
+	}
+
+	var roles []string
+	if r, ok := claims["roles"].([]any); ok {
+		for _, v := range r {
+			if s, ok := v.(string); ok {
+				roles = append(roles, s)
+			}
 		}
+	}
+
+	dept, _ := claims["department"].(string)
+	
+	var amr []string
+	if a, ok := claims["amr"].([]any); ok {
+		for _, v := range a {
+			if s, ok := v.(string); ok {
+				amr = append(amr, s)
+			}
+		}
+	}
+
+	var expUnix int64
+	if exp != nil {
+		expUnix = exp.Unix()
 	}
 
 	return shared.Principal{
-		UserID:      id.UserID,
-		Email:       id.Email,
-		DisplayName: id.DisplayName,
-		Groups:      id.Groups,
-		Roles:       id.Roles,
-		Department:  id.Department,
-		AuthMethod:  id.AuthMethod,
-		TokenExpiry: id.TokenExpiry,
+		UserID:      id.UserID, // UserID remains the stable identifier provided by Gate/Identity Provider
+		Email:       email,
+		DisplayName: displayName,
+		Groups:      groups,
+		Roles:       roles,
+		Department:  dept,
+		AuthMethod:  amr,
+		TokenExpiry: expUnix,
 		SourceType:  id.SourceType,
 	}, nil
+}
+
+func (n *oidcVerifyingNormalizer) keyFunc(token *jwt.Token) (interface{}, error) {
+	if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
+		return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+	}
+
+	kid, ok := token.Header["kid"].(string)
+	if !ok {
+		return nil, fmt.Errorf("missing kid in token header")
+	}
+
+	keys, err := n.getJWKS()
+	if err != nil {
+		return nil, fmt.Errorf("fetch JWKS: %w", err)
+	}
+
+	for _, k := range keys.Keys {
+		if k.Kid == kid {
+			// Construct RSA Public Key from JWK
+			nBytes, err := base64.RawURLEncoding.DecodeString(k.N)
+			if err != nil {
+				return nil, fmt.Errorf("decode JWK n: %w", err)
+			}
+			eBytes, err := base64.RawURLEncoding.DecodeString(k.E)
+			if err != nil {
+				return nil, fmt.Errorf("decode JWK e: %w", err)
+			}
+
+			var e int
+			for _, b := range eBytes {
+				e = e<<8 | int(b)
+			}
+
+			return &rsa.PublicKey{
+				N: new(big.Int).SetBytes(nBytes),
+				E: e,
+			}, nil
+		}
+	}
+
+	return nil, fmt.Errorf("kid %q not found in JWKS", kid)
+}
+
+func (n *oidcVerifyingNormalizer) getJWKS() (*jwks, error) {
+	n.jwksMu.RLock()
+	if n.jwks != nil && time.Since(n.last) < 1*time.Hour {
+		defer n.jwksMu.RUnlock()
+		return n.jwks, nil
+	}
+	n.jwksMu.RUnlock()
+
+	n.jwksMu.Lock()
+	defer n.jwksMu.Unlock()
+
+	// Re-check after acquiring lock
+	if n.jwks != nil && time.Since(n.last) < 1*time.Hour {
+		return n.jwks, nil
+	}
+
+	resp, err := http.Get(n.jwksURL)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("JWKS endpoint returned status %d", resp.StatusCode)
+	}
+
+	var keys jwks
+	if err := json.NewDecoder(resp.Body).Decode(&keys); err != nil {
+		return nil, err
+	}
+
+	n.jwks = &keys
+	n.last = time.Now()
+	return n.jwks, nil
 }
 
 // jwtIssuer extracts the iss claim from a JWT without verifying the signature.
