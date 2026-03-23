@@ -17,10 +17,17 @@ package keep
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"encoding/base64"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 )
@@ -53,44 +60,40 @@ func osIdentity() shared.UserIdentity {
 	}
 }
 
-func TestNormalizeIdentity_OIDCPassesThrough(t *testing.T) {
-	id := oidcIdentity()
-	cfg := IdentityConfig{Mode: "strict"}
-
-	got := normalizeIdentity(id, cfg)
-
-	// OIDC identity must be returned unchanged in both modes.
-	if got.UserID != id.UserID {
-		t.Errorf("UserID = %q, want %q", got.UserID, id.UserID)
+// signToken generates a signed JWT for testing using the provided RSA key and claims.
+func signToken(t *testing.T, key *rsa.PrivateKey, kid string, claims jwt.MapClaims) string {
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	token.Header["kid"] = kid
+	tokenString, err := token.SignedString(key)
+	if err != nil {
+		t.Fatalf("failed to sign token: %v", err)
 	}
-	if len(got.Groups) != len(id.Groups) {
-		t.Errorf("Groups = %v, want %v", got.Groups, id.Groups)
-	}
-	if got.RawToken != id.RawToken {
-		t.Errorf("RawToken stripped for OIDC identity — should be preserved")
-	}
-	if got.Department != id.Department {
-		t.Errorf("Department = %q, want %q", got.Department, id.Department)
-	}
+	return tokenString
 }
 
-func TestNormalizeIdentity_OIDCPassesThroughInDemoMode(t *testing.T) {
+// --- strictNormalizer tests ---
+
+func TestStrictNormalizer_OIDCPassesThrough(t *testing.T) {
+	n := &strictNormalizer{}
 	id := oidcIdentity()
-	cfg := IdentityConfig{Mode: "demo", AcceptForgedIdentities: true}
 
-	got := normalizeIdentity(id, cfg)
-
+	got, err := n.Normalize(context.Background(), id)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if got.UserID != id.UserID || len(got.Groups) != len(id.Groups) {
-		t.Errorf("OIDC identity should pass through in demo mode unchanged")
+		t.Errorf("OIDC identity should pass through unchanged; got %+v", got)
 	}
 }
 
-func TestNormalizeIdentity_StrictMode_OSStripsDirectoryClaims(t *testing.T) {
+func TestStrictNormalizer_OSStripsDirectoryClaims(t *testing.T) {
+	n := &strictNormalizer{}
 	id := osIdentity()
-	cfg := IdentityConfig{Mode: "strict"}
 
-	got := normalizeIdentity(id, cfg)
-
+	got, err := n.Normalize(context.Background(), id)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if got.UserID != id.UserID {
 		t.Errorf("UserID = %q, want %q", got.UserID, id.UserID)
 	}
@@ -98,80 +101,504 @@ func TestNormalizeIdentity_StrictMode_OSStripsDirectoryClaims(t *testing.T) {
 		t.Errorf("SourceType = %q, want os", got.SourceType)
 	}
 	if len(got.Groups) != 0 {
-		t.Errorf("Groups should be empty in strict mode, got %v", got.Groups)
+		t.Errorf("Groups should be empty, got %v", got.Groups)
 	}
 	if len(got.Roles) != 0 {
-		t.Errorf("Roles should be empty in strict mode, got %v", got.Roles)
+		t.Errorf("Roles should be empty, got %v", got.Roles)
 	}
 	if got.Department != "" {
-		t.Errorf("Department should be empty in strict mode, got %q", got.Department)
+		t.Errorf("Department should be empty, got %q", got.Department)
 	}
 	if len(got.AuthMethod) != 0 {
-		t.Errorf("AuthMethod should be empty in strict mode, got %v", got.AuthMethod)
-	}
-	if got.RawToken != "" {
-		t.Errorf("RawToken should be empty in strict mode, got %q", got.RawToken)
+		t.Errorf("AuthMethod should be empty, got %v", got.AuthMethod)
 	}
 	if got.DisplayName != "" {
-		t.Errorf("DisplayName should be empty in strict mode, got %q", got.DisplayName)
+		t.Errorf("DisplayName should be empty, got %q", got.DisplayName)
 	}
 }
 
-func TestNormalizeIdentity_DefaultModeIsStrict(t *testing.T) {
-	// Mode: "" should behave identically to Mode: "strict".
+func TestStrictNormalizer_OSStripsAllUnverifiedFields(t *testing.T) {
+	n := &strictNormalizer{}
 	id := osIdentity()
-	withEmpty := normalizeIdentity(id, IdentityConfig{Mode: ""})
-	withStrict := normalizeIdentity(id, IdentityConfig{Mode: "strict"})
+	// Ensure all fields are populated before stripping
+	id.Email = "alice@example.com"
+	id.Department = "Security"
+	id.Roles = []string{"admin"}
+	id.AuthMethod = []string{"password"}
+	id.TokenExpiry = 123456789
+	id.RawToken = "secret"
 
-	if withEmpty.UserID != withStrict.UserID || len(withEmpty.Groups) != len(withStrict.Groups) {
-		t.Errorf("empty mode should default to strict behaviour")
+	got, err := n.Normalize(context.Background(), id)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(withEmpty.Groups) != 0 {
-		t.Errorf("directory claims should be stripped when mode is empty")
+
+	// List of fields that MUST be stripped for "os" source
+	if got.Email != "" {
+		t.Errorf("Email should be stripped, got %q", got.Email)
 	}
-}
-
-func TestNormalizeIdentity_DemoMode_OSPassesThrough(t *testing.T) {
-	id := osIdentity()
-	cfg := IdentityConfig{Mode: "demo", AcceptForgedIdentities: true}
-
-	got := normalizeIdentity(id, cfg)
-
-	if got.UserID != id.UserID {
-		t.Errorf("UserID = %q, want %q", got.UserID, id.UserID)
+	if got.DisplayName != "" {
+		t.Errorf("DisplayName should be stripped, got %q", got.DisplayName)
 	}
-	if len(got.Groups) != len(id.Groups) {
-		t.Errorf("Groups = %v, want %v in demo mode", got.Groups, id.Groups)
-	}
-	if got.RawToken != id.RawToken {
-		t.Errorf("RawToken stripped in demo mode — should be preserved")
-	}
-}
-
-func TestNormalizeIdentity_UnknownModeDefaultsToStrict(t *testing.T) {
-	id := osIdentity()
-	cfg := IdentityConfig{Mode: "unknown-value"}
-
-	got := normalizeIdentity(id, cfg)
-
 	if len(got.Groups) != 0 {
-		t.Errorf("unknown mode should default to strict, but groups were not stripped: %v", got.Groups)
+		t.Errorf("Groups should be stripped, got %v", got.Groups)
 	}
-	if got.UserID != id.UserID {
-		t.Errorf("UserID should be preserved even in unknown mode fallback")
+	if len(got.Roles) != 0 {
+		t.Errorf("Roles should be stripped, got %v", got.Roles)
+	}
+	if got.Department != "" {
+		t.Errorf("Department should be stripped, got %q", got.Department)
+	}
+	if len(got.AuthMethod) != 0 {
+		t.Errorf("AuthMethod should be stripped, got %v", got.AuthMethod)
+	}
+	if got.TokenExpiry != 0 {
+		t.Errorf("TokenExpiry should be stripped, got %d", got.TokenExpiry)
+	}
+
+	// Fields that MUST remain
+	if got.UserID != "alice" {
+		t.Errorf("UserID should remain, got %q", got.UserID)
+	}
+	if got.SourceType != "os" {
+		t.Errorf("SourceType should remain, got %q", got.SourceType)
+	}
+}
+
+// --- passthroughNormalizer tests ---
+
+func TestPassthroughNormalizer_AcceptsAll(t *testing.T) {
+	n := &passthroughNormalizer{silenced: true}
+
+	for _, id := range []shared.UserIdentity{oidcIdentity(), osIdentity()} {
+		got, err := n.Normalize(context.Background(), id)
+		if err != nil {
+			t.Fatalf("unexpected error for %s: %v", id.SourceType, err)
+		}
+		if got.UserID != id.UserID || len(got.Groups) != len(id.Groups) {
+			t.Errorf("passthrough should not modify identity; got %+v", got)
+		}
+	}
+}
+
+// --- oidcVerifyingNormalizer tests ---
+
+func TestOIDCVerifyingNormalizer_ValidToken(t *testing.T) {
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kid := "test-kid"
+	issuer := "https://idp.example.com"
+	
+	jwksHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := base64.RawURLEncoding.EncodeToString(privateKey.N.Bytes())
+		e := base64.RawURLEncoding.EncodeToString(bigIntToBytes(privateKey.E))
+		keys := jwks{
+			Keys: []jwk{
+				{Kid: kid, Kty: "RSA", Alg: "RS256", N: n, E: e},
+			},
+		}
+		json.NewEncoder(w).Encode(keys)
+	})
+	server := httptest.NewServer(jwksHandler)
+	defer server.Close()
+
+	exp := time.Now().Add(time.Hour).Truncate(time.Second)
+	claims := jwt.MapClaims{
+		"iss":    issuer,
+		"sub":    "alice@corp.com",
+		"exp":    exp.Unix(),
+		"name":   "Alice",
+		"groups": []any{"devs"},
+	}
+	raw := signToken(t, privateKey, kid, claims)
+
+	n := &oidcVerifyingNormalizer{
+		issuer:  issuer,
+		jwksURL: server.URL,
+		strict:  &strictNormalizer{},
+	}
+	id := shared.UserIdentity{
+		UserID:     "alice@corp.com",
+		SourceType: "oidc",
+		RawToken:   raw,
+	}
+
+	got, err := n.Normalize(context.Background(), id)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.UserID != "alice@corp.com" {
+		t.Errorf("UserID = %q, want alice@corp.com", got.UserID)
+	}
+	if got.DisplayName != "Alice" {
+		t.Errorf("DisplayName = %q, want Alice", got.DisplayName)
+	}
+	if len(got.Groups) != 1 || got.Groups[0] != "devs" {
+		t.Errorf("Groups = %v, want [devs]", got.Groups)
+	}
+	if got.TokenExpiry != exp.Unix() {
+		t.Errorf("TokenExpiry = %d, want %d", got.TokenExpiry, exp.Unix())
+	}
+}
+
+func TestOIDCVerifyingNormalizer_VerifiedSubjectOverridesClaim(t *testing.T) {
+	privateKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	kid := "test-kid"
+	issuer := "https://idp.example.com"
+	verifiedSub := "verified-alice"
+
+	jwksHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := base64.RawURLEncoding.EncodeToString(privateKey.N.Bytes())
+		e := base64.RawURLEncoding.EncodeToString(bigIntToBytes(privateKey.E))
+		json.NewEncoder(w).Encode(jwks{Keys: []jwk{{Kid: kid, Kty: "RSA", Alg: "RS256", N: n, E: e}}})
+	})
+	server := httptest.NewServer(jwksHandler)
+	defer server.Close()
+
+	// Token contains "verified-alice"
+	claims := jwt.MapClaims{
+		"iss": issuer,
+		"sub": verifiedSub,
+		"exp": time.Now().Add(time.Hour).Unix(),
+	}
+	raw := signToken(t, privateKey, kid, claims)
+
+	n := &oidcVerifyingNormalizer{issuer: issuer, jwksURL: server.URL, strict: &strictNormalizer{}}
+	
+	// Request claims to be "imposter-alice"
+	id := shared.UserIdentity{
+		UserID:     "imposter-alice",
+		SourceType: "oidc",
+		RawToken:   raw,
+	}
+
+	got, err := n.Normalize(context.Background(), id)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Result MUST be "verified-alice"
+	if got.UserID != verifiedSub {
+		t.Errorf("UserID = %q, want %q (verified sub)", got.UserID, verifiedSub)
+	}
+}
+
+func TestOIDCVerifyingNormalizer_AudienceMismatch(t *testing.T) {
+	privateKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	kid := "test-kid"
+	issuer := "https://idp.example.com"
+	
+	jwksHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := base64.RawURLEncoding.EncodeToString(privateKey.N.Bytes())
+		e := base64.RawURLEncoding.EncodeToString(bigIntToBytes(privateKey.E))
+		json.NewEncoder(w).Encode(jwks{Keys: []jwk{{Kid: kid, Kty: "RSA", Alg: "RS256", N: n, E: e}}})
+	})
+	server := httptest.NewServer(jwksHandler)
+	defer server.Close()
+
+	claims := jwt.MapClaims{
+		"iss": issuer,
+		"sub": "alice",
+		"aud": "wrong-audience",
+		"exp": time.Now().Add(time.Hour).Unix(),
+	}
+	raw := signToken(t, privateKey, kid, claims)
+
+	n := &oidcVerifyingNormalizer{
+		issuer:    issuer,
+		jwksURL:   server.URL,
+		audiences: []string{"expected-audience"},
+		strict:    &strictNormalizer{},
+	}
+	id := shared.UserIdentity{SourceType: "oidc", RawToken: raw}
+
+	_, err := n.Normalize(context.Background(), id)
+	if err == nil {
+		t.Fatal("expected error for audience mismatch, got nil")
+	}
+	if !strings.Contains(err.Error(), "audience mismatch") {
+		t.Errorf("error = %q, want it to mention audience mismatch", err.Error())
+	}
+}
+
+func TestOIDCVerifyingNormalizer_AudienceMatch(t *testing.T) {
+	privateKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	kid := "test-kid"
+	issuer := "https://idp.example.com"
+	
+	jwksHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := base64.RawURLEncoding.EncodeToString(privateKey.N.Bytes())
+		e := base64.RawURLEncoding.EncodeToString(bigIntToBytes(privateKey.E))
+		json.NewEncoder(w).Encode(jwks{Keys: []jwk{{Kid: kid, Kty: "RSA", Alg: "RS256", N: n, E: e}}})
+	})
+	server := httptest.NewServer(jwksHandler)
+	defer server.Close()
+
+	claims := jwt.MapClaims{
+		"iss": issuer,
+		"sub": "alice",
+		"aud": []any{"other", "expected-audience"},
+		"exp": time.Now().Add(time.Hour).Unix(),
+	}
+	raw := signToken(t, privateKey, kid, claims)
+
+	n := &oidcVerifyingNormalizer{
+		issuer:    issuer,
+		jwksURL:   server.URL,
+		audiences: []string{"expected-audience"},
+		strict:    &strictNormalizer{},
+	}
+	id := shared.UserIdentity{SourceType: "oidc", RawToken: raw}
+
+	_, err := n.Normalize(context.Background(), id)
+	if err != nil {
+		t.Fatalf("unexpected error for audience match: %v", err)
+	}
+}
+
+func TestOIDCVerifyingNormalizer_AllowMissingExpiry(t *testing.T) {
+	privateKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	kid := "test-kid"
+	issuer := "https://idp.example.com"
+	
+	jwksHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := base64.RawURLEncoding.EncodeToString(privateKey.N.Bytes())
+		e := base64.RawURLEncoding.EncodeToString(bigIntToBytes(privateKey.E))
+		json.NewEncoder(w).Encode(jwks{Keys: []jwk{{Kid: kid, Kty: "RSA", Alg: "RS256", N: n, E: e}}})
+	})
+	server := httptest.NewServer(jwksHandler)
+	defer server.Close()
+
+	// Token WITHOUT exp claim
+	claims := jwt.MapClaims{
+		"iss": issuer,
+		"sub": "alice",
+	}
+	raw := signToken(t, privateKey, kid, claims)
+
+	// 1. Rejected by default (fail secure)
+	n1 := &oidcVerifyingNormalizer{issuer: issuer, jwksURL: server.URL, allowMissingExpiry: false, strict: &strictNormalizer{}}
+	id := shared.UserIdentity{SourceType: "oidc", RawToken: raw}
+	_, err := n1.Normalize(context.Background(), id)
+	if err == nil {
+		t.Fatal("expected error for missing exp by default, got nil")
+	}
+	if !strings.Contains(err.Error(), "missing exp claim") {
+		t.Errorf("error = %q, want it to mention missing exp claim", err.Error())
+	}
+
+	// 2. Acceptable when allowMissingExpiry=true
+	n2 := &oidcVerifyingNormalizer{issuer: issuer, jwksURL: server.URL, allowMissingExpiry: true, strict: &strictNormalizer{}}
+	_, err = n2.Normalize(context.Background(), id)
+	if err != nil {
+		t.Errorf("expected no error when allowMissingExpiry=true, got %v", err)
+	}
+}
+
+func TestOIDCVerifyingNormalizer_JWKSRefreshOnKidMiss(t *testing.T) {
+	privateKey1, _ := rsa.GenerateKey(rand.Reader, 2048)
+	privateKey2, _ := rsa.GenerateKey(rand.Reader, 2048)
+	kid1 := "kid-1"
+	kid2 := "kid-2"
+	issuer := "https://idp.example.com"
+
+	refreshCount := 0
+	jwksHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		refreshCount++
+		n1 := base64.RawURLEncoding.EncodeToString(privateKey1.N.Bytes())
+		e1 := base64.RawURLEncoding.EncodeToString(bigIntToBytes(privateKey1.E))
+		
+		keys := []jwk{
+			{Kid: kid1, Kty: "RSA", Alg: "RS256", N: n1, E: e1},
+		}
+
+		// On second refresh, add the new key
+		if refreshCount > 1 {
+			n2 := base64.RawURLEncoding.EncodeToString(privateKey2.N.Bytes())
+			e2 := base64.RawURLEncoding.EncodeToString(bigIntToBytes(privateKey2.E))
+			keys = append(keys, jwk{Kid: kid2, Kty: "RSA", Alg: "RS256", N: n2, E: e2})
+		}
+
+		json.NewEncoder(w).Encode(jwks{Keys: keys})
+	})
+	server := httptest.NewServer(jwksHandler)
+	defer server.Close()
+
+	n := &oidcVerifyingNormalizer{issuer: issuer, jwksURL: server.URL, strict: &strictNormalizer{}}
+
+	// 1. First call with kid1 should work and populate cache
+	claims1 := jwt.MapClaims{"iss": issuer, "sub": "alice", "exp": time.Now().Add(time.Hour).Unix()}
+	raw1 := signToken(t, privateKey1, kid1, claims1)
+	_, err := n.Normalize(context.Background(), shared.UserIdentity{SourceType: "oidc", RawToken: raw1})
+	if err != nil {
+		t.Fatalf("first call failed: %v", err)
+	}
+	if refreshCount != 1 {
+		t.Errorf("expected 1 refresh, got %d", refreshCount)
+	}
+
+	// 2. Call with kid2 should fail initially (not in cache), trigger refresh, and then succeed
+	claims2 := jwt.MapClaims{"iss": issuer, "sub": "bob", "exp": time.Now().Add(time.Hour).Unix()}
+	raw2 := signToken(t, privateKey2, kid2, claims2)
+	_, err = n.Normalize(context.Background(), shared.UserIdentity{SourceType: "oidc", RawToken: raw2})
+	if err != nil {
+		t.Fatalf("second call failed after refresh: %v", err)
+	}
+	if refreshCount != 2 {
+		t.Errorf("expected 2 refreshes after kid miss, got %d", refreshCount)
+	}
+}
+
+func bigIntToBytes(i int) []byte {
+	b := make([]byte, 4)
+	b[0] = byte(i >> 24)
+	b[1] = byte(i >> 16)
+	b[2] = byte(i >> 8)
+	b[3] = byte(i)
+	// Strip leading zeros
+	for len(b) > 0 && b[0] == 0 {
+		b = b[1:]
+	}
+	return b
+}
+
+func TestOIDCVerifyingNormalizer_ExpiredToken(t *testing.T) {
+	privateKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	kid := "test-kid"
+	issuer := "https://idp.example.com"
+	
+	jwksHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := base64.RawURLEncoding.EncodeToString(privateKey.N.Bytes())
+		e := base64.RawURLEncoding.EncodeToString(bigIntToBytes(privateKey.E))
+		json.NewEncoder(w).Encode(jwks{Keys: []jwk{{Kid: kid, Kty: "RSA", Alg: "RS256", N: n, E: e}}})
+	})
+	server := httptest.NewServer(jwksHandler)
+	defer server.Close()
+
+	claims := jwt.MapClaims{
+		"iss": issuer,
+		"sub": "alice",
+		"exp": time.Now().Add(-time.Hour).Unix(),
+	}
+	raw := signToken(t, privateKey, kid, claims)
+
+	n := &oidcVerifyingNormalizer{issuer: issuer, jwksURL: server.URL, strict: &strictNormalizer{}}
+	id := shared.UserIdentity{SourceType: "oidc", RawToken: raw}
+
+	_, err := n.Normalize(context.Background(), id)
+	if err == nil {
+		t.Fatal("expected error for expired token, got nil")
+	}
+	if !strings.Contains(err.Error(), "expired") {
+		t.Errorf("error = %q, want it to mention expired", err.Error())
+	}
+}
+
+func TestOIDCVerifyingNormalizer_WrongIssuer(t *testing.T) {
+	privateKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	kid := "test-kid"
+	
+	jwksHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := base64.RawURLEncoding.EncodeToString(privateKey.N.Bytes())
+		e := base64.RawURLEncoding.EncodeToString(bigIntToBytes(privateKey.E))
+		json.NewEncoder(w).Encode(jwks{Keys: []jwk{{Kid: kid, Kty: "RSA", Alg: "RS256", N: n, E: e}}})
+	})
+	server := httptest.NewServer(jwksHandler)
+	defer server.Close()
+
+	claims := jwt.MapClaims{
+		"iss": "https://attacker.example.com",
+		"sub": "alice",
+		"exp": time.Now().Add(time.Hour).Unix(),
+	}
+	raw := signToken(t, privateKey, kid, claims)
+
+	n := &oidcVerifyingNormalizer{issuer: "https://idp.example.com", jwksURL: server.URL, strict: &strictNormalizer{}}
+	id := shared.UserIdentity{SourceType: "oidc", RawToken: raw}
+
+	_, err := n.Normalize(context.Background(), id)
+	if err == nil {
+		t.Fatal("expected error for wrong issuer, got nil")
+	}
+}
+
+func TestOIDCVerifyingNormalizer_OSAppliesStrict(t *testing.T) {
+	n := &oidcVerifyingNormalizer{issuer: "https://idp.example.com", jwksURL: "http://localhost", strict: &strictNormalizer{}}
+	id := osIdentity()
+
+	got, err := n.Normalize(context.Background(), id)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got.Groups) != 0 {
+		t.Errorf("OS identity groups should be stripped by oidc-verify normalizer, got %v", got.Groups)
+	}
+}
+
+// --- buildIdentityNormalizer factory tests ---
+
+func TestBuildIdentityNormalizer_DefaultIsStrict(t *testing.T) {
+	n, err := buildIdentityNormalizer(IdentityConfig{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := n.(*strictNormalizer); !ok {
+		t.Errorf("expected *strictNormalizer, got %T", n)
+	}
+}
+
+func TestBuildIdentityNormalizer_Passthrough(t *testing.T) {
+	n, err := buildIdentityNormalizer(IdentityConfig{Normalizer: "passthrough"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := n.(*passthroughNormalizer); !ok {
+		t.Errorf("expected *passthroughNormalizer, got %T", n)
+	}
+}
+
+func TestBuildIdentityNormalizer_OIDCVerify(t *testing.T) {
+	n, err := buildIdentityNormalizer(IdentityConfig{
+		Normalizer: "oidc-verify",
+		OIDCVerify: OIDCVerifyConfig{Issuer: "https://idp.example.com", JWKSURL: "http://localhost"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := n.(*oidcVerifyingNormalizer); !ok {
+		t.Errorf("expected *oidcVerifyingNormalizer, got %T", n)
+	}
+}
+
+func TestBuildIdentityNormalizer_OIDCVerifyMissingIssuer(t *testing.T) {
+	_, err := buildIdentityNormalizer(IdentityConfig{Normalizer: "oidc-verify", OIDCVerify: OIDCVerifyConfig{JWKSURL: "http://localhost"}})
+	if err == nil {
+		t.Fatal("expected error when issuer is missing, got nil")
+	}
+}
+
+func TestBuildIdentityNormalizer_OIDCVerifyMissingJWKS(t *testing.T) {
+	_, err := buildIdentityNormalizer(IdentityConfig{Normalizer: "oidc-verify", OIDCVerify: OIDCVerifyConfig{Issuer: "http://localhost"}})
+	if err == nil {
+		t.Fatal("expected error when JWKS URL is missing, got nil")
+	}
+}
+
+func TestBuildIdentityNormalizer_UnknownNormalizer(t *testing.T) {
+	_, err := buildIdentityNormalizer(IdentityConfig{Normalizer: "bogus"})
+	if err == nil {
+		t.Fatal("expected error for unknown normalizer, got nil")
 	}
 }
 
 // TestNormalizeIdentity_HandleCallIntegration verifies that identity
-// normalisation is applied by handleCall before the PDP sees the request.
+// normalization is applied by handleCall before the PDP sees the request.
 func TestNormalizeIdentity_HandleCallIntegration(t *testing.T) {
-	var capturedReq shared.EnrichedMCPRequest
-
 	pdp := &capturingPDP{}
 	srv := &Server{
-		cfg: Config{
-			Identity: IdentityConfig{Mode: "strict"},
-		},
+		normalizer:  &strictNormalizer{},
 		pdp:         pdp,
 		router:      &mockRouter{callToolResult: &mcp.CallToolResult{}},
 		workflow:    &mockWorkflow{requestID: "wf-1"},
@@ -186,7 +613,7 @@ func TestNormalizeIdentity_HandleCallIntegration(t *testing.T) {
 			Groups:     []string{"admins"},
 			SourceType: "os",
 		},
-		RequestID: "req-1",
+		TraceID: "req-1",
 	}
 	body, _ := json.Marshal(req)
 
@@ -194,21 +621,36 @@ func TestNormalizeIdentity_HandleCallIntegration(t *testing.T) {
 	r := httptest.NewRequest("POST", "/call", bytes.NewReader(body))
 	srv.handleCall(w, r)
 
-	capturedReq = pdp.lastReq
-	if len(capturedReq.UserIdentity.Groups) != 0 {
-		t.Errorf("PDP received groups %v — strict mode should have stripped them", capturedReq.UserIdentity.Groups)
+	captured := pdp.lastReq.Principal
+	if len(captured.Groups) != 0 {
+		t.Errorf("PDP received groups %v — strict normalizer should have stripped them", captured.Groups)
 	}
-	if capturedReq.UserIdentity.UserID != "alice" {
-		t.Errorf("PDP received UserID %q, want alice", capturedReq.UserIdentity.UserID)
+	if captured.UserID != "alice" {
+		t.Errorf("PDP received UserID %q, want alice", captured.UserID)
 	}
 }
 
 // capturingPDP records the last request it evaluated, for inspection in tests.
 type capturingPDP struct {
-	lastReq shared.EnrichedMCPRequest
+	lastReq AuthorizedRequest
 }
 
-func (c *capturingPDP) Evaluate(_ context.Context, req shared.EnrichedMCPRequest) (shared.PDPResponse, error) {
+func (c *capturingPDP) Evaluate(_ context.Context, req AuthorizedRequest) (shared.PDPResponse, error) {
 	c.lastReq = req
 	return shared.PDPResponse{Decision: "allow"}, nil
+}
+
+func TestRegisterNormalizer(t *testing.T) {
+	name := "custom-test"
+	RegisterNormalizer(name, func(cfg IdentityConfig) (IdentityNormalizer, error) {
+		return &strictNormalizer{}, nil
+	})
+
+	n, err := buildIdentityNormalizer(IdentityConfig{Normalizer: name})
+	if err != nil {
+		t.Fatalf("failed to build custom normalizer: %v", err)
+	}
+	if _, ok := n.(*strictNormalizer); !ok {
+		t.Errorf("expected *strictNormalizer, got %T", n)
+	}
 }

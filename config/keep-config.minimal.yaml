@@ -14,10 +14,10 @@ pdp:
   type: "noop"
   # endpoint: "http://localhost:8181/v1/data/portcullis/decision"
 
-# Demo mode: accept OS-sourced identities with all claims intact.
-# Change to mode: "strict" for production deployments.
+# passthrough mode: accept OS-sourced identities with all claims intact.
+# Change to normalizer: "strict" for production deployments.
 identity:
-  mode: "demo"
+  normalizer: "passthrough"
   accept_forged_identities: true  # suppress per-request warnings in local dev
 
 backends:

@@ -16,8 +16,6 @@ package keep
 
 import (
 	"context"
-
-	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 )
 
 // WorkflowHandler submits an escalation request to an enterprise workflow system.
@@ -25,7 +23,7 @@ import (
 // may embed it in approval URLs, ticket descriptions, or webhook payloads.
 // The returned reference is workflow-specific: an approval URL, ticket ID, etc.
 type WorkflowHandler interface {
-	Submit(ctx context.Context, req shared.EnrichedMCPRequest, escalationJWT string) (reference string, err error)
+	Submit(ctx context.Context, req AuthorizedRequest, escalationJWT string) (reference string, err error)
 }
 
 // NewWorkflowHandler creates the appropriate WorkflowHandler from config.
@@ -45,6 +43,6 @@ func NewWorkflowHandler(cfg WorkflowConfig) (WorkflowHandler, error) {
 // noopWorkflow is used when no workflow system is configured.
 type noopWorkflow struct{}
 
-func (n *noopWorkflow) Submit(_ context.Context, _ shared.EnrichedMCPRequest, _ string) (string, error) {
+func (n *noopWorkflow) Submit(_ context.Context, _ AuthorizedRequest, _ string) (string, error) {
 	return "", nil
 }

@@ -54,6 +54,7 @@ type Server struct {
 	workflow    WorkflowHandler
 	signer      *EscalationSigner
 	decisionLog *DecisionLogger
+	normalizer  IdentityNormalizer
 }
 
 // NewServer creates a Keep server. configPath is retained so the admin reload
@@ -81,6 +82,11 @@ func NewServer(cfg Config, configPath string) (*Server, error) {
 		return nil, fmt.Errorf("create escalation signer: %w", err)
 	}
 
+	normalizer, err := buildIdentityNormalizer(cfg.Identity)
+	if err != nil {
+		return nil, fmt.Errorf("build identity normalizer: %w", err)
+	}
+
 	return &Server{
 		cfg:         cfg,
 		configPath:  configPath,
@@ -89,6 +95,7 @@ func NewServer(cfg Config, configPath string) (*Server, error) {
 		workflow:    wf,
 		signer:      signer,
 		decisionLog: NewDecisionLogger(cfg.DecisionLog),
+		normalizer:  normalizer,
 	}, nil
 }
 
@@ -147,26 +154,35 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 	ctx, span := otel.Tracer("portcullis-keep").Start(ctx, "keep.evaluate")
 	defer span.End()
 
-	var req shared.EnrichedMCPRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var rawReq shared.EnrichedMCPRequest
+	if err := json.NewDecoder(r.Body).Decode(&rawReq); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
 	traceID := telemetry.TraceIDFromContext(ctx)
 	span.SetAttributes(
-		attribute.String("tool.name", req.ToolName),
-		attribute.String("server.name", req.ServerName),
-		attribute.String("user.id", req.UserIdentity.UserID),
-		attribute.String("request.id", req.RequestID),
+		attribute.String("tool.name", rawReq.ToolName),
+		attribute.String("server.name", rawReq.ServerName),
+		attribute.String("trace.id", rawReq.TraceID),
 	)
 
-	req.UserIdentity = normalizeIdentity(req.UserIdentity, s.cfg.Identity)
+	principal, normErr := s.normalizer.Normalize(ctx, rawReq.UserIdentity)
+	if normErr != nil {
+		span.SetStatus(codes.Error, normErr.Error())
+		slog.ErrorContext(ctx, "identity normalization failed", "error", normErr, "trace_id", traceID)
+		writeError(w, http.StatusServiceUnavailable, "identity normalization failed")
+		return
+	}
+	span.SetAttributes(attribute.String("user.id", principal.UserID))
+
+	// Construct the trusted AuthorizedRequest from verified facts.
+	req := NewAuthorizedRequest(rawReq, principal)
 
 	pdpResp, err := s.pdp.Evaluate(ctx, req)
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
-		slog.ErrorContext(ctx, "pdp evaluate failed", "error", err, "request_id", req.RequestID, "trace_id", traceID)
+		slog.ErrorContext(ctx, "pdp evaluate failed", "error", err, "trace_id", traceID)
 		writeError(w, http.StatusServiceUnavailable, shared.ErrPDPUnavailable.Error())
 		return
 	}
@@ -175,23 +191,21 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 	slog.InfoContext(ctx, "pdp decision",
 		"decision", pdpResp.Decision,
 		"tool", req.ToolName,
-		"user", req.UserIdentity.UserID,
-		"request_id", req.RequestID,
+		"user", req.Principal.UserID,
 		"trace_id", traceID,
 	)
 
 	// Log the decision
 	s.decisionLog.Log(&DecisionLogEntry{
-		SessionID:    req.SessionID,
-		RequestID:    req.RequestID,
-		UserID:       req.UserIdentity.UserID,
-		ServerName:   req.ServerName,
-		ToolName:     req.ToolName,
-		Decision:     pdpResp.Decision,
-		Reason:       pdpResp.Reason,
-		PDPRequestID: pdpResp.RequestID,
-		Source:       "pdp",
-		Arguments:    req.Arguments,
+		SessionID:  req.SessionID,
+		TraceID:    req.TraceID,
+		UserID:     req.Principal.UserID,
+		ServerName: req.ServerName,
+		ToolName:   req.ToolName,
+		Decision:   pdpResp.Decision,
+		Reason:     pdpResp.Reason,
+		Source:     "pdp",
+		Arguments:  req.Arguments,
 	})
 
 	switch pdpResp.Decision {
@@ -199,8 +213,8 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		result, err := s.router.CallTool(ctx, req.ServerName, req.ToolName, req.Arguments)
 		if err != nil {
 			span.SetStatus(codes.Error, err.Error())
-			slog.ErrorContext(ctx, "backend call failed", "error", err, "server", req.ServerName, "tool", req.ToolName, "request_id", req.RequestID, "trace_id", traceID)
-			writeError(w, http.StatusInternalServerError, fmt.Sprintf("backend call failed: %s", err))
+			slog.ErrorContext(ctx, "backend call failed", "error", err, "server", req.ServerName, "tool", req.ToolName, "trace_id", traceID)
+			writeError(w, http.StatusInternalServerError, "backend tool call failed")
 			return
 		}
 		writeJSON(w, http.StatusOK, result)
@@ -215,7 +229,7 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		if s.signer != nil {
 			jwtStr, jti, err := s.signer.Sign(req, pdpResp.Reason, pdpResp.EscalationScope)
 			if err != nil {
-				slog.ErrorContext(ctx, "escalation jwt sign failed", "error", err, "request_id", req.RequestID, "trace_id", traceID)
+				slog.ErrorContext(ctx, "escalation jwt sign failed", "error", err, "trace_id", traceID)
 				// Non-fatal: continue without JWT; some workflow handlers may still function.
 			} else {
 				escalationJWT = jwtStr
@@ -225,8 +239,8 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		wfRef, err := s.workflow.Submit(ctx, req, escalationJWT)
 		if err != nil {
 			span.SetStatus(codes.Error, err.Error())
-			slog.ErrorContext(ctx, "workflow submit failed", "error", err, "request_id", req.RequestID, "trace_id", traceID)
-			writeError(w, http.StatusInternalServerError, "escalation submission failed")
+			slog.ErrorContext(ctx, "workflow submit failed", "error", err, "trace_id", traceID)
+			writeError(w, http.StatusInternalServerError, "failed to submit escalation")
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -240,7 +254,7 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 
 	default:
 		span.SetStatus(codes.Error, "unknown decision")
-		slog.ErrorContext(ctx, "unknown pdp decision", "decision", pdpResp.Decision, "request_id", req.RequestID, "trace_id", traceID)
+		slog.ErrorContext(ctx, "unknown pdp decision", "decision", pdpResp.Decision, "trace_id", traceID)
 		writeDeny(w, "unknown pdp decision — denied by default", traceID)
 	}
 }
@@ -253,26 +267,35 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	ctx, span := otel.Tracer("portcullis-keep").Start(ctx, "keep.authorize")
 	defer span.End()
 
-	var req shared.EnrichedMCPRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var rawReq shared.EnrichedMCPRequest
+	if err := json.NewDecoder(r.Body).Decode(&rawReq); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
 	traceID := telemetry.TraceIDFromContext(ctx)
 	span.SetAttributes(
-		attribute.String("tool.name", req.ToolName),
-		attribute.String("server.name", req.ServerName),
-		attribute.String("user.id", req.UserIdentity.UserID),
-		attribute.String("request.id", req.RequestID),
+		attribute.String("tool.name", rawReq.ToolName),
+		attribute.String("server.name", rawReq.ServerName),
+		attribute.String("trace.id", rawReq.TraceID),
 	)
 
-	req.UserIdentity = normalizeIdentity(req.UserIdentity, s.cfg.Identity)
+	principal, normErr := s.normalizer.Normalize(ctx, rawReq.UserIdentity)
+	if normErr != nil {
+		span.SetStatus(codes.Error, normErr.Error())
+		slog.ErrorContext(ctx, "identity normalization failed", "error", normErr, "trace_id", traceID)
+		writeError(w, http.StatusServiceUnavailable, "identity normalization failed")
+		return
+	}
+	span.SetAttributes(attribute.String("user.id", principal.UserID))
+
+	// Construct the trusted AuthorizedRequest from verified facts.
+	req := NewAuthorizedRequest(rawReq, principal)
 
 	pdpResp, err := s.pdp.Evaluate(ctx, req)
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
-		slog.ErrorContext(ctx, "pdp evaluate failed", "error", err, "request_id", req.RequestID, "trace_id", traceID)
+		slog.ErrorContext(ctx, "pdp evaluate failed", "error", err, "trace_id", traceID)
 		writeError(w, http.StatusServiceUnavailable, shared.ErrPDPUnavailable.Error())
 		return
 	}
@@ -281,22 +304,20 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	slog.InfoContext(ctx, "pdp decision (authorize)",
 		"decision", pdpResp.Decision,
 		"tool", req.ToolName,
-		"user", req.UserIdentity.UserID,
-		"request_id", req.RequestID,
+		"user", req.Principal.UserID,
 		"trace_id", traceID,
 	)
 
 	s.decisionLog.Log(&DecisionLogEntry{
-		SessionID:    req.SessionID,
-		RequestID:    req.RequestID,
-		UserID:       req.UserIdentity.UserID,
-		ServerName:   req.ServerName,
-		ToolName:     req.ToolName,
-		Decision:     pdpResp.Decision,
-		Reason:       pdpResp.Reason,
-		PDPRequestID: pdpResp.RequestID,
-		Source:       "pdp",
-		Arguments:    req.Arguments,
+		SessionID:  req.SessionID,
+		TraceID:    req.TraceID,
+		UserID:     req.Principal.UserID,
+		ServerName: req.ServerName,
+		ToolName:   req.ToolName,
+		Decision:   pdpResp.Decision,
+		Reason:     pdpResp.Reason,
+		Source:     "pdp",
+		Arguments:  req.Arguments,
 	})
 
 	switch pdpResp.Decision {
@@ -313,7 +334,7 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		if s.signer != nil {
 			jwtStr, jti, err := s.signer.Sign(req, pdpResp.Reason, pdpResp.EscalationScope)
 			if err != nil {
-				slog.ErrorContext(ctx, "escalation jwt sign failed", "error", err, "request_id", req.RequestID, "trace_id", traceID)
+				slog.ErrorContext(ctx, "escalation jwt sign failed", "error", err, "trace_id", traceID)
 			} else {
 				escalationJWT = jwtStr
 				escalationJTI = jti
@@ -322,8 +343,8 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		wfRef, err := s.workflow.Submit(ctx, req, escalationJWT)
 		if err != nil {
 			span.SetStatus(codes.Error, err.Error())
-			slog.ErrorContext(ctx, "workflow submit failed", "error", err, "request_id", req.RequestID, "trace_id", traceID)
-			writeError(w, http.StatusInternalServerError, "escalation submission failed")
+			slog.ErrorContext(ctx, "workflow submit failed", "error", err, "trace_id", traceID)
+			writeError(w, http.StatusInternalServerError, "failed to submit escalation")
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -337,7 +358,7 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 
 	default:
 		span.SetStatus(codes.Error, "unknown decision")
-		slog.ErrorContext(ctx, "unknown pdp decision", "decision", pdpResp.Decision, "request_id", req.RequestID, "trace_id", traceID)
+		slog.ErrorContext(ctx, "unknown pdp decision", "decision", pdpResp.Decision, "trace_id", traceID)
 		writeDeny(w, "unknown pdp decision — denied by default", traceID)
 	}
 }
@@ -346,7 +367,8 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListTools(w http.ResponseWriter, r *http.Request) {
 	tools, err := s.router.ListAllTools(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("list tools failed: %s", err))
+		slog.Error("list tools failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to list tools")
 		return
 	}
 	writeJSON(w, http.StatusOK, tools)
@@ -376,7 +398,7 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
 func (s *Server) adminAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.cfg.Admin.Token == "" {
-			writeError(w, http.StatusForbidden, "admin API not configured")
+			writeError(w, http.StatusForbidden, "forbidden")
 			return
 		}
 		token := r.Header.Get("X-Api-Key")
@@ -396,12 +418,12 @@ func (s *Server) handleReload(w http.ResponseWriter, r *http.Request) {
 	cfg, err := LoadConfig(s.configPath)
 	if err != nil {
 		slog.Error("admin reload: read config failed", "error", err)
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("read config: %s", err))
+		writeError(w, http.StatusInternalServerError, "failed to read configuration")
 		return
 	}
 	if err := s.router.Reload(r.Context(), cfg.Backends); err != nil {
 		slog.Error("admin reload: backend reload failed", "error", err)
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("reload backends: %s", err))
+		writeError(w, http.StatusInternalServerError, "failed to reload backends")
 		return
 	}
 	s.cfg.Backends = cfg.Backends

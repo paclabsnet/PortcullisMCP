@@ -37,8 +37,8 @@ func TestNewWorkflowHandler_Noop(t *testing.T) {
 	}
 
 	// Verify it implements the interface
-	req := shared.EnrichedMCPRequest{RequestID: "test-123"}
-	reqID, err := handler.Submit(context.Background(), req, "test reason")
+	req := shared.EnrichedMCPRequest{TraceID: "test-123"}
+	reqID, err := handler.Submit(context.Background(), NewAuthorizedRequest(req, shared.Principal{}), "test reason")
 	if err != nil {
 		t.Errorf("noop handler should not error: %v", err)
 	}
@@ -147,15 +147,15 @@ func TestServiceNowHandler_Submit(t *testing.T) {
 			req := shared.EnrichedMCPRequest{
 				ServerName: "test-server",
 				ToolName:   "test-tool",
-				UserIdentity: shared.UserIdentity{
-					UserID:      "user@example.com",
-					DisplayName: "Test User",
-				},
-				RequestID: "req-123",
-				SessionID: "session-456",
+				TraceID:    "req-123",
+				SessionID:  "session-456",
+			}
+			p := shared.Principal{
+				UserID:      "user@example.com",
+				DisplayName: "Test User",
 			}
 
-			reqID, err := handler.Submit(context.Background(), req, "test reason")
+			reqID, err := handler.Submit(context.Background(), NewAuthorizedRequest(req, p), "test reason")
 
 			if tt.expectError {
 				if err == nil {
@@ -248,8 +248,8 @@ func TestWebhookHandler_Submit(t *testing.T) {
 				}
 
 				// Verify payload structure
-				if body["request_id"] != "req-123" {
-					t.Errorf("expected request_id in payload")
+				if body["trace_id"] != "req-123" {
+					t.Errorf("expected trace_id in payload")
 				}
 				if body["tool"] != "test-tool" {
 					t.Errorf("expected tool in payload")
@@ -278,17 +278,17 @@ func TestWebhookHandler_Submit(t *testing.T) {
 				ServerName: "test-server",
 				ToolName:   "test-tool",
 				Arguments:  map[string]any{"arg1": "value1"},
-				UserIdentity: shared.UserIdentity{
-					UserID:      "user@example.com",
-					DisplayName: "Test User",
-					Groups:      []string{"developers"},
-					SourceType:  "oidc",
-				},
-				RequestID: "req-123",
-				SessionID: "session-456",
+				TraceID:    "req-123",
+				SessionID:  "session-456",
+			}
+			p := shared.Principal{
+				UserID:      "user@example.com",
+				DisplayName: "Test User",
+				Groups:      []string{"developers"},
+				SourceType:  "oidc",
 			}
 
-			reqID, err := handler.Submit(context.Background(), req, "test reason")
+			reqID, err := handler.Submit(context.Background(), NewAuthorizedRequest(req, p), "test reason")
 
 			if tt.expectError {
 				if err == nil {

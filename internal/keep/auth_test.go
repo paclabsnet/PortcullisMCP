@@ -39,6 +39,7 @@ func TestAuthMiddleware_ValidToken(t *testing.T) {
 		router:      &mockRouter{},
 		workflow:    &mockWorkflow{},
 		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
+		normalizer:  &strictNormalizer{},
 	}
 
 	mux := http.NewServeMux()
@@ -48,7 +49,7 @@ func TestAuthMiddleware_ValidToken(t *testing.T) {
 	reqBody := shared.EnrichedMCPRequest{
 		ServerName: "test",
 		ToolName:   "test-tool",
-		RequestID:  "req-123",
+		TraceID:  "req-123",
 	}
 	body, _ := json.Marshal(reqBody)
 
@@ -78,6 +79,7 @@ func TestAuthMiddleware_InvalidToken(t *testing.T) {
 		router:      &mockRouter{},
 		workflow:    &mockWorkflow{},
 		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
+		normalizer:  &strictNormalizer{},
 	}
 
 	mux := http.NewServeMux()
@@ -87,7 +89,7 @@ func TestAuthMiddleware_InvalidToken(t *testing.T) {
 	reqBody := shared.EnrichedMCPRequest{
 		ServerName: "test",
 		ToolName:   "test-tool",
-		RequestID:  "req-123",
+		TraceID:  "req-123",
 	}
 	body, _ := json.Marshal(reqBody)
 
@@ -150,6 +152,7 @@ func TestAuthMiddleware_Disabled(t *testing.T) {
 		router:      &mockRouter{},
 		workflow:    &mockWorkflow{},
 		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
+		normalizer:  &strictNormalizer{},
 	}
 
 	mux := http.NewServeMux()
@@ -160,7 +163,7 @@ func TestAuthMiddleware_Disabled(t *testing.T) {
 	reqBody := shared.EnrichedMCPRequest{
 		ServerName: "test",
 		ToolName:   "test-tool",
-		RequestID:  "req-123",
+		TraceID:  "req-123",
 	}
 	body, _ := json.Marshal(reqBody)
 

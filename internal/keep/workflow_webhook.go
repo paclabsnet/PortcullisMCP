@@ -21,8 +21,6 @@ import (
 	"fmt"
 	"net/http"
 	"time"
-
-	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 )
 
 type webhookHandler struct {
@@ -43,19 +41,20 @@ func newWebhookHandler(cfg WebhookConfig) (*webhookHandler, error) {
 // Submit POSTs the escalation payload to the configured webhook URL.
 // The escalationJWT is included so the webhook handler can build approval URLs
 // or forward the token to the user via the enterprise's own notification system.
-func (h *webhookHandler) Submit(ctx context.Context, req shared.EnrichedMCPRequest, escalationJWT string) (string, error) {
+func (h *webhookHandler) Submit(ctx context.Context, req AuthorizedRequest, escalationJWT string) (string, error) {
 	payload := map[string]any{
-		"request_id":     req.RequestID,
+		"trace_id":       req.TraceID,
 		"session_id":     req.SessionID,
 		"server":         req.ServerName,
 		"tool":           req.ToolName,
 		"arguments":      req.Arguments,
 		"escalation_jwt": escalationJWT,
 		"user": map[string]any{
-			"id":          req.UserIdentity.UserID,
-			"display":     req.UserIdentity.DisplayName,
-			"groups":      req.UserIdentity.Groups,
-			"source_type": req.UserIdentity.SourceType,
+			"id":          req.Principal.UserID,
+			"display":     req.Principal.DisplayName,
+			"groups":      req.Principal.Groups,
+			"roles":       req.Principal.Roles,
+			"source_type": req.Principal.SourceType,
 		},
 	}
 
@@ -91,5 +90,5 @@ func (h *webhookHandler) Submit(ctx context.Context, req shared.EnrichedMCPReque
 	if result.RequestID != "" {
 		return result.RequestID, nil
 	}
-	return req.RequestID, nil
+	return req.TraceID, nil
 }

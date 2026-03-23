@@ -69,6 +69,15 @@ type UserIdentity struct {
     RawToken    string            // original OIDC token
 }
 
+// Principal represents verified user identity facts.
+type Principal struct {
+    UserID      string
+    Email       string
+    DisplayName string
+    Groups      []string
+    SourceType  string
+}
+
 type EscalationToken struct {
     TokenID   string
     Raw       string
@@ -76,13 +85,24 @@ type EscalationToken struct {
 }
 
 type EnrichedMCPRequest struct {
+    ServerName       string            `json:"server_name"`
+    ToolName         string            `json:"tool_name"`
+    Arguments        map[string]any    `json:"arguments"`
+    UserIdentity     UserIdentity      `json:"user_identity"`
+    EscalationTokens []EscalationToken `json:"escalation_tokens"`
+    SessionID        string            `json:"session_id"`
+    TraceID          string            `json:"trace_id"`
+}
+
+// AuthorizedRequest represents a verified internal request.
+type AuthorizedRequest struct {
     ServerName       string
     ToolName         string
     Arguments        map[string]any
-    UserIdentity     UserIdentity
-    EscalationTokens []EscalationToken
     SessionID        string
-    RequestID        string
+    TraceID          string
+    EscalationTokens []shared.EscalationToken
+    Principal        shared.Principal
 }
 
 type PDPResponse struct {

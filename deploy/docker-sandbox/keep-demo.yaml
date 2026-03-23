@@ -7,9 +7,9 @@ pdp:
   type: "opa"
   endpoint: "http://opa:8181/v1/data/portcullis/tabular/decision"
 
-# Demo mode: accept OS-sourced identities with all claims intact.
+# passthrough mode: accept OS-sourced identities with all claims intact.
 identity:
-  mode: "demo"
+  normalizer: "passthrough"
   accept_forged_identities: true  # suppress per-request warnings in demo stack
 
 backends:

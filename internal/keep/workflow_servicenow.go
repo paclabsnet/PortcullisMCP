@@ -22,8 +22,6 @@ import (
 	"net/http"
 	"os"
 	"time"
-
-	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 )
 
 type serviceNowHandler struct {
@@ -50,19 +48,19 @@ func newServiceNowHandler(cfg ServiceNowConfig) (*serviceNowHandler, error) {
 // Submit opens a ServiceNow change request for the escalation.
 // The escalationJWT is included in the description so the approver can embed
 // it in a Guard approval URL or send it directly to the requesting user.
-func (h *serviceNowHandler) Submit(ctx context.Context, req shared.EnrichedMCPRequest, escalationJWT string) (string, error) {
+func (h *serviceNowHandler) Submit(ctx context.Context, req AuthorizedRequest, escalationJWT string) (string, error) {
 	body := map[string]any{
 		"short_description": fmt.Sprintf(
 			"Portcullis escalation: %s/%s requested by %s",
-			req.ServerName, req.ToolName, req.UserIdentity.UserID,
+			req.ServerName, req.ToolName, req.Principal.UserID,
 		),
 		"description": fmt.Sprintf(
-			"Tool: %s\nServer: %s\nUser: %s (%s)\nRequest ID: %s\nSession ID: %s\nEscalation JWT: %s",
+			"Tool: %s\nServer: %s\nUser: %s (%s)\nTrace ID: %s\nSession ID: %s\nEscalation JWT: %s",
 			req.ToolName, req.ServerName,
-			req.UserIdentity.DisplayName, req.UserIdentity.UserID,
-			req.RequestID, req.SessionID, escalationJWT,
+			req.Principal.DisplayName, req.Principal.UserID,
+			req.TraceID, req.SessionID, escalationJWT,
 		),
-		"caller_id":  req.UserIdentity.UserID,
+		"caller_id":  req.Principal.UserID,
 		"category":   "AI Agent Access Request",
 		"assignment": "Portcullis Approvers",
 	}

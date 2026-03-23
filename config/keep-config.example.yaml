@@ -16,18 +16,24 @@ pdp:
   endpoint: "http://opa.internal.example.com:8181/v1/data/portcullis/decision"
 
 # Identity enforcement controls how Keep handles the UserIdentity claims sent by Gate.
-#
-# strict (default): OS-sourced identities are reduced to user_id only. Groups,
-#   roles, and other directory claims are discarded because Gate derives them
-#   from the local OS and cannot verify them. The PDP will see a minimal
-#   principal, which means group-based policies will deny by default.
-#
-# demo: All identity fields are accepted as-is. Intended for local evaluation
-#   and sandbox deployments only. Keep logs a warning on every request unless
-#   accept_forged_identities is also true.
 identity:
-  mode: "strict"
-  # accept_forged_identities: false  # set true in demo mode to silence per-request warnings
+  # Normalizer selects the identity normalization strategy.
+  #   "strict" (default) — OS-sourced identities are stripped to user_id only.
+  #                        OIDC-sourced identities pass through unchanged.
+  #   "passthrough"      — All identity fields are accepted as-is. Local
+  #                        evaluation and sandbox deployments only.
+  #   "oidc-verify"      — Rejects expired OIDC tokens and tokens not issued
+  #                        by the configured issuer. OS identities are handled
+  #                        with strict stripping.
+  normalizer: "strict"
+
+  # accept_forged_identities suppresses the per-request warning emitted in
+  # passthrough mode. Has no effect on other normalizers.
+  # accept_forged_identities: false
+
+  # Settings for oidc-verify normalizer
+  # oidc_verify:
+  #   issuer: "https://login.microsoftonline.com/<tenant-id>/v2.0"
 
 backends:
   # stdio backends are useful for local development/testing
@@ -47,11 +53,6 @@ backends:
   enterprise-api:
     type: "http"
     url: "https://mcp-api.internal.example.com/mcp"
-
-  # Legacy SSE backends (deprecated MCP transport, for existing servers not yet migrated)
-  legacy-service:
-    type: "sse"
-    url: "https://mcp-legacy.internal.example.com/sse"
 
 escalation_request_signing:
   key: "${KEEP_SIGNING_KEY}"   # must match guard's keep.escalation_request_signing_key; use ${ENV_VAR} in production

@@ -34,9 +34,9 @@ import (
 	"github.com/paclabsnet/PortcullisMCP/internal/telemetry"
 )
 
-// PolicyDecisionPoint evaluates an enriched MCP request and returns a decision.
+// PolicyDecisionPoint evaluates an authorized MCP request and returns a decision.
 type PolicyDecisionPoint interface {
-	Evaluate(ctx context.Context, req shared.EnrichedMCPRequest) (shared.PDPResponse, error)
+	Evaluate(ctx context.Context, req AuthorizedRequest) (shared.PDPResponse, error)
 }
 
 // noopPDP is a PolicyDecisionPoint that allows every request unconditionally.
@@ -51,11 +51,10 @@ func NewNoopPDPClient() PolicyDecisionPoint {
 	return &noopPDP{}
 }
 
-func (n *noopPDP) Evaluate(_ context.Context, req shared.EnrichedMCPRequest) (shared.PDPResponse, error) {
+func (n *noopPDP) Evaluate(_ context.Context, _ AuthorizedRequest) (shared.PDPResponse, error) {
 	return shared.PDPResponse{
-		Decision:  "allow",
-		Reason:    "noop pdp: policy enforcement disabled",
-		RequestID: req.RequestID,
+		Decision: "allow",
+		Reason:   "noop pdp: policy enforcement disabled",
 	}, nil
 }
 
@@ -183,7 +182,6 @@ type opaPrincipal struct {
 	AuthMethod  []string `json:"auth_method,omitempty"`
 	TokenExpiry int64    `json:"token_expiry,omitempty"`
 	SourceType  string   `json:"source_type,omitempty"`
-	RawToken    string   `json:"raw_token,omitempty"`
 }
 
 type opaContext struct {
@@ -195,19 +193,18 @@ type opaResponse struct {
 	Result struct {
 		Decision        string           `json:"decision"`
 		Reason          string           `json:"reason"`
-		RequestID       string           `json:"request_id"`       // optionally echoed by the PDP
 		EscalationScope []map[string]any `json:"escalation_scope"` // claims required for escalation token
 	} `json:"result"`
 }
 
-// Evaluate sends the enriched request to OPA and returns the PDP decision.
-func (c *opaClient) Evaluate(ctx context.Context, req shared.EnrichedMCPRequest) (shared.PDPResponse, error) {
+// Evaluate sends the authorized request to OPA and returns the PDP decision.
+func (c *opaClient) Evaluate(ctx context.Context, req AuthorizedRequest) (shared.PDPResponse, error) {
 	ctx, span := otel.Tracer("portcullis-keep").Start(ctx, "keep.pdp.evaluate")
 	defer span.End()
 	span.SetAttributes(
 		attribute.String("pdp.type", "opa"),
 		attribute.String("pdp.endpoint", c.endpoint),
-		attribute.String("request.id", req.RequestID),
+		attribute.String("trace.id", req.TraceID),
 		attribute.String("tool.name", req.ToolName),
 	)
 	traceID := telemetry.TraceIDFromContext(ctx)
@@ -223,23 +220,22 @@ func (c *opaClient) Evaluate(ctx context.Context, req shared.EnrichedMCPRequest)
 					Arguments: expandURLArgs(req.Arguments),
 				},
 				Principal: opaPrincipal{
-					UserID:      req.UserIdentity.UserID,
-					Email:       req.UserIdentity.Email,
-					DisplayName: req.UserIdentity.DisplayName,
-					Groups:      req.UserIdentity.Groups,
-					Roles:       req.UserIdentity.Roles,
-					Department:  req.UserIdentity.Department,
-					AuthMethod:  req.UserIdentity.AuthMethod,
-					TokenExpiry: req.UserIdentity.TokenExpiry,
-					SourceType:  req.UserIdentity.SourceType,
-					RawToken:    req.UserIdentity.RawToken,
+					UserID:      req.Principal.UserID,
+					Email:       req.Principal.Email,
+					DisplayName: req.Principal.DisplayName,
+					Groups:      req.Principal.Groups,
+					Roles:       req.Principal.Roles,
+					Department:  req.Principal.Department,
+					AuthMethod:  req.Principal.AuthMethod,
+					TokenExpiry: req.Principal.TokenExpiry,
+					SourceType:  req.Principal.SourceType,
 				},
 				Context: opaContext{
 					EscalationTokens: req.EscalationTokens,
 				},
 			},
 			SessionID: req.SessionID,
-			RequestID: req.RequestID,
+			RequestID: req.TraceID, // OPA receives trace_id as the correlation ID
 		},
 	})
 	if err != nil {
@@ -280,12 +276,11 @@ func (c *opaClient) Evaluate(ctx context.Context, req shared.EnrichedMCPRequest)
 	}
 
 	span.SetAttributes(attribute.String("pdp.decision", decision))
-	slog.InfoContext(ctx, "keep: pdp decision", "decision", decision, "request_id", req.RequestID, "trace_id", traceID)
+	slog.InfoContext(ctx, "keep: pdp decision", "decision", decision, "trace_id", traceID)
 
 	return shared.PDPResponse{
 		Decision:        decision,
 		Reason:          opaResp.Result.Reason,
-		RequestID:       opaResp.Result.RequestID,
 		EscalationScope: opaResp.Result.EscalationScope,
 	}, nil
 }

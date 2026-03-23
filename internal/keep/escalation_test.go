@@ -48,15 +48,15 @@ func TestEscalationSigner_Sign(t *testing.T) {
 	req := shared.EnrichedMCPRequest{
 		ServerName: "github",
 		ToolName:   "create_issue",
-		UserIdentity: shared.UserIdentity{
-			UserID:      "user@example.com",
-			DisplayName: "Test User",
-		},
-		RequestID: "req-123",
+		TraceID:    "req-123",
+	}
+	p := shared.Principal{
+		UserID:      "user@example.com",
+		DisplayName: "Test User",
 	}
 	scope := []map[string]any{{"resource": "repo:example"}}
 
-	tokenStr, jti, err := signer.Sign(req, "manager approval needed", scope)
+	tokenStr, jti, err := signer.Sign(NewAuthorizedRequest(req, p), "manager approval needed", scope)
 	if err != nil {
 		t.Fatalf("Sign returned error: %v", err)
 	}
@@ -112,12 +112,12 @@ func TestEscalationSigner_Sign_DefaultTTL(t *testing.T) {
 	// TTL=0 should default to 24 hours.
 	signer, _ := NewEscalationSigner(SigningConfig{Key: "k", TTL: 0})
 	req := shared.EnrichedMCPRequest{
-		UserIdentity: shared.UserIdentity{UserID: "u@example.com"},
-		ServerName:   "s",
-		ToolName:     "t",
+		ServerName: "s",
+		ToolName:   "t",
 	}
+	p := shared.Principal{UserID: "u@example.com"}
 
-	tokenStr, _, err := signer.Sign(req, "", nil)
+	tokenStr, _, err := signer.Sign(NewAuthorizedRequest(req, p), "", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -143,12 +143,12 @@ func TestEscalationSigner_Sign_DefaultTTL(t *testing.T) {
 func TestEscalationSigner_Sign_CustomTTL(t *testing.T) {
 	signer, _ := NewEscalationSigner(SigningConfig{Key: "k", TTL: 7200}) // 2 hours
 	req := shared.EnrichedMCPRequest{
-		UserIdentity: shared.UserIdentity{UserID: "u@example.com"},
-		ServerName:   "s",
-		ToolName:     "t",
+		ServerName: "s",
+		ToolName:   "t",
 	}
+	p := shared.Principal{UserID: "u@example.com"}
 
-	tokenStr, _, _ := signer.Sign(req, "", nil)
+	tokenStr, _, _ := signer.Sign(NewAuthorizedRequest(req, p), "", nil)
 	token, _ := jwt.ParseWithClaims(tokenStr, &escalationRequestClaims{}, func(t *jwt.Token) (any, error) {
 		return []byte("k"), nil
 	})
@@ -166,7 +166,7 @@ func TestEscalationSigner_Sign_CustomTTL(t *testing.T) {
 
 func TestEscalationSigner_Sign_NilSigner(t *testing.T) {
 	var s *EscalationSigner
-	_, _, err := s.Sign(shared.EnrichedMCPRequest{}, "", nil)
+	_, _, err := s.Sign(AuthorizedRequest{}, "", nil)
 	if err == nil {
 		t.Error("expected error from nil signer, got nil")
 	}
@@ -176,11 +176,11 @@ func TestEscalationSigner_Sign_NilScope(t *testing.T) {
 	// nil scope should produce a valid token with no scope field.
 	signer, _ := NewEscalationSigner(SigningConfig{Key: "k", TTL: 60})
 	req := shared.EnrichedMCPRequest{
-		UserIdentity: shared.UserIdentity{UserID: "u@example.com"},
-		ServerName:   "s",
-		ToolName:     "t",
+		ServerName: "s",
+		ToolName:   "t",
 	}
-	_, _, err := signer.Sign(req, "reason", nil)
+	p := shared.Principal{UserID: "u@example.com"}
+	_, _, err := signer.Sign(NewAuthorizedRequest(req, p), "reason", nil)
 	if err != nil {
 		t.Fatalf("Sign with nil scope returned error: %v", err)
 	}

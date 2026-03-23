@@ -32,7 +32,7 @@ type AnnotatedTool struct {
 	Tool       *mcp.Tool `json:"tool"`
 }
 
-// UserIdentity carries the resolved identity of the local user.
+// UserIdentity carries the resolved identity of the local user as claimed by Gate.
 // SourceType indicates how the identity was obtained; "os" is provided for
 // testing/evaluation only — portcullis-keep may be configured to reject it.
 type UserIdentity struct {
@@ -46,6 +46,21 @@ type UserIdentity struct {
 	TokenExpiry int64    `json:"token_expiry,omitempty"` // Unix timestamp; 0 means unknown
 	SourceType  string   `json:"source_type"`  // "oidc" | "os"
 	RawToken    string   `json:"raw_token"`    // original OIDC token for PDP verification
+}
+
+// Principal represents the verified facts about a user after Keep has performed
+// identity normalization and validation. The PDP evaluates policies against
+// the Principal, not the raw UserIdentity received from Gate.
+type Principal struct {
+	UserID      string   `json:"user_id"`
+	Email       string   `json:"email,omitempty"`
+	DisplayName string   `json:"display_name,omitempty"`
+	Groups      []string `json:"groups,omitempty"`
+	Roles       []string `json:"roles,omitempty"`
+	Department  string   `json:"department,omitempty"`
+	AuthMethod  []string `json:"auth_method,omitempty"`
+	TokenExpiry int64    `json:"token_expiry,omitempty"`
+	SourceType  string   `json:"source_type"`
 }
 
 // EscalationToken is a pre-authorization JWT the user received out-of-band.
@@ -65,8 +80,11 @@ type EnrichedMCPRequest struct {
 	UserIdentity     UserIdentity      `json:"user_identity"`
 	EscalationTokens []EscalationToken `json:"escalation_tokens"`
 	SessionID        string            `json:"session_id"`
-	RequestID        string            `json:"request_id"`
-	TraceID          string            `json:"trace_id,omitempty"` // W3C trace ID, set by Gate when telemetry is enabled
+	// TraceID is the single correlation identifier for this request.
+	// When OTel telemetry is enabled it is the W3C trace ID from the active span.
+	// When telemetry is disabled (noop exporter) Gate generates a UUID so this
+	// field is always non-empty and can be used for log correlation and deny messages.
+	TraceID string `json:"trace_id"`
 }
 
 // PDPResponse is the decision returned by the Policy Decision Point.
@@ -74,7 +92,6 @@ type PDPResponse struct {
 	Decision        string         `json:"decision"`                   // "allow" | "deny" | "escalate"
 	Reason          string         `json:"reason"`
 	EscalationScope []map[string]any `json:"escalation_scope,omitempty"` // claims required for escalation token
-	RequestID       string         `json:"request_id,omitempty"`       // echoed from the input request, if the PDP chooses to include it
 }
 
 // EscalationPendingError is returned when the PDP requires escalation approval.

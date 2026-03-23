@@ -27,7 +27,7 @@ func TestDecisionLogger_Disabled(t *testing.T) {
 	dl := NewDecisionLogger(DecisionLogConfig{Enabled: false})
 
 	// Log should be a no-op and must not panic.
-	dl.Log(&DecisionLogEntry{RequestID: "req-1", Decision: "allow"})
+	dl.Log(&DecisionLogEntry{TraceID: "req-1", Decision: "allow"})
 	dl.Log(nil)
 
 	if err := dl.Shutdown(); err != nil {
@@ -83,7 +83,7 @@ func TestDecisionLogger_Log_SetsTimestamp(t *testing.T) {
 		BufferSize:    100,
 	})
 
-	dl.Log(&DecisionLogEntry{RequestID: "req-1", Decision: "allow"})
+	dl.Log(&DecisionLogEntry{TraceID: "req-1", Decision: "allow"})
 
 	select {
 	case entries := <-received:
@@ -124,7 +124,7 @@ func TestDecisionLogger_PreserveExistingTimestamp(t *testing.T) {
 	})
 
 	fixed := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
-	dl.Log(&DecisionLogEntry{RequestID: "r", Decision: "deny", Timestamp: fixed})
+	dl.Log(&DecisionLogEntry{TraceID: "r", Decision: "deny", Timestamp: fixed})
 
 	select {
 	case entries := <-received:
@@ -161,8 +161,8 @@ func TestDecisionLogger_Shutdown_Flushes(t *testing.T) {
 		BufferSize:    100,
 	})
 
-	dl.Log(&DecisionLogEntry{RequestID: "req-1", Decision: "allow"})
-	dl.Log(&DecisionLogEntry{RequestID: "req-2", Decision: "deny"})
+	dl.Log(&DecisionLogEntry{TraceID: "req-1", Decision: "allow"})
+	dl.Log(&DecisionLogEntry{TraceID: "req-2", Decision: "deny"})
 
 	dl.Shutdown()
 
@@ -206,7 +206,7 @@ func TestDecisionLogger_RemoteError_NonBlocking(t *testing.T) {
 	// Log entries with a failing server; must not block.
 	done := make(chan struct{})
 	go func() {
-		dl.Log(&DecisionLogEntry{RequestID: "req-1", Decision: "allow"})
+		dl.Log(&DecisionLogEntry{TraceID: "req-1", Decision: "allow"})
 		close(done)
 	}()
 
@@ -268,7 +268,7 @@ func TestDecisionLogger_RequestHeaders(t *testing.T) {
 		},
 	})
 
-	dl.Log(&DecisionLogEntry{RequestID: "r", Decision: "allow"})
+	dl.Log(&DecisionLogEntry{TraceID: "r", Decision: "allow"})
 
 	select {
 	case h := <-received:

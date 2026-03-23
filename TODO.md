@@ -33,12 +33,6 @@
 - Basically, ensure that Gate indicates to the user that the Portcullis server is not available right now, try again later.
 - low priority
 
-### Task: Add telemetry to the standard flow
-- use OpenTelemetry
-- add trace headers to the MCP call from Gate
-- update slog to include trace ids in the log messages
-- add the trace information to the headers going to the PDP
-
 ### Task: at the PDP, Get rid of RequestId, use TraceID instead
 - this allows the trace to be included in the deny message
 (owner: @johndbro1)

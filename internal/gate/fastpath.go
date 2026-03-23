@@ -204,7 +204,7 @@ type FastPathDecision struct {
 	ToolName  string
 	Path      string
 	SessionID string
-	RequestID string
+	TraceID   string
 	Reason    string
 }
 
