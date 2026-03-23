@@ -219,17 +219,6 @@ func buildBackendTransport(cfg BackendConfig) (mcp.Transport, error) {
 			Endpoint:   cfg.URL,
 			HTTPClient: noRedirectHTTPClient(),
 		}, nil
-	case "sse":
-		if cfg.URL == "" {
-			return nil, fmt.Errorf("sse backend requires a URL")
-		}
-		if err := checkBackendURL(cfg.URL, cfg.AllowPrivateAddresses); err != nil {
-			return nil, fmt.Errorf("sse backend URL rejected: %w", err)
-		}
-		return &mcp.SSEClientTransport{
-			Endpoint:   cfg.URL,
-			HTTPClient: noRedirectHTTPClient(),
-		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported backend type %q", cfg.Type)
 	}

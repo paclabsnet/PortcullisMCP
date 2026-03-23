@@ -202,7 +202,6 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		ToolName:     req.ToolName,
 		Decision:     pdpResp.Decision,
 		Reason:       pdpResp.Reason,
-		PDPRequestID: pdpResp.RequestID,
 		Source:       "pdp",
 		Arguments:    req.Arguments,
 	})
@@ -313,7 +312,6 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		ToolName:     req.ToolName,
 		Decision:     pdpResp.Decision,
 		Reason:       pdpResp.Reason,
-		PDPRequestID: pdpResp.RequestID,
 		Source:       "pdp",
 		Arguments:    req.Arguments,
 	})

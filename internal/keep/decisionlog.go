@@ -37,8 +37,7 @@ type DecisionLogEntry struct {
 	ToolName   string         `json:"tool_name"`
 	Decision   string         `json:"decision"` // "allow" | "deny" | "escalate"
 	Reason     string         `json:"reason,omitempty"`
-	PDPRequestID string       `json:"pdp_request_id,omitempty"` // reference ID echoed by the PDP, if any
-	Source     string         `json:"source"`             // "gate-fastpath" | "pdp"
+	Source     string         `json:"source"` // "gate-fastpath" | "pdp"
 	Arguments  map[string]any `json:"arguments,omitempty"`
 	Result     string         `json:"result,omitempty"` // summary of tool result
 }

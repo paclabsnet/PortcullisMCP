@@ -144,6 +144,10 @@ func (n *oidcVerifyingNormalizer) Normalize(ctx context.Context, id shared.UserI
 		return n.strict.Normalize(ctx, id)
 	}
 
+	if id.RawToken == "" {
+		return shared.Principal{}, fmt.Errorf("oidc identity missing raw token")
+	}
+
 	if id.TokenExpiry != 0 && time.Now().Unix() > id.TokenExpiry {
 		return shared.Principal{}, fmt.Errorf("oidc token is expired (exp=%d)", id.TokenExpiry)
 	}
