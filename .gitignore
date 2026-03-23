@@ -134,3 +134,6 @@ tmp/
 # bundles
 bundle.tar.gz
 
+# Internal development tracking files
+completed_work.md
+
