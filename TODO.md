@@ -10,7 +10,6 @@
 - it is absolutely critical not to turn this into Kubernetes, with a huge learning curve and significant infrastructure just to play around with it
 
 
-
 ### Task: Improve Identity
 - Modify Keep to process identity in whatever format (OIDC, Cert, etc), and normalize them to the Principal object that is sent to the PDP for authorization
 - Need a plugin model for Keep's identity normalization process
@@ -70,23 +69,12 @@ decision := custom.decision if {
 An interesting idea if it works. Will need to update the Rego to test.
 **JB**
 
-### Task: Identity at Keep - Demo vs Real
-The default behavior for Keep should be to ignore any identity information sent by Gate except maybe UserId, when the source is `os`.
-When Keep is in demo mode, it will accept forged identity information. It should generate an error message each time it does this unless
-the config says to accept forged identities (dependent on demo mode)
-
-- high priority
 
 ### Task: Input sanitizing at Keep and Guard
 - standard good hygiene
 
 - medium-low priority
 
-### Task: Keep should not follow redirects when calling MCPs via HTTP
-- SSRF protection
-- optionally: block RFC 1918, loopback, and link-local ranges at the HTTP client level for backend calls
-
-- medium priority
 
 ### Task: set enterprise logging configuration to redact
 - all keys should be redacted

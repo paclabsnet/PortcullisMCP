@@ -73,3 +73,22 @@ The flow will be:
       12.3: Escalate, which triggers the escalation workflow from step 3.3 above.
          - This could create a loop where somewhow the user isn't getting the right token created, so he or she can never get the work done. 
            That is a problem for another day since this is user-driven, and not a runaway process endless loop.
+
+
+
+
+
+### Task: Identity at Keep - Demo vs Real
+The default behavior for Keep should be to ignore any identity information sent by Gate except maybe UserId, when the source is `os`.
+When Keep is in demo mode, it will accept forged identity information. It should generate an error message each time it does this unless
+the config says to accept forged identities (dependent on demo mode)
+
+- high priority
+
+
+
+### Task: Keep should not follow redirects when calling MCPs via HTTP
+- SSRF protection
+- optionally: block RFC 1918, loopback, and link-local ranges at the HTTP client level for backend calls
+
+- medium priority

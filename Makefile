@@ -1,4 +1,4 @@
-.PHONY: build install test clean opa-start opa-stop run-mock run-keep help
+.PHONY: build install test clean demo-start demo-stop run-mock run-keep help
 
 # Detect OS for binary extension
 GOOS     := $(shell go env GOOS)
@@ -18,12 +18,12 @@ VERSION     := $(shell git describe --tags --always --dirty 2>/dev/null || echo 
 VERSION_PKG := github.com/paclabsnet/PortcullisMCP/internal/version
 LDFLAGS     := -ldflags "-X $(VERSION_PKG).Version=$(VERSION)"
 
-# Write .env so docker compose picks up the same version automatically
-.env:
-	@echo "VERSION=$(VERSION)" > .env
+# Write demo/.env so docker compose picks up the same version automatically
+demo/.env:
+	@echo "VERSION=$(VERSION)" > demo/.env
 
 # Build all binaries into bin/
-build: .env
+build: demo/.env
 	@echo "Building portcullis-gate..."
 	@go build $(LDFLAGS) -o $(GATE_BIN) ./cmd/portcullis-gate
 	@echo "Building portcullis-keep..."
@@ -50,14 +50,14 @@ test:
 clean:
 	@rm -rf bin/
 
-# Start OPA + backends with docker-compose
-opa-start:
-	@docker-compose up -d
-	@echo "OPA running on http://localhost:8181"
+# Start demo stack (OPA + Keep + Guard + mock backends) via docker compose
+demo-start:
+	@docker-compose -f demo/docker-compose.yml up -d
+	@echo "Demo stack running. Keep: http://localhost:8080  Guard: http://localhost:8444  OPA: http://localhost:8181"
 
-# Stop docker-compose services
-opa-stop:
-	@docker-compose down
+# Stop demo stack
+demo-stop:
+	@docker-compose -f demo/docker-compose.yml down
 
 # Run the mock enterprise API backend (development only)
 run-mock:
@@ -76,15 +76,15 @@ help:
 	@echo "  install    - Build and install portcullis-gate to GOPATH/bin"
 	@echo "  test       - Run all unit tests"
 	@echo "  clean      - Remove build artifacts"
-	@echo "  opa-start  - Start OPA + backends via docker-compose"
-	@echo "  opa-stop   - Stop docker-compose services"
+	@echo "  demo-start - Start demo stack (OPA + Keep + Guard + backends) via docker compose"
+	@echo "  demo-stop  - Stop demo stack"
 	@echo "  run-mock   - Run the mock enterprise API backend (dev only)"
 	@echo "  run-keep   - Run portcullis-keep with minimal config (dev only)"
 	@echo ""
 	@echo "Quick start (development):"
 	@echo "  1. make build        # compile binaries"
 	@echo "  2. make install      # install portcullis-gate to PATH"
-	@echo "  3. make opa-start    # start OPA + demo backends"
+	@echo "  3. make demo-start   # start OPA + demo backends"
 	@echo "  4. make run-keep     # start portcullis-keep"
 	@echo "  5. Configure your MCP client to launch portcullis-gate"
 	@echo "     portcullis-gate is started automatically by the MCP client — do not run it manually"

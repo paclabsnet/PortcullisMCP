@@ -7,8 +7,8 @@ services:
     ports:
       - "8181:8181"
     volumes:
-      - ./policies/rego:/policies
-      - ./docker/opa-config.yaml:/etc/opa/config.yaml:ro
+      - ../policies/rego:/policies
+      - ./opa-config.yaml:/etc/opa/config.yaml:ro
     command:
       - "run"
       - "--server"
@@ -23,7 +23,8 @@ services:
 
   keep:
     build:
-      context: .
+      context: ..
+      dockerfile: demo/Dockerfile
       target: keep
       args:
         VERSION: ${VERSION:-0.1.0-dev}
@@ -31,7 +32,7 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - ./docker/keep-demo.yaml:/etc/portcullis/keep.yaml:ro
+      - ./keep-demo.yaml:/etc/portcullis/keep.yaml:ro
     command: ["-config", "/etc/portcullis/keep.yaml"]
     depends_on:
       - opa
@@ -42,7 +43,8 @@ services:
 
   guard:
     build:
-      context: .
+      context: ..
+      dockerfile: demo/Dockerfile
       target: guard
       args:
         VERSION: ${VERSION:-0.1.0-dev}
@@ -50,7 +52,7 @@ services:
     ports:
       - "8444:8444"
     volumes:
-      - ./docker/guard-demo.yaml:/etc/portcullis/guard.yaml:ro
+      - ./guard-demo.yaml:/etc/portcullis/guard.yaml:ro
     command: ["-config", "/etc/portcullis/guard.yaml"]
     depends_on:
       - keep
@@ -59,7 +61,8 @@ services:
 
   mock-enterprise-api:
     build:
-      context: .
+      context: ..
+      dockerfile: demo/Dockerfile
       target: mock-enterprise-api
     container_name: portcullis-mock-enterprise-api
     networks:
@@ -67,7 +70,8 @@ services:
 
   fetch-mcp:
     build:
-      context: .
+      context: ..
+      dockerfile: demo/Dockerfile
       target: fetch-mcp
     container_name: portcullis-fetch-mcp
     networks:
