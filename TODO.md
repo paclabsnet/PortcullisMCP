@@ -2,12 +2,6 @@
 
 ## Tasks
 
-### Task: Open Source It [DONE]
-- we need to make sure the architecture is designed around the assumption that this is open source.
-- As few opinions as possible. For example:  identity, which PDP to use, how secrets are gathered
-- keep the basic implementation as light as possible, so you don't have to set up a ton of infrastructure to get started
-- move the docker stuff into a subdirectory.  The docker model is useful as a personal sandbox to try it out, not for actual enterprise implementations
-- it is absolutely critical not to turn this into Kubernetes, with a huge learning curve and significant infrastructure just to play around with it
 
 
 ### Task: Improve Identity
