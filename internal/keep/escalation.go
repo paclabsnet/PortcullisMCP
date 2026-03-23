@@ -21,7 +21,6 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
-	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 )
 
 // escalationRequestClaims are the JWT claims Keep embeds in escalation request tokens.
@@ -62,7 +61,7 @@ func NewEscalationSigner(cfg SigningConfig) (*EscalationSigner, error) {
 // Returns the signed JWT string, the JWT ID (jti), and any error.
 // The JTI is stable and must be copied into the issued escalation token by Guard
 // so Gate can correlate the approved token back to the pending escalation.
-func (s *EscalationSigner) Sign(req shared.EnrichedMCPRequest, reason string, scope []map[string]any) (jwtStr string, jti string, err error) {
+func (s *EscalationSigner) Sign(req AuthorizedRequest, reason string, scope []map[string]any) (jwtStr string, jti string, err error) {
 	if s == nil {
 		return "", "", fmt.Errorf("escalation signing not configured")
 	}
@@ -77,8 +76,8 @@ func (s *EscalationSigner) Sign(req shared.EnrichedMCPRequest, reason string, sc
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(now.Add(s.ttl)),
 		},
-		UserID:          req.UserIdentity.UserID,
-		UserDisplayName: req.UserIdentity.DisplayName,
+		UserID:          req.Principal.UserID,
+		UserDisplayName: req.Principal.DisplayName,
 		Server:          req.ServerName,
 		Tool:            req.ToolName,
 		Reason:          reason,

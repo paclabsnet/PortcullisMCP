@@ -34,10 +34,9 @@ import (
 	"github.com/paclabsnet/PortcullisMCP/internal/telemetry"
 )
 
-// PolicyDecisionPoint evaluates an enriched MCP request and returns a decision.
-// Evaluation is performed against a normalized Principal.
+// PolicyDecisionPoint evaluates an authorized MCP request and returns a decision.
 type PolicyDecisionPoint interface {
-	Evaluate(ctx context.Context, req shared.EnrichedMCPRequest, p shared.Principal) (shared.PDPResponse, error)
+	Evaluate(ctx context.Context, req AuthorizedRequest) (shared.PDPResponse, error)
 }
 
 // noopPDP is a PolicyDecisionPoint that allows every request unconditionally.
@@ -52,7 +51,7 @@ func NewNoopPDPClient() PolicyDecisionPoint {
 	return &noopPDP{}
 }
 
-func (n *noopPDP) Evaluate(_ context.Context, _ shared.EnrichedMCPRequest, _ shared.Principal) (shared.PDPResponse, error) {
+func (n *noopPDP) Evaluate(_ context.Context, _ AuthorizedRequest) (shared.PDPResponse, error) {
 	return shared.PDPResponse{
 		Decision: "allow",
 		Reason:   "noop pdp: policy enforcement disabled",
@@ -198,8 +197,8 @@ type opaResponse struct {
 	} `json:"result"`
 }
 
-// Evaluate sends the enriched request to OPA and returns the PDP decision.
-func (c *opaClient) Evaluate(ctx context.Context, req shared.EnrichedMCPRequest, p shared.Principal) (shared.PDPResponse, error) {
+// Evaluate sends the authorized request to OPA and returns the PDP decision.
+func (c *opaClient) Evaluate(ctx context.Context, req AuthorizedRequest) (shared.PDPResponse, error) {
 	ctx, span := otel.Tracer("portcullis-keep").Start(ctx, "keep.pdp.evaluate")
 	defer span.End()
 	span.SetAttributes(
@@ -221,15 +220,15 @@ func (c *opaClient) Evaluate(ctx context.Context, req shared.EnrichedMCPRequest,
 					Arguments: expandURLArgs(req.Arguments),
 				},
 				Principal: opaPrincipal{
-					UserID:      p.UserID,
-					Email:       p.Email,
-					DisplayName: p.DisplayName,
-					Groups:      p.Groups,
-					Roles:       p.Roles,
-					Department:  p.Department,
-					AuthMethod:  p.AuthMethod,
-					TokenExpiry: p.TokenExpiry,
-					SourceType:  p.SourceType,
+					UserID:      req.Principal.UserID,
+					Email:       req.Principal.Email,
+					DisplayName: req.Principal.DisplayName,
+					Groups:      req.Principal.Groups,
+					Roles:       req.Principal.Roles,
+					Department:  req.Principal.Department,
+					AuthMethod:  req.Principal.AuthMethod,
+					TokenExpiry: req.Principal.TokenExpiry,
+					SourceType:  req.Principal.SourceType,
 				},
 				Context: opaContext{
 					EscalationTokens: req.EscalationTokens,

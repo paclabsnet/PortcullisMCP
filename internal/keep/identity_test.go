@@ -621,7 +621,7 @@ func TestNormalizeIdentity_HandleCallIntegration(t *testing.T) {
 	r := httptest.NewRequest("POST", "/call", bytes.NewReader(body))
 	srv.handleCall(w, r)
 
-	captured := pdp.lastPrincipal
+	captured := pdp.lastReq.Principal
 	if len(captured.Groups) != 0 {
 		t.Errorf("PDP received groups %v — strict normalizer should have stripped them", captured.Groups)
 	}
@@ -632,13 +632,11 @@ func TestNormalizeIdentity_HandleCallIntegration(t *testing.T) {
 
 // capturingPDP records the last request it evaluated, for inspection in tests.
 type capturingPDP struct {
-	lastReq       shared.EnrichedMCPRequest
-	lastPrincipal shared.Principal
+	lastReq AuthorizedRequest
 }
 
-func (c *capturingPDP) Evaluate(_ context.Context, req shared.EnrichedMCPRequest, p shared.Principal) (shared.PDPResponse, error) {
+func (c *capturingPDP) Evaluate(_ context.Context, req AuthorizedRequest) (shared.PDPResponse, error) {
 	c.lastReq = req
-	c.lastPrincipal = p
 	return shared.PDPResponse{Decision: "allow"}, nil
 }
 

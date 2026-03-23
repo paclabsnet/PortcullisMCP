@@ -33,7 +33,7 @@ type mockPDP struct {
 	err      error
 }
 
-func (m *mockPDP) Evaluate(ctx context.Context, req shared.EnrichedMCPRequest, p shared.Principal) (shared.PDPResponse, error) {
+func (m *mockPDP) Evaluate(ctx context.Context, req AuthorizedRequest) (shared.PDPResponse, error) {
 	if m.err != nil {
 		return shared.PDPResponse{}, m.err
 	}
@@ -75,7 +75,7 @@ type mockWorkflow struct {
 	err       error
 }
 
-func (m *mockWorkflow) Submit(ctx context.Context, req shared.EnrichedMCPRequest, pdpReason string) (string, error) {
+func (m *mockWorkflow) Submit(ctx context.Context, req AuthorizedRequest, pdpReason string) (string, error) {
 	if m.err != nil {
 		return "", m.err
 	}
