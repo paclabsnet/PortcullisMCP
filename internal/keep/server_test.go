@@ -33,7 +33,7 @@ type mockPDP struct {
 	err      error
 }
 
-func (m *mockPDP) Evaluate(ctx context.Context, req shared.EnrichedMCPRequest) (shared.PDPResponse, error) {
+func (m *mockPDP) Evaluate(ctx context.Context, req shared.EnrichedMCPRequest, p shared.Principal) (shared.PDPResponse, error) {
 	if m.err != nil {
 		return shared.PDPResponse{}, m.err
 	}
@@ -101,6 +101,7 @@ func TestServer_HandleCall_Allow(t *testing.T) {
 		router:      router,
 		workflow:    &mockWorkflow{},
 		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
+		normalizer:  &passthroughNormalizer{silenced: true},
 	}
 
 	reqBody := shared.EnrichedMCPRequest{
@@ -110,7 +111,7 @@ func TestServer_HandleCall_Allow(t *testing.T) {
 		UserIdentity: shared.UserIdentity{
 			UserID: "user@example.com",
 		},
-		TraceID: "req-123",
+		TraceID:   "req-123",
 		SessionID: "session-456",
 	}
 
@@ -145,12 +146,13 @@ func TestServer_HandleCall_Deny(t *testing.T) {
 		router:      &mockRouter{},
 		workflow:    &mockWorkflow{},
 		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
+		normalizer:  &passthroughNormalizer{silenced: true},
 	}
 
 	reqBody := shared.EnrichedMCPRequest{
 		ServerName: "test-server",
 		ToolName:   "test-tool",
-		TraceID:  "req-123",
+		TraceID:    "req-123",
 	}
 
 	body, _ := json.Marshal(reqBody)
@@ -197,12 +199,13 @@ func TestServer_HandleCall_Escalate(t *testing.T) {
 		router:      &mockRouter{},
 		workflow:    workflow,
 		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
+		normalizer:  &passthroughNormalizer{silenced: true},
 	}
 
 	reqBody := shared.EnrichedMCPRequest{
 		ServerName: "test-server",
 		ToolName:   "test-tool",
-		TraceID:  "req-123",
+		TraceID:    "req-123",
 	}
 
 	body, _ := json.Marshal(reqBody)
@@ -240,12 +243,13 @@ func TestServer_HandleCall_PDPError(t *testing.T) {
 		router:      &mockRouter{},
 		workflow:    &mockWorkflow{},
 		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
+		normalizer:  &passthroughNormalizer{silenced: true},
 	}
 
 	reqBody := shared.EnrichedMCPRequest{
 		ServerName: "test-server",
 		ToolName:   "test-tool",
-		TraceID:  "req-123",
+		TraceID:    "req-123",
 	}
 
 	body, _ := json.Marshal(reqBody)
@@ -265,6 +269,7 @@ func TestServer_HandleCall_InvalidJSON(t *testing.T) {
 		router:      &mockRouter{},
 		workflow:    &mockWorkflow{},
 		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
+		normalizer:  &passthroughNormalizer{silenced: true},
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/call", bytes.NewReader([]byte("invalid json")))
@@ -286,7 +291,8 @@ func TestServer_HandleListTools(t *testing.T) {
 	}
 
 	srv := &Server{
-		router: router,
+		router:     router,
+		normalizer: &passthroughNormalizer{silenced: true},
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/tools", nil)
@@ -318,12 +324,13 @@ func TestServer_HandleListTools(t *testing.T) {
 func TestServer_HandleLog(t *testing.T) {
 	srv := &Server{
 		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
+		normalizer:  &passthroughNormalizer{silenced: true},
 	}
 
 	entries := []DecisionLogEntry{
 		{
 			SessionID:  "session-123",
-			TraceID:  "req-123",
+			TraceID:    "req-123",
 			UserID:     "user@example.com",
 			ServerName: "test-server",
 			ToolName:   "test-tool",
@@ -333,7 +340,7 @@ func TestServer_HandleLog(t *testing.T) {
 		},
 		{
 			SessionID:  "session-456",
-			TraceID:  "req-456",
+			TraceID:    "req-456",
 			UserID:     "user2@example.com",
 			ServerName: "test-server",
 			ToolName:   "test-tool2",
@@ -375,6 +382,7 @@ func TestServer_HandleLog(t *testing.T) {
 func TestServer_HandleLog_InvalidJSON(t *testing.T) {
 	srv := &Server{
 		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
+		normalizer:  &passthroughNormalizer{silenced: true},
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/log", bytes.NewReader([]byte("invalid json")))

@@ -35,8 +35,9 @@ import (
 )
 
 // PolicyDecisionPoint evaluates an enriched MCP request and returns a decision.
+// Evaluation is performed against a normalized Principal.
 type PolicyDecisionPoint interface {
-	Evaluate(ctx context.Context, req shared.EnrichedMCPRequest) (shared.PDPResponse, error)
+	Evaluate(ctx context.Context, req shared.EnrichedMCPRequest, p shared.Principal) (shared.PDPResponse, error)
 }
 
 // noopPDP is a PolicyDecisionPoint that allows every request unconditionally.
@@ -51,7 +52,7 @@ func NewNoopPDPClient() PolicyDecisionPoint {
 	return &noopPDP{}
 }
 
-func (n *noopPDP) Evaluate(_ context.Context, _ shared.EnrichedMCPRequest) (shared.PDPResponse, error) {
+func (n *noopPDP) Evaluate(_ context.Context, _ shared.EnrichedMCPRequest, _ shared.Principal) (shared.PDPResponse, error) {
 	return shared.PDPResponse{
 		Decision: "allow",
 		Reason:   "noop pdp: policy enforcement disabled",
@@ -182,7 +183,6 @@ type opaPrincipal struct {
 	AuthMethod  []string `json:"auth_method,omitempty"`
 	TokenExpiry int64    `json:"token_expiry,omitempty"`
 	SourceType  string   `json:"source_type,omitempty"`
-	RawToken    string   `json:"raw_token,omitempty"`
 }
 
 type opaContext struct {
@@ -200,7 +200,7 @@ type opaResponse struct {
 }
 
 // Evaluate sends the enriched request to OPA and returns the PDP decision.
-func (c *opaClient) Evaluate(ctx context.Context, req shared.EnrichedMCPRequest) (shared.PDPResponse, error) {
+func (c *opaClient) Evaluate(ctx context.Context, req shared.EnrichedMCPRequest, p shared.Principal) (shared.PDPResponse, error) {
 	ctx, span := otel.Tracer("portcullis-keep").Start(ctx, "keep.pdp.evaluate")
 	defer span.End()
 	span.SetAttributes(
@@ -222,16 +222,15 @@ func (c *opaClient) Evaluate(ctx context.Context, req shared.EnrichedMCPRequest)
 					Arguments: expandURLArgs(req.Arguments),
 				},
 				Principal: opaPrincipal{
-					UserID:      req.UserIdentity.UserID,
-					Email:       req.UserIdentity.Email,
-					DisplayName: req.UserIdentity.DisplayName,
-					Groups:      req.UserIdentity.Groups,
-					Roles:       req.UserIdentity.Roles,
-					Department:  req.UserIdentity.Department,
-					AuthMethod:  req.UserIdentity.AuthMethod,
-					TokenExpiry: req.UserIdentity.TokenExpiry,
-					SourceType:  req.UserIdentity.SourceType,
-					RawToken:    req.UserIdentity.RawToken,
+					UserID:      p.UserID,
+					Email:       p.Email,
+					DisplayName: p.DisplayName,
+					Groups:      p.Groups,
+					Roles:       p.Roles,
+					Department:  p.Department,
+					AuthMethod:  p.AuthMethod,
+					TokenExpiry: p.TokenExpiry,
+					SourceType:  p.SourceType,
 				},
 				Context: opaContext{
 					EscalationTokens: req.EscalationTokens,

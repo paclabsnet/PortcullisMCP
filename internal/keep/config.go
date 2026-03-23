@@ -36,23 +36,32 @@ type Config struct {
 	Telemetry                telemetrycfg.Config      `yaml:"telemetry"`
 }
 
-// IdentityConfig controls how Keep handles the UserIdentity claims sent by Gate.
+// IdentityConfig controls how Keep normalizes UserIdentity claims received from Gate.
 type IdentityConfig struct {
-	// Mode controls how Keep treats incoming identity claims.
-	//   "strict" (default) — OS-sourced identities are stripped down to user_id
-	//                        only; groups, roles, and other directory claims are
-	//                        discarded because Gate cannot verify them locally.
-	//   "demo"             — All identity fields are accepted as-is. Intended for
-	//                        local evaluation and sandbox use only. Keep logs a
-	//                        warning on every request unless AcceptForgedIdentities
-	//                        is also true.
-	Mode string `yaml:"mode"` // "strict" | "demo"
+	// Normalizer selects the identity normalization strategy.
+	//   "strict" (default) — OS-sourced identities are stripped to user_id only.
+	//                        OIDC-sourced identities pass through unchanged.
+	//   "passthrough"      — All identity fields are accepted as-is. Local
+	//                        evaluation and sandbox deployments only.
+	//   "oidc-verify"      — Rejects expired OIDC tokens and tokens not issued
+	//                        by the configured issuer. OS identities are handled
+	//                        with strict stripping.
+	Normalizer string `yaml:"normalizer"` // "strict" | "passthrough" | "oidc-verify"
 
-	// AcceptForgedIdentities suppresses the per-request warning that is emitted
-	// in demo mode. Has no effect in strict mode. Set to true only when you
-	// intentionally want to test with fabricated identity data and do not want
-	// the log noise.
+	// AcceptForgedIdentities suppresses the per-request warning emitted in
+	// passthrough mode. Has no effect on other normalizers.
 	AcceptForgedIdentities bool `yaml:"accept_forged_identities"`
+
+	// OIDCVerify holds configuration for the oidc-verify normalizer.
+	OIDCVerify OIDCVerifyConfig `yaml:"oidc_verify"`
+}
+
+// OIDCVerifyConfig holds settings for the oidc-verify identity normalizer.
+type OIDCVerifyConfig struct {
+	// Issuer is the expected iss claim value, e.g.
+	// "https://login.microsoftonline.com/<tenant-id>/v2.0". Required when
+	// normalizer is "oidc-verify".
+	Issuer string `yaml:"issuer"`
 }
 
 // AdminConfig holds credentials for the Keep admin API.

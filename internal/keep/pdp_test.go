@@ -127,10 +127,16 @@ func TestOPAClient_Evaluate(t *testing.T) {
 					SourceType:  "oidc",
 				},
 				SessionID: "session-123",
-				TraceID: "request-456",
+				TraceID:   "request-456",
+			}
+			p := shared.Principal{
+				UserID:      req.UserIdentity.UserID,
+				DisplayName: req.UserIdentity.DisplayName,
+				Groups:      req.UserIdentity.Groups,
+				SourceType:  req.UserIdentity.SourceType,
 			}
 
-			resp, err := client.Evaluate(context.Background(), req)
+			resp, err := client.Evaluate(context.Background(), req, p)
 
 			if tt.expectError {
 				if err == nil {
@@ -163,7 +169,7 @@ func TestNoopPDP_AlwaysAllows(t *testing.T) {
 			UserIdentity: shared.UserIdentity{UserID: "attacker", Groups: []string{"nobody"}}},
 	}
 	for _, req := range requests {
-		resp, err := pdp.Evaluate(context.Background(), req)
+		resp, err := pdp.Evaluate(context.Background(), req, shared.Principal{UserID: req.UserIdentity.UserID})
 		if err != nil {
 			t.Errorf("req %s: unexpected error: %v", req.TraceID, err)
 		}
@@ -226,8 +232,8 @@ func TestOPAClient_Evaluate_PropagatesTraceContext(t *testing.T) {
 	_, err := client.Evaluate(ctx, shared.EnrichedMCPRequest{
 		ServerName: "test-server",
 		ToolName:   "test-tool",
-		TraceID:  "req-trace-test",
-	})
+		TraceID:    "req-trace-test",
+	}, shared.Principal{})
 	if err != nil {
 		t.Fatalf("Evaluate() error: %v", err)
 	}
@@ -250,13 +256,13 @@ func TestOPAClient_Evaluate_ContextCancellation(t *testing.T) {
 	req := shared.EnrichedMCPRequest{
 		ServerName: "test-server",
 		ToolName:   "test-tool",
-		TraceID:  "request-123",
+		TraceID:    "request-123",
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 
-	_, err := client.Evaluate(ctx, req)
+	_, err := client.Evaluate(ctx, req, shared.Principal{})
 	if err == nil {
 		t.Fatal("expected error from cancelled context, got nil")
 	}

@@ -54,6 +54,7 @@ type Server struct {
 	workflow    WorkflowHandler
 	signer      *EscalationSigner
 	decisionLog *DecisionLogger
+	normalizer  IdentityNormalizer
 }
 
 // NewServer creates a Keep server. configPath is retained so the admin reload
@@ -81,6 +82,11 @@ func NewServer(cfg Config, configPath string) (*Server, error) {
 		return nil, fmt.Errorf("create escalation signer: %w", err)
 	}
 
+	normalizer, err := buildIdentityNormalizer(cfg.Identity)
+	if err != nil {
+		return nil, fmt.Errorf("build identity normalizer: %w", err)
+	}
+
 	return &Server{
 		cfg:         cfg,
 		configPath:  configPath,
@@ -89,6 +95,7 @@ func NewServer(cfg Config, configPath string) (*Server, error) {
 		workflow:    wf,
 		signer:      signer,
 		decisionLog: NewDecisionLogger(cfg.DecisionLog),
+		normalizer:  normalizer,
 	}, nil
 }
 
@@ -158,12 +165,18 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		attribute.String("tool.name", req.ToolName),
 		attribute.String("server.name", req.ServerName),
 		attribute.String("user.id", req.UserIdentity.UserID),
-		attribute.String("request.id", req.TraceID),
+		attribute.String("trace.id", req.TraceID),
 	)
 
-	req.UserIdentity = normalizeIdentity(req.UserIdentity, s.cfg.Identity)
+	principal, normErr := s.normalizer.Normalize(ctx, req.UserIdentity)
+	if normErr != nil {
+		span.SetStatus(codes.Error, normErr.Error())
+		slog.ErrorContext(ctx, "identity normalization failed", "error", normErr, "trace_id", traceID)
+		writeError(w, http.StatusServiceUnavailable, fmt.Sprintf("identity normalization failed: %s", normErr))
+		return
+	}
 
-	pdpResp, err := s.pdp.Evaluate(ctx, req)
+	pdpResp, err := s.pdp.Evaluate(ctx, req, principal)
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
 		slog.ErrorContext(ctx, "pdp evaluate failed", "error", err, "trace_id", traceID)
@@ -175,7 +188,7 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 	slog.InfoContext(ctx, "pdp decision",
 		"decision", pdpResp.Decision,
 		"tool", req.ToolName,
-		"user", req.UserIdentity.UserID,
+		"user", principal.UserID,
 		"trace_id", req.TraceID,
 		"trace_id", traceID,
 	)
@@ -184,7 +197,7 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 	s.decisionLog.Log(&DecisionLogEntry{
 		SessionID:    req.SessionID,
 		TraceID:      req.TraceID,
-		UserID:       req.UserIdentity.UserID,
+		UserID:       principal.UserID,
 		ServerName:   req.ServerName,
 		ToolName:     req.ToolName,
 		Decision:     pdpResp.Decision,
@@ -264,12 +277,18 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		attribute.String("tool.name", req.ToolName),
 		attribute.String("server.name", req.ServerName),
 		attribute.String("user.id", req.UserIdentity.UserID),
-		attribute.String("request.id", req.TraceID),
+		attribute.String("trace.id", req.TraceID),
 	)
 
-	req.UserIdentity = normalizeIdentity(req.UserIdentity, s.cfg.Identity)
+	principal, normErr := s.normalizer.Normalize(ctx, req.UserIdentity)
+	if normErr != nil {
+		span.SetStatus(codes.Error, normErr.Error())
+		slog.ErrorContext(ctx, "identity normalization failed", "error", normErr, "trace_id", traceID)
+		writeError(w, http.StatusServiceUnavailable, fmt.Sprintf("identity normalization failed: %s", normErr))
+		return
+	}
 
-	pdpResp, err := s.pdp.Evaluate(ctx, req)
+	pdpResp, err := s.pdp.Evaluate(ctx, req, principal)
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
 		slog.ErrorContext(ctx, "pdp evaluate failed", "error", err, "trace_id", traceID)
@@ -281,7 +300,7 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	slog.InfoContext(ctx, "pdp decision (authorize)",
 		"decision", pdpResp.Decision,
 		"tool", req.ToolName,
-		"user", req.UserIdentity.UserID,
+		"user", principal.UserID,
 		"trace_id", req.TraceID,
 		"trace_id", traceID,
 	)
@@ -289,7 +308,7 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	s.decisionLog.Log(&DecisionLogEntry{
 		SessionID:    req.SessionID,
 		TraceID:      req.TraceID,
-		UserID:       req.UserIdentity.UserID,
+		UserID:       principal.UserID,
 		ServerName:   req.ServerName,
 		ToolName:     req.ToolName,
 		Decision:     pdpResp.Decision,

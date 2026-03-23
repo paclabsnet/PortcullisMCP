@@ -17,9 +17,11 @@ package keep
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
@@ -53,44 +55,37 @@ func osIdentity() shared.UserIdentity {
 	}
 }
 
-func TestNormalizeIdentity_OIDCPassesThrough(t *testing.T) {
-	id := oidcIdentity()
-	cfg := IdentityConfig{Mode: "strict"}
-
-	got := normalizeIdentity(id, cfg)
-
-	// OIDC identity must be returned unchanged in both modes.
-	if got.UserID != id.UserID {
-		t.Errorf("UserID = %q, want %q", got.UserID, id.UserID)
-	}
-	if len(got.Groups) != len(id.Groups) {
-		t.Errorf("Groups = %v, want %v", got.Groups, id.Groups)
-	}
-	if got.RawToken != id.RawToken {
-		t.Errorf("RawToken stripped for OIDC identity — should be preserved")
-	}
-	if got.Department != id.Department {
-		t.Errorf("Department = %q, want %q", got.Department, id.Department)
-	}
+// makeJWT builds a minimal unsigned JWT with the given claims for testing.
+func makeJWT(claims map[string]any) string {
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","typ":"JWT"}`))
+	payload, _ := json.Marshal(claims)
+	body := base64.RawURLEncoding.EncodeToString(payload)
+	return header + "." + body + ".fakesig"
 }
 
-func TestNormalizeIdentity_OIDCPassesThroughInDemoMode(t *testing.T) {
+// --- strictNormalizer tests ---
+
+func TestStrictNormalizer_OIDCPassesThrough(t *testing.T) {
+	n := &strictNormalizer{}
 	id := oidcIdentity()
-	cfg := IdentityConfig{Mode: "demo", AcceptForgedIdentities: true}
 
-	got := normalizeIdentity(id, cfg)
-
+	got, err := n.Normalize(context.Background(), id)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if got.UserID != id.UserID || len(got.Groups) != len(id.Groups) {
-		t.Errorf("OIDC identity should pass through in demo mode unchanged")
+		t.Errorf("OIDC identity should pass through unchanged; got %+v", got)
 	}
 }
 
-func TestNormalizeIdentity_StrictMode_OSStripsDirectoryClaims(t *testing.T) {
+func TestStrictNormalizer_OSStripsDirectoryClaims(t *testing.T) {
+	n := &strictNormalizer{}
 	id := osIdentity()
-	cfg := IdentityConfig{Mode: "strict"}
 
-	got := normalizeIdentity(id, cfg)
-
+	got, err := n.Normalize(context.Background(), id)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if got.UserID != id.UserID {
 		t.Errorf("UserID = %q, want %q", got.UserID, id.UserID)
 	}
@@ -98,80 +93,150 @@ func TestNormalizeIdentity_StrictMode_OSStripsDirectoryClaims(t *testing.T) {
 		t.Errorf("SourceType = %q, want os", got.SourceType)
 	}
 	if len(got.Groups) != 0 {
-		t.Errorf("Groups should be empty in strict mode, got %v", got.Groups)
+		t.Errorf("Groups should be empty, got %v", got.Groups)
 	}
 	if len(got.Roles) != 0 {
-		t.Errorf("Roles should be empty in strict mode, got %v", got.Roles)
+		t.Errorf("Roles should be empty, got %v", got.Roles)
 	}
 	if got.Department != "" {
-		t.Errorf("Department should be empty in strict mode, got %q", got.Department)
+		t.Errorf("Department should be empty, got %q", got.Department)
 	}
 	if len(got.AuthMethod) != 0 {
-		t.Errorf("AuthMethod should be empty in strict mode, got %v", got.AuthMethod)
-	}
-	if got.RawToken != "" {
-		t.Errorf("RawToken should be empty in strict mode, got %q", got.RawToken)
+		t.Errorf("AuthMethod should be empty, got %v", got.AuthMethod)
 	}
 	if got.DisplayName != "" {
-		t.Errorf("DisplayName should be empty in strict mode, got %q", got.DisplayName)
+		t.Errorf("DisplayName should be empty, got %q", got.DisplayName)
 	}
 }
 
-func TestNormalizeIdentity_DefaultModeIsStrict(t *testing.T) {
-	// Mode: "" should behave identically to Mode: "strict".
-	id := osIdentity()
-	withEmpty := normalizeIdentity(id, IdentityConfig{Mode: ""})
-	withStrict := normalizeIdentity(id, IdentityConfig{Mode: "strict"})
+// --- passthroughNormalizer tests ---
 
-	if withEmpty.UserID != withStrict.UserID || len(withEmpty.Groups) != len(withStrict.Groups) {
-		t.Errorf("empty mode should default to strict behaviour")
-	}
-	if len(withEmpty.Groups) != 0 {
-		t.Errorf("directory claims should be stripped when mode is empty")
+func TestPassthroughNormalizer_AcceptsAll(t *testing.T) {
+	n := &passthroughNormalizer{silenced: true}
+
+	for _, id := range []shared.UserIdentity{oidcIdentity(), osIdentity()} {
+		got, err := n.Normalize(context.Background(), id)
+		if err != nil {
+			t.Fatalf("unexpected error for %s: %v", id.SourceType, err)
+		}
+		if got.UserID != id.UserID || len(got.Groups) != len(id.Groups) {
+			t.Errorf("passthrough should not modify identity; got %+v", got)
+		}
 	}
 }
 
-func TestNormalizeIdentity_DemoMode_OSPassesThrough(t *testing.T) {
-	id := osIdentity()
-	cfg := IdentityConfig{Mode: "demo", AcceptForgedIdentities: true}
+// --- oidcVerifyingNormalizer tests ---
 
-	got := normalizeIdentity(id, cfg)
+func TestOIDCVerifyingNormalizer_ValidToken(t *testing.T) {
+	exp := time.Now().Add(time.Hour).Unix()
+	raw := makeJWT(map[string]any{"iss": "https://idp.example.com", "sub": "alice", "exp": exp})
 
+	n := &oidcVerifyingNormalizer{issuer: "https://idp.example.com", strict: &strictNormalizer{}}
+	id := oidcIdentity()
+	id.RawToken = raw
+	id.TokenExpiry = exp
+
+	got, err := n.Normalize(context.Background(), id)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if got.UserID != id.UserID {
 		t.Errorf("UserID = %q, want %q", got.UserID, id.UserID)
 	}
-	if len(got.Groups) != len(id.Groups) {
-		t.Errorf("Groups = %v, want %v in demo mode", got.Groups, id.Groups)
-	}
-	if got.RawToken != id.RawToken {
-		t.Errorf("RawToken stripped in demo mode — should be preserved")
+}
+
+func TestOIDCVerifyingNormalizer_ExpiredToken(t *testing.T) {
+	n := &oidcVerifyingNormalizer{issuer: "https://idp.example.com", strict: &strictNormalizer{}}
+	id := oidcIdentity()
+	id.TokenExpiry = time.Now().Add(-time.Minute).Unix() // expired
+
+	_, err := n.Normalize(context.Background(), id)
+	if err == nil {
+		t.Fatal("expected error for expired token, got nil")
 	}
 }
 
-func TestNormalizeIdentity_UnknownModeDefaultsToStrict(t *testing.T) {
-	id := osIdentity()
-	cfg := IdentityConfig{Mode: "unknown-value"}
+func TestOIDCVerifyingNormalizer_WrongIssuer(t *testing.T) {
+	raw := makeJWT(map[string]any{"iss": "https://attacker.example.com", "sub": "alice"})
 
-	got := normalizeIdentity(id, cfg)
+	n := &oidcVerifyingNormalizer{issuer: "https://idp.example.com", strict: &strictNormalizer{}}
+	id := oidcIdentity()
+	id.RawToken = raw
 
-	if len(got.Groups) != 0 {
-		t.Errorf("unknown mode should default to strict, but groups were not stripped: %v", got.Groups)
+	_, err := n.Normalize(context.Background(), id)
+	if err == nil {
+		t.Fatal("expected error for wrong issuer, got nil")
 	}
-	if got.UserID != id.UserID {
-		t.Errorf("UserID should be preserved even in unknown mode fallback")
+}
+
+func TestOIDCVerifyingNormalizer_OSAppliesStrict(t *testing.T) {
+	n := &oidcVerifyingNormalizer{issuer: "https://idp.example.com", strict: &strictNormalizer{}}
+	id := osIdentity()
+
+	got, err := n.Normalize(context.Background(), id)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got.Groups) != 0 {
+		t.Errorf("OS identity groups should be stripped by oidc-verify normalizer, got %v", got.Groups)
+	}
+}
+
+// --- buildIdentityNormalizer factory tests ---
+
+func TestBuildIdentityNormalizer_DefaultIsStrict(t *testing.T) {
+	n, err := buildIdentityNormalizer(IdentityConfig{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := n.(*strictNormalizer); !ok {
+		t.Errorf("expected *strictNormalizer, got %T", n)
+	}
+}
+
+func TestBuildIdentityNormalizer_Passthrough(t *testing.T) {
+	n, err := buildIdentityNormalizer(IdentityConfig{Normalizer: "passthrough"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := n.(*passthroughNormalizer); !ok {
+		t.Errorf("expected *passthroughNormalizer, got %T", n)
+	}
+}
+
+func TestBuildIdentityNormalizer_OIDCVerify(t *testing.T) {
+	n, err := buildIdentityNormalizer(IdentityConfig{
+		Normalizer: "oidc-verify",
+		OIDCVerify: OIDCVerifyConfig{Issuer: "https://idp.example.com"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := n.(*oidcVerifyingNormalizer); !ok {
+		t.Errorf("expected *oidcVerifyingNormalizer, got %T", n)
+	}
+}
+
+func TestBuildIdentityNormalizer_OIDCVerifyMissingIssuer(t *testing.T) {
+	_, err := buildIdentityNormalizer(IdentityConfig{Normalizer: "oidc-verify"})
+	if err == nil {
+		t.Fatal("expected error when issuer is missing, got nil")
+	}
+}
+
+func TestBuildIdentityNormalizer_UnknownNormalizer(t *testing.T) {
+	_, err := buildIdentityNormalizer(IdentityConfig{Normalizer: "bogus"})
+	if err == nil {
+		t.Fatal("expected error for unknown normalizer, got nil")
 	}
 }
 
 // TestNormalizeIdentity_HandleCallIntegration verifies that identity
-// normalisation is applied by handleCall before the PDP sees the request.
+// normalization is applied by handleCall before the PDP sees the request.
 func TestNormalizeIdentity_HandleCallIntegration(t *testing.T) {
-	var capturedReq shared.EnrichedMCPRequest
-
 	pdp := &capturingPDP{}
 	srv := &Server{
-		cfg: Config{
-			Identity: IdentityConfig{Mode: "strict"},
-		},
+		normalizer:  &strictNormalizer{},
 		pdp:         pdp,
 		router:      &mockRouter{callToolResult: &mcp.CallToolResult{}},
 		workflow:    &mockWorkflow{requestID: "wf-1"},
@@ -194,21 +259,38 @@ func TestNormalizeIdentity_HandleCallIntegration(t *testing.T) {
 	r := httptest.NewRequest("POST", "/call", bytes.NewReader(body))
 	srv.handleCall(w, r)
 
-	capturedReq = pdp.lastReq
-	if len(capturedReq.UserIdentity.Groups) != 0 {
-		t.Errorf("PDP received groups %v — strict mode should have stripped them", capturedReq.UserIdentity.Groups)
+	captured := pdp.lastPrincipal
+	if len(captured.Groups) != 0 {
+		t.Errorf("PDP received groups %v — strict normalizer should have stripped them", captured.Groups)
 	}
-	if capturedReq.UserIdentity.UserID != "alice" {
-		t.Errorf("PDP received UserID %q, want alice", capturedReq.UserIdentity.UserID)
+	if captured.UserID != "alice" {
+		t.Errorf("PDP received UserID %q, want alice", captured.UserID)
 	}
 }
 
 // capturingPDP records the last request it evaluated, for inspection in tests.
 type capturingPDP struct {
-	lastReq shared.EnrichedMCPRequest
+	lastReq       shared.EnrichedMCPRequest
+	lastPrincipal shared.Principal
 }
 
-func (c *capturingPDP) Evaluate(_ context.Context, req shared.EnrichedMCPRequest) (shared.PDPResponse, error) {
+func (c *capturingPDP) Evaluate(_ context.Context, req shared.EnrichedMCPRequest, p shared.Principal) (shared.PDPResponse, error) {
 	c.lastReq = req
+	c.lastPrincipal = p
 	return shared.PDPResponse{Decision: "allow"}, nil
+}
+
+func TestRegisterNormalizer(t *testing.T) {
+	name := "custom-test"
+	RegisterNormalizer(name, func(cfg IdentityConfig) (IdentityNormalizer, error) {
+		return &strictNormalizer{}, nil
+	})
+
+	n, err := buildIdentityNormalizer(IdentityConfig{Normalizer: name})
+	if err != nil {
+		t.Fatalf("failed to build custom normalizer: %v", err)
+	}
+	if _, ok := n.(*strictNormalizer); !ok {
+		t.Errorf("expected *strictNormalizer, got %T", n)
+	}
 }
