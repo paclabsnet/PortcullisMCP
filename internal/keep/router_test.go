@@ -2,6 +2,9 @@ package keep
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -118,5 +121,89 @@ func TestRouter_BuildBackendTransport_HTTPMissingURL(t *testing.T) {
 	expectedMsg := "requires a URL"
 	if err.Error()[len(err.Error())-len(expectedMsg):] != expectedMsg {
 		t.Errorf("error message = %q, want suffix %q", err.Error(), expectedMsg)
+	}
+}
+
+// --- checkBackendURL tests ---
+
+func TestCheckBackendURL_ValidPublicURL(t *testing.T) {
+	if err := checkBackendURL("https://mcp.example.com/mcp", false); err != nil {
+		t.Errorf("valid public URL rejected: %v", err)
+	}
+}
+
+func TestCheckBackendURL_InvalidScheme(t *testing.T) {
+	for _, rawURL := range []string{
+		"ftp://mcp.example.com/mcp",
+		"file:///etc/passwd",
+		"ws://mcp.example.com/mcp",
+	} {
+		if err := checkBackendURL(rawURL, false); err == nil {
+			t.Errorf("expected error for URL %q, got nil", rawURL)
+		}
+	}
+}
+
+func TestCheckBackendURL_PrivateIPRejected(t *testing.T) {
+	// Use IP literals to avoid DNS at test time.
+	privateURLs := []string{
+		"http://10.0.0.1/mcp",
+		"http://172.16.5.10/mcp",
+		"http://192.168.1.100/mcp",
+		"http://127.0.0.1/mcp",
+	}
+	for _, rawURL := range privateURLs {
+		err := checkBackendURL(rawURL, false)
+		if err == nil {
+			t.Errorf("expected error for private URL %q, got nil", rawURL)
+		} else if !strings.Contains(err.Error(), "private") && !strings.Contains(err.Error(), "loopback") {
+			t.Errorf("error for %q should mention private/loopback, got: %v", rawURL, err)
+		}
+	}
+}
+
+func TestCheckBackendURL_PrivateIPAllowedWithFlag(t *testing.T) {
+	privateURLs := []string{
+		"http://10.0.0.1/mcp",
+		"http://192.168.1.100/mcp",
+		"http://127.0.0.1/mcp",
+	}
+	for _, rawURL := range privateURLs {
+		if err := checkBackendURL(rawURL, true); err != nil {
+			t.Errorf("private URL %q should be allowed when allow_private_addresses=true, got: %v", rawURL, err)
+		}
+	}
+}
+
+func TestCheckBackendURL_InvalidURL(t *testing.T) {
+	if err := checkBackendURL("://not-a-url", false); err == nil {
+		t.Error("expected error for malformed URL, got nil")
+	}
+}
+
+// --- noRedirectHTTPClient tests ---
+
+func TestNoRedirectHTTPClient_RefusesRedirect(t *testing.T) {
+	// Start a test server that always redirects.
+	redirectTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer redirectTarget.Close()
+
+	redirectSource := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, redirectTarget.URL, http.StatusFound)
+	}))
+	defer redirectSource.Close()
+
+	client := noRedirectHTTPClient()
+	resp, err := client.Get(redirectSource.URL)
+	if resp != nil {
+		resp.Body.Close()
+	}
+	if err == nil {
+		t.Error("expected error when server redirects, got nil")
+	}
+	if !strings.Contains(err.Error(), "redirects are not permitted") {
+		t.Errorf("error should mention redirect prohibition, got: %v", err)
 	}
 }
