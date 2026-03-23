@@ -67,6 +67,15 @@ type OIDCVerifyConfig struct {
 	// JWKSURL is the URL to the issuer's JSON Web Key Set (JWKS) for signature
 	// verification. Required when normalizer is "oidc-verify".
 	JWKSURL string `yaml:"jwks_url"`
+
+	// Audiences is an optional list of allowed audience (aud) values.
+	// If provided, the token must contain at least one of these audiences.
+	Audiences []string `yaml:"audiences"`
+
+	// AllowMissingExpiry defaults to false. If false (default), OIDC tokens
+	// without an expiration (exp) claim will be rejected (fail secure).
+	// Set to true only if your Identity Provider does not provide exp claims.
+	AllowMissingExpiry bool `yaml:"allow_missing_expiry"`
 }
 
 // AdminConfig holds credentials for the Keep admin API.

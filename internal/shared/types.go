@@ -92,7 +92,6 @@ type PDPResponse struct {
 	Decision        string         `json:"decision"`                   // "allow" | "deny" | "escalate"
 	Reason          string         `json:"reason"`
 	EscalationScope []map[string]any `json:"escalation_scope,omitempty"` // claims required for escalation token
-	RequestID       string         `json:"request_id,omitempty"`       // echoed from the input request, if the PDP chooses to include it
 }
 
 // EscalationPendingError is returned when the PDP requires escalation approval.

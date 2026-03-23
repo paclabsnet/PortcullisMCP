@@ -72,9 +72,11 @@ func init() {
 			return nil, fmt.Errorf("normalizer oidc-verify requires identity.oidc_verify.jwks_url to be set")
 		}
 		return &oidcVerifyingNormalizer{
-			issuer:  cfg.OIDCVerify.Issuer,
-			jwksURL: cfg.OIDCVerify.JWKSURL,
-			strict:  &strictNormalizer{},
+			issuer:             cfg.OIDCVerify.Issuer,
+			jwksURL:            cfg.OIDCVerify.JWKSURL,
+			audiences:          cfg.OIDCVerify.Audiences,
+			allowMissingExpiry: cfg.OIDCVerify.AllowMissingExpiry,
+			strict:             &strictNormalizer{},
 		}, nil
 	})
 }
@@ -140,9 +142,11 @@ func (n *passthroughNormalizer) Normalize(_ context.Context, id shared.UserIdent
 // tokens not issued by that issuer. OS-sourced identities are handled by
 // the embedded strictNormalizer.
 type oidcVerifyingNormalizer struct {
-	issuer  string
-	jwksURL string
-	strict  *strictNormalizer
+	issuer             string
+	jwksURL            string
+	audiences          []string
+	allowMissingExpiry bool
+	strict             *strictNormalizer
 
 	jwksMu sync.RWMutex
 	jwks   *jwks
@@ -187,12 +191,45 @@ func (n *oidcVerifyingNormalizer) Normalize(ctx context.Context, id shared.UserI
 		return shared.Principal{}, fmt.Errorf("oidc token issuer %q does not match configured issuer %q", iss, n.issuer)
 	}
 
-	// 3. Validate Expiry
+	// 3. Extract Subject (UserID)
+	sub, err := claims.GetSubject()
+	if err != nil {
+		return shared.Principal{}, fmt.Errorf("parse oidc token subject: %w", err)
+	}
+	if sub == "" {
+		return shared.Principal{}, fmt.Errorf("oidc token missing sub claim")
+	}
+
+	// 4. Validate Audiences
+	if len(n.audiences) > 0 {
+		aud, _ := claims.GetAudience()
+		found := false
+		for _, a := range n.audiences {
+			for _, t := range aud {
+				if a == t {
+					found = true
+					break
+				}
+			}
+			if found {
+				break
+			}
+		}
+		if !found {
+			return shared.Principal{}, fmt.Errorf("oidc token audience mismatch (aud=%v, expected=%v)", aud, n.audiences)
+		}
+	}
+
+	// 5. Validate Expiry
 	exp, err := claims.GetExpirationTime()
 	if err != nil {
 		return shared.Principal{}, fmt.Errorf("parse oidc token expiry: %w", err)
 	}
-	if exp != nil && time.Now().After(exp.Time) {
+	if exp == nil {
+		if !n.allowMissingExpiry {
+			return shared.Principal{}, fmt.Errorf("oidc token missing exp claim (required by default)")
+		}
+	} else if time.Now().After(exp.Time) {
 		return shared.Principal{}, fmt.Errorf("oidc token is expired (exp=%v)", exp.Time)
 	}
 
@@ -235,7 +272,7 @@ func (n *oidcVerifyingNormalizer) Normalize(ctx context.Context, id shared.UserI
 	}
 
 	return shared.Principal{
-		UserID:      id.UserID, // UserID remains the stable identifier provided by Gate/Identity Provider
+		UserID:      sub, // Use verified subject from token
 		Email:       email,
 		DisplayName: displayName,
 		Groups:      groups,
@@ -257,51 +294,71 @@ func (n *oidcVerifyingNormalizer) keyFunc(token *jwt.Token) (interface{}, error)
 		return nil, fmt.Errorf("missing kid in token header")
 	}
 
-	keys, err := n.getJWKS()
+	// 1. Try with cached JWKS
+	keys, err := n.getJWKS(false)
 	if err != nil {
 		return nil, fmt.Errorf("fetch JWKS: %w", err)
 	}
 
 	for _, k := range keys.Keys {
 		if k.Kid == kid {
-			// Construct RSA Public Key from JWK
-			nBytes, err := base64.RawURLEncoding.DecodeString(k.N)
-			if err != nil {
-				return nil, fmt.Errorf("decode JWK n: %w", err)
-			}
-			eBytes, err := base64.RawURLEncoding.DecodeString(k.E)
-			if err != nil {
-				return nil, fmt.Errorf("decode JWK e: %w", err)
-			}
-
-			var e int
-			for _, b := range eBytes {
-				e = e<<8 | int(b)
-			}
-
-			return &rsa.PublicKey{
-				N: new(big.Int).SetBytes(nBytes),
-				E: e,
-			}, nil
+			return n.buildRSAPublicKey(k)
 		}
 	}
 
-	return nil, fmt.Errorf("kid %q not found in JWKS", kid)
+	// 2. Kid miss: force immediate refresh and retry
+	slog.Info("JWKS kid miss; forcing immediate refresh", "kid", kid)
+	keys, err = n.getJWKS(true)
+	if err != nil {
+		return nil, fmt.Errorf("refresh JWKS: %w", err)
+	}
+
+	for _, k := range keys.Keys {
+		if k.Kid == kid {
+			return n.buildRSAPublicKey(k)
+		}
+	}
+
+	return nil, fmt.Errorf("kid %q not found in JWKS after refresh", kid)
 }
 
-func (n *oidcVerifyingNormalizer) getJWKS() (*jwks, error) {
-	n.jwksMu.RLock()
-	if n.jwks != nil && time.Since(n.last) < 1*time.Hour {
-		defer n.jwksMu.RUnlock()
-		return n.jwks, nil
+func (n *oidcVerifyingNormalizer) buildRSAPublicKey(k jwk) (*rsa.PublicKey, error) {
+	// Construct RSA Public Key from JWK
+	nBytes, err := base64.RawURLEncoding.DecodeString(k.N)
+	if err != nil {
+		return nil, fmt.Errorf("decode JWK n: %w", err)
 	}
-	n.jwksMu.RUnlock()
+	eBytes, err := base64.RawURLEncoding.DecodeString(k.E)
+	if err != nil {
+		return nil, fmt.Errorf("decode JWK e: %w", err)
+	}
+
+	var e int
+	for _, b := range eBytes {
+		e = e<<8 | int(b)
+	}
+
+	return &rsa.PublicKey{
+		N: new(big.Int).SetBytes(nBytes),
+		E: e,
+	}, nil
+}
+
+func (n *oidcVerifyingNormalizer) getJWKS(force bool) (*jwks, error) {
+	if !force {
+		n.jwksMu.RLock()
+		if n.jwks != nil && time.Since(n.last) < 1*time.Hour {
+			defer n.jwksMu.RUnlock()
+			return n.jwks, nil
+		}
+		n.jwksMu.RUnlock()
+	}
 
 	n.jwksMu.Lock()
 	defer n.jwksMu.Unlock()
 
-	// Re-check after acquiring lock
-	if n.jwks != nil && time.Since(n.last) < 1*time.Hour {
+	// Re-check after acquiring lock (unless forced)
+	if !force && n.jwks != nil && time.Since(n.last) < 1*time.Hour {
 		return n.jwks, nil
 	}
 

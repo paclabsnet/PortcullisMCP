@@ -229,8 +229,8 @@ func TestOIDCVerifyingNormalizer_ValidToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got.UserID != id.UserID {
-		t.Errorf("UserID = %q, want %q", got.UserID, id.UserID)
+	if got.UserID != "alice@corp.com" {
+		t.Errorf("UserID = %q, want alice@corp.com", got.UserID)
 	}
 	if got.DisplayName != "Alice" {
 		t.Errorf("DisplayName = %q, want Alice", got.DisplayName)
@@ -240,6 +240,214 @@ func TestOIDCVerifyingNormalizer_ValidToken(t *testing.T) {
 	}
 	if got.TokenExpiry != exp.Unix() {
 		t.Errorf("TokenExpiry = %d, want %d", got.TokenExpiry, exp.Unix())
+	}
+}
+
+func TestOIDCVerifyingNormalizer_VerifiedSubjectOverridesClaim(t *testing.T) {
+	privateKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	kid := "test-kid"
+	issuer := "https://idp.example.com"
+	verifiedSub := "verified-alice"
+
+	jwksHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := base64.RawURLEncoding.EncodeToString(privateKey.N.Bytes())
+		e := base64.RawURLEncoding.EncodeToString(bigIntToBytes(privateKey.E))
+		json.NewEncoder(w).Encode(jwks{Keys: []jwk{{Kid: kid, Kty: "RSA", Alg: "RS256", N: n, E: e}}})
+	})
+	server := httptest.NewServer(jwksHandler)
+	defer server.Close()
+
+	// Token contains "verified-alice"
+	claims := jwt.MapClaims{
+		"iss": issuer,
+		"sub": verifiedSub,
+		"exp": time.Now().Add(time.Hour).Unix(),
+	}
+	raw := signToken(t, privateKey, kid, claims)
+
+	n := &oidcVerifyingNormalizer{issuer: issuer, jwksURL: server.URL, strict: &strictNormalizer{}}
+	
+	// Request claims to be "imposter-alice"
+	id := shared.UserIdentity{
+		UserID:     "imposter-alice",
+		SourceType: "oidc",
+		RawToken:   raw,
+	}
+
+	got, err := n.Normalize(context.Background(), id)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Result MUST be "verified-alice"
+	if got.UserID != verifiedSub {
+		t.Errorf("UserID = %q, want %q (verified sub)", got.UserID, verifiedSub)
+	}
+}
+
+func TestOIDCVerifyingNormalizer_AudienceMismatch(t *testing.T) {
+	privateKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	kid := "test-kid"
+	issuer := "https://idp.example.com"
+	
+	jwksHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := base64.RawURLEncoding.EncodeToString(privateKey.N.Bytes())
+		e := base64.RawURLEncoding.EncodeToString(bigIntToBytes(privateKey.E))
+		json.NewEncoder(w).Encode(jwks{Keys: []jwk{{Kid: kid, Kty: "RSA", Alg: "RS256", N: n, E: e}}})
+	})
+	server := httptest.NewServer(jwksHandler)
+	defer server.Close()
+
+	claims := jwt.MapClaims{
+		"iss": issuer,
+		"sub": "alice",
+		"aud": "wrong-audience",
+		"exp": time.Now().Add(time.Hour).Unix(),
+	}
+	raw := signToken(t, privateKey, kid, claims)
+
+	n := &oidcVerifyingNormalizer{
+		issuer:    issuer,
+		jwksURL:   server.URL,
+		audiences: []string{"expected-audience"},
+		strict:    &strictNormalizer{},
+	}
+	id := shared.UserIdentity{SourceType: "oidc", RawToken: raw}
+
+	_, err := n.Normalize(context.Background(), id)
+	if err == nil {
+		t.Fatal("expected error for audience mismatch, got nil")
+	}
+	if !strings.Contains(err.Error(), "audience mismatch") {
+		t.Errorf("error = %q, want it to mention audience mismatch", err.Error())
+	}
+}
+
+func TestOIDCVerifyingNormalizer_AudienceMatch(t *testing.T) {
+	privateKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	kid := "test-kid"
+	issuer := "https://idp.example.com"
+	
+	jwksHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := base64.RawURLEncoding.EncodeToString(privateKey.N.Bytes())
+		e := base64.RawURLEncoding.EncodeToString(bigIntToBytes(privateKey.E))
+		json.NewEncoder(w).Encode(jwks{Keys: []jwk{{Kid: kid, Kty: "RSA", Alg: "RS256", N: n, E: e}}})
+	})
+	server := httptest.NewServer(jwksHandler)
+	defer server.Close()
+
+	claims := jwt.MapClaims{
+		"iss": issuer,
+		"sub": "alice",
+		"aud": []any{"other", "expected-audience"},
+		"exp": time.Now().Add(time.Hour).Unix(),
+	}
+	raw := signToken(t, privateKey, kid, claims)
+
+	n := &oidcVerifyingNormalizer{
+		issuer:    issuer,
+		jwksURL:   server.URL,
+		audiences: []string{"expected-audience"},
+		strict:    &strictNormalizer{},
+	}
+	id := shared.UserIdentity{SourceType: "oidc", RawToken: raw}
+
+	_, err := n.Normalize(context.Background(), id)
+	if err != nil {
+		t.Fatalf("unexpected error for audience match: %v", err)
+	}
+}
+
+func TestOIDCVerifyingNormalizer_AllowMissingExpiry(t *testing.T) {
+	privateKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	kid := "test-kid"
+	issuer := "https://idp.example.com"
+	
+	jwksHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := base64.RawURLEncoding.EncodeToString(privateKey.N.Bytes())
+		e := base64.RawURLEncoding.EncodeToString(bigIntToBytes(privateKey.E))
+		json.NewEncoder(w).Encode(jwks{Keys: []jwk{{Kid: kid, Kty: "RSA", Alg: "RS256", N: n, E: e}}})
+	})
+	server := httptest.NewServer(jwksHandler)
+	defer server.Close()
+
+	// Token WITHOUT exp claim
+	claims := jwt.MapClaims{
+		"iss": issuer,
+		"sub": "alice",
+	}
+	raw := signToken(t, privateKey, kid, claims)
+
+	// 1. Rejected by default (fail secure)
+	n1 := &oidcVerifyingNormalizer{issuer: issuer, jwksURL: server.URL, allowMissingExpiry: false, strict: &strictNormalizer{}}
+	id := shared.UserIdentity{SourceType: "oidc", RawToken: raw}
+	_, err := n1.Normalize(context.Background(), id)
+	if err == nil {
+		t.Fatal("expected error for missing exp by default, got nil")
+	}
+	if !strings.Contains(err.Error(), "missing exp claim") {
+		t.Errorf("error = %q, want it to mention missing exp claim", err.Error())
+	}
+
+	// 2. Acceptable when allowMissingExpiry=true
+	n2 := &oidcVerifyingNormalizer{issuer: issuer, jwksURL: server.URL, allowMissingExpiry: true, strict: &strictNormalizer{}}
+	_, err = n2.Normalize(context.Background(), id)
+	if err != nil {
+		t.Errorf("expected no error when allowMissingExpiry=true, got %v", err)
+	}
+}
+
+func TestOIDCVerifyingNormalizer_JWKSRefreshOnKidMiss(t *testing.T) {
+	privateKey1, _ := rsa.GenerateKey(rand.Reader, 2048)
+	privateKey2, _ := rsa.GenerateKey(rand.Reader, 2048)
+	kid1 := "kid-1"
+	kid2 := "kid-2"
+	issuer := "https://idp.example.com"
+
+	refreshCount := 0
+	jwksHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		refreshCount++
+		n1 := base64.RawURLEncoding.EncodeToString(privateKey1.N.Bytes())
+		e1 := base64.RawURLEncoding.EncodeToString(bigIntToBytes(privateKey1.E))
+		
+		keys := []jwk{
+			{Kid: kid1, Kty: "RSA", Alg: "RS256", N: n1, E: e1},
+		}
+
+		// On second refresh, add the new key
+		if refreshCount > 1 {
+			n2 := base64.RawURLEncoding.EncodeToString(privateKey2.N.Bytes())
+			e2 := base64.RawURLEncoding.EncodeToString(bigIntToBytes(privateKey2.E))
+			keys = append(keys, jwk{Kid: kid2, Kty: "RSA", Alg: "RS256", N: n2, E: e2})
+		}
+
+		json.NewEncoder(w).Encode(jwks{Keys: keys})
+	})
+	server := httptest.NewServer(jwksHandler)
+	defer server.Close()
+
+	n := &oidcVerifyingNormalizer{issuer: issuer, jwksURL: server.URL, strict: &strictNormalizer{}}
+
+	// 1. First call with kid1 should work and populate cache
+	claims1 := jwt.MapClaims{"iss": issuer, "sub": "alice", "exp": time.Now().Add(time.Hour).Unix()}
+	raw1 := signToken(t, privateKey1, kid1, claims1)
+	_, err := n.Normalize(context.Background(), shared.UserIdentity{SourceType: "oidc", RawToken: raw1})
+	if err != nil {
+		t.Fatalf("first call failed: %v", err)
+	}
+	if refreshCount != 1 {
+		t.Errorf("expected 1 refresh, got %d", refreshCount)
+	}
+
+	// 2. Call with kid2 should fail initially (not in cache), trigger refresh, and then succeed
+	claims2 := jwt.MapClaims{"iss": issuer, "sub": "bob", "exp": time.Now().Add(time.Hour).Unix()}
+	raw2 := signToken(t, privateKey2, kid2, claims2)
+	_, err = n.Normalize(context.Background(), shared.UserIdentity{SourceType: "oidc", RawToken: raw2})
+	if err != nil {
+		t.Fatalf("second call failed after refresh: %v", err)
+	}
+	if refreshCount != 2 {
+		t.Errorf("expected 2 refreshes after kid miss, got %d", refreshCount)
 	}
 }
 
