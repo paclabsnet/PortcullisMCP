@@ -34,7 +34,7 @@ tests:
             }
           },
           "session_id": "tbd123",
-          "request_id": "req-abc123"
+          "trace_id": "req-abc123"
         }
 
   - name: invalid inputs result in a deny
@@ -68,7 +68,7 @@ tests:
             }
           },
           "session_id": "tbd123",
-          "request_id": "req-abc123"
+          "trace_id": "req-abc123"
         }
 
   - name: invalid inputs result in a deny
@@ -102,7 +102,7 @@ tests:
             }
           },
           "session_id": "tbd123",
-          "request_id": "req-abc123"
+          "trace_id": "req-abc123"
         }
 
 
@@ -137,7 +137,7 @@ tests:
             }
           },
           "session_id": "tbd123",
-          "request_id": "req-abc123"
+          "trace_id": "req-abc123"
         }
 
 
@@ -172,7 +172,7 @@ tests:
             }
           },
           "session_id": "tbd123",
-          "request_id": "req-abc123"
+          "trace_id": "req-abc123"
         }
 
 
@@ -208,13 +208,13 @@ tests:
             }
           },
           "session_id": "tbd123",
-          "request_id": "req-abc123"
+          "trace_id": "req-abc123"
         }
 
 
-  - name: system handles a missing request_id gracefully
+  - name: system handles a missing trace_id gracefully
     skip: false
-    description: missing request_id
+    description: missing trace_id
     decision-path: /v1/data/portcullis/tabular/decision
     expects:
       - substring: '"decision":"allow"'
@@ -244,7 +244,7 @@ tests:
             }
           },
           "session_id": "tbd123",
-          "_request_id": "req-abc123"
+          "_trace_id": "req-abc123"
         }
 
 
@@ -279,7 +279,7 @@ tests:
             }
           },
           "session_id": "tbd123",
-          "request_id": "req-abc123"
+          "trace_id": "req-abc123"
         }
 
 
@@ -315,7 +315,7 @@ tests:
             }
           },
           "session_id": "tbd123",
-          "request_id": "req-abc123"
+          "trace_id": "req-abc123"
         }
 
 
@@ -350,7 +350,7 @@ tests:
             }
           },
           "session_id": "tbd123",
-          "request_id": "req-abc123"
+          "trace_id": "req-abc123"
         }
 
 
@@ -390,7 +390,7 @@ tests:
             }
           },
           "session_id": "tbd123",
-          "request_id": "req-abc123"
+          "trace_id": "req-abc123"
         }
 
 
@@ -431,7 +431,7 @@ tests:
             }
           },
           "session_id": "tbd123",
-          "request_id": "req-abc123"
+          "trace_id": "req-abc123"
         }
 
 
@@ -474,7 +474,7 @@ tests:
             }
           },
           "session_id": "tbd123",
-          "request_id": "req-abc123"
+          "trace_id": "req-abc123"
         }
 
 
@@ -536,7 +536,7 @@ tests:
             }
           },
           "session_id": "tbd123",
-          "request_id": "req-abc123"
+          "trace_id": "req-abc123"
         }
 
 
@@ -573,7 +573,7 @@ tests:
             }
           },
           "session_id": "tbd123",
-          "request_id": "req-abc123"
+          "trace_id": "req-abc123"
         }
 
 
@@ -605,7 +605,7 @@ tests:
             }
           },
           "session_id": "tbd123",
-          "request_id": "req-abc123"
+          "trace_id": "req-abc123"
         }
 
 
@@ -655,7 +655,7 @@ tests:
             }
           },
             "session_id": "sess-abc123",
-            "request_id": "req-def456"
+            "trace_id": "req-def456"
         }
     
 
@@ -700,7 +700,7 @@ tests:
             }
           },
             "session_id": "sess-abc123",
-            "request_id": "req-def456"
+            "trace_id": "req-def456"
         }
 
 
@@ -761,7 +761,7 @@ tests:
             }
           },
             "session_id": "sess-abc123",
-            "request_id": "req-def456"
+            "trace_id": "req-def456"
         }
 
 
@@ -813,7 +813,7 @@ tests:
             }
           },
             "session_id": "sess-abc123",
-            "request_id": "req-def456"
+            "trace_id": "req-def456"
         }
 
 
@@ -875,7 +875,7 @@ tests:
             }
           },
             "session_id": "sess-abc123",
-            "request_id": "req-def456"
+            "trace_id": "req-def456"
         }
 
 
@@ -925,7 +925,7 @@ tests:
             }
           },
             "session_id": "sess-abc123",
-            "request_id": "req-def456"
+            "trace_id": "req-def456"
         }
 
 
@@ -991,7 +991,7 @@ tests:
             }
           },
           "session_id": "tbd123",
-          "request_id": "req-abc123"
+          "trace_id": "req-abc123"
         }
 
 
@@ -1044,7 +1044,7 @@ tests:
             }
           },
             "session_id": "sess-abc123",
-            "request_id": "req-def456"
+            "trace_id": "req-def456"
         }
 
 
@@ -1103,7 +1103,7 @@ tests:
             }
           },
             "session_id": "sess-abc123",
-            "request_id": "req-def456"
+            "trace_id": "req-def456"
         }
 
 
@@ -1162,7 +1162,7 @@ tests:
             }
           },
           "session_id": "tbd123",
-          "request_id": "req-abc123"
+          "trace_id": "req-abc123"
         }
 
 
@@ -1211,7 +1211,7 @@ tests:
             }
           },
             "session_id": "sess-abc123",
-            "request_id": "req-def456"
+            "trace_id": "req-def456"
         }
 
 
@@ -1281,5 +1281,74 @@ tests:
             }
           },
             "session_id": "sess-abc123",
-            "request_id": "req-def456"
+            "trace_id": "req-def456"
+        }
+
+
+
+
+
+
+  - name: mock-enterprise-api - delete_customer - returns allow if you're an admin
+    skip: false
+    description: the user is an admin
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"allow"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {
+            "action":{
+              "service": "mock-enterprise-api",
+              "tool_name": "delete_customer"
+            },
+            "resource":{
+            },
+            "principal": {
+              "user_id": "alice@example.com",
+              "display_name": "Alice Developer",
+              "groups": ["developer", "admin"]
+            },
+            "context": {
+              "escalation_tokens":[
+              ]
+            }
+          },
+          "session_id": "tbd123",
+          "trace_id": "req-abc123"
+        }
+
+
+
+  - name: mock-enterprise-api - delete_customer - returns workflow if you're not an admin
+    skip: false
+    description: the user is not an admin, so the workflow system may be invoked
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"workflow"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {
+            "action":{
+              "service": "mock-enterprise-api",
+              "tool_name": "delete_customer"
+            },
+            "resource":{
+            },
+            "principal": {
+              "user_id": "alice@example.com",
+              "display_name": "Alice Developer",
+              "groups": ["developer"]
+            },
+            "context": {
+              "escalation_tokens":[
+              ]
+            }
+          },
+          "session_id": "tbd123",
+          "trace_id": "req-abc123"
         }

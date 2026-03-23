@@ -60,6 +60,8 @@ import rego.v1
 import data.portcullis.util
 import data.portcullis.allowdeny
 import data.portcullis.escalate
+import data.portcullis.digest
+import data.portcullis.custom
 
 # ============================================================================
 # DEFAULT — fail-safe deny
@@ -188,12 +190,6 @@ response_list contains { "decision":   "deny",
 
 rules_section := object.get(data.portcullis.mcp, [action.service, action.tool_name], null)
 
-response_list contains { "decision":   "deny",	
-			  "reason":  sprintf("no policy rules found for mcp: %s, tool: %s", [action.service, action.tool_name]),
-			  "trace_id": trace_id } if {
-
-				rules_section == null
-			  }
 
 response_list contains { "decision" : "deny", 
 			  "reason" : "Denied by rule",
@@ -281,81 +277,35 @@ response_list contains {
 				}
 
 
-# no response, deny
-decision := { "decision" : "deny", 
-				"reason" : "no matching rule found", 
-				"trace_id" : trace_id } if {
-					count(response_list) == 0
+#
+# if there are no table-based rules that apply in this scenario, check to see
+# if there are any custom rules that generate a valid decision
+#
+decision := custom.decision if {
+	count(response_list) == 0
+}
+
+
+
+decision := digest.evaluate_response_list( response_list, trace_id ) if {
+	count(response_list) > 0
 }
 
 
 
 #
-# we'll get 0 or more results from the policy logic. We can
-# then make some high-level policy rules based on the 
-# results.
+# changing this logic - if there is no policy rule, before giving up, we'll defer to the custom.decision
 #
-deny_list := [ x | 
-				some x in response_list
-					x.decision == "deny"
-			]
-
-allow_list := [ x | 
-				some x in response_list
-					x.decision == "allow"
-			]
-
-
-escalate_list := [ x | 
-				some x in response_list
-					x.decision == "escalate"
-			]			
-
-
-
-
+# response_list contains { "decision":   "deny",	
+#			  "reason":  sprintf("no policy rules found for mcp: %s, tool: %s", [action.service, action.tool_name]),
+#			  "trace_id": trace_id } if {
 #
-# general rules:
-# 1) If there are any denies, it's a deny
-# 2) If there are any escalates, but no denies, it's escalate
-# 3) if there are allows, and no deny/escalate results, it's allow
-#
-#  We could respond with all of the denies. For the moment, we'll
-# just respond with the first one.
-#
-decision := deny_result if {
-	count(deny_list) > 0
-	deny_result := deny_list[0]
-}
-
-
-decision := escalate_result if {
-	count(deny_list) == 0
-	count(escalate_list) > 0
-	escalate_result := escalate_list[0]
-}
-
-
-decision := allow_result if {
-	count(deny_list) == 0
-	count(escalate_list) == 0
-	count(allow_list) > 0
-	allow_result := allow_list[0]
-}
+#				rules_section == null
+#			  }
 
 
 
 
-
-
-
-
-
-#does_request_meet_criteria_escalation_only( request, rules, escalation_grant_list) := true if {
-#
-#	util.request_matches_escalation_criteria( request, rules, escalation_grant_list)
-#
-#} else := false
 
 
 
