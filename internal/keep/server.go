@@ -120,6 +120,8 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	req.UserIdentity = normalizeIdentity(req.UserIdentity, s.cfg.Identity)
+
 	pdpResp, err := s.pdp.Evaluate(r.Context(), req)
 	if err != nil {
 		slog.Error("pdp evaluate failed", "error", err, "request_id", req.RequestID)
@@ -204,6 +206,8 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+
+	req.UserIdentity = normalizeIdentity(req.UserIdentity, s.cfg.Identity)
 
 	pdpResp, err := s.pdp.Evaluate(r.Context(), req)
 	if err != nil {
