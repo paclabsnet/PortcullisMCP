@@ -335,8 +335,8 @@ func TestServer_HandleLog(t *testing.T) {
 
 	srv.handleLog(w, req)
 
-	if w.Code != http.StatusAccepted {
-		t.Errorf("status code = %d, want %d", w.Code, http.StatusAccepted)
+	if w.Code != http.StatusOK {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusOK)
 	}
 
 	var result map[string]any

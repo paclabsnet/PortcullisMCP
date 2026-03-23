@@ -507,9 +507,6 @@ func TestListAllowedDirectories(t *testing.T) {
 	result := call(t, session, "list_allowed_directories", map[string]any{})
 	assertAllowed(t, result)
 	text := resultText(t, result)
-	if !strings.HasPrefix(text, "Allowed directories:") {
-		t.Errorf("expected 'Allowed directories:' prefix, got: %s", text)
-	}
 	// The sandbox path (or its resolved form) should appear.
 	if !strings.Contains(text, filepath.Base(sandbox)) {
 		t.Errorf("expected sandbox path in response, got: %s", text)

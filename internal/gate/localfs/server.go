@@ -157,10 +157,9 @@ type fsServer struct {
 	sandbox string
 }
 
-// resolve returns an absolute, symlink-free path for the given input.
+// resolve returns an absolute, symlink-free path for the given input,
+// enforcing that the result lies within the sandbox directory.
 // Relative paths are resolved relative to the sandbox directory.
-// No containment check is performed — access control is handled by
-// portcullis-gate before any call reaches this server.
 //
 // For paths that do not exist (e.g. write targets or new directories), it
 // walks up the ancestor chain to find the deepest existing component, resolves
@@ -181,7 +180,12 @@ func (s *fsServer) resolve(path string) (string, error) {
 	for {
 		resolved, err := filepath.EvalSymlinks(current)
 		if err == nil {
-			return filepath.Join(append([]string{resolved}, missing...)...), nil
+			full := filepath.Join(append([]string{resolved}, missing...)...)
+			rel, relErr := filepath.Rel(s.sandbox, full)
+			if relErr != nil || strings.HasPrefix(rel, "..") {
+				return "", fmt.Errorf("path is outside the sandbox directory")
+			}
+			return full, nil
 		}
 		if !os.IsNotExist(err) {
 			return "", fmt.Errorf("resolve path: %w", err)
