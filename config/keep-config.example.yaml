@@ -80,3 +80,14 @@ decision_logs:
   headers:
     Authorization: "Bearer ${SIEM_API_TOKEN}"
     X-Source: "portcullis-keep"
+
+telemetry:
+  # Supported exporters:
+  #   noop   - no telemetry (default)
+  #   stdout - print spans to stdout (development)
+  #   otlp   - send to an OTLP collector (production)
+  exporter: "noop"
+  service_name: "portcullis-keep"
+  # otlp:
+  #   endpoint: "http://otel-collector.internal.example.com:4318"  # OTLP HTTP endpoint
+  #   insecure: true  # set false (default) to require TLS

@@ -25,6 +25,10 @@ import (
 	"os/exec"
 	"sync"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 )
@@ -63,14 +67,26 @@ func NewRouter(backends map[string]BackendConfig) *Router {
 
 // CallTool routes a tool call to the named backend server.
 func (r *Router) CallTool(ctx context.Context, serverName, toolName string, args map[string]any) (*mcp.CallToolResult, error) {
+	ctx, span := otel.Tracer("portcullis-keep").Start(ctx, "keep.backend.call_tool")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("backend.name", serverName),
+		attribute.String("tool.name", toolName),
+	)
+
 	session, err := r.sessionFor(ctx, serverName)
 	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
 		return nil, err
 	}
-	return session.CallTool(ctx, &mcp.CallToolParams{
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{
 		Name:      toolName,
 		Arguments: args,
 	})
+	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+	}
+	return result, err
 }
 
 // ListTools returns all tools exposed by the named backend server.

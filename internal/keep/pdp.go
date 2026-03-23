@@ -25,7 +25,13 @@ import (
 	"path"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
+	"github.com/paclabsnet/PortcullisMCP/internal/telemetry"
 )
 
 // PolicyDecisionPoint evaluates an enriched MCP request and returns a decision.
@@ -196,6 +202,16 @@ type opaResponse struct {
 
 // Evaluate sends the enriched request to OPA and returns the PDP decision.
 func (c *opaClient) Evaluate(ctx context.Context, req shared.EnrichedMCPRequest) (shared.PDPResponse, error) {
+	ctx, span := otel.Tracer("portcullis-keep").Start(ctx, "keep.pdp.evaluate")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("pdp.type", "opa"),
+		attribute.String("pdp.endpoint", c.endpoint),
+		attribute.String("request.id", req.RequestID),
+		attribute.String("tool.name", req.ToolName),
+	)
+	traceID := telemetry.TraceIDFromContext(ctx)
+
 	body, err := json.Marshal(opaRequest{
 		Input: opaInput{
 			AuthorizationRequest: opaAuthzRequest{
@@ -235,19 +251,25 @@ func (c *opaClient) Evaluate(ctx context.Context, req shared.EnrichedMCPRequest)
 		return shared.PDPResponse{}, fmt.Errorf("build opa request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	// Propagate W3C TraceContext so OPA decision logs are correlatable.
+	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(httpReq.Header))
 
 	resp, err := c.client.Do(httpReq)
 	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		slog.ErrorContext(ctx, "keep: opa request failed", "error", err, "trace_id", traceID)
 		return shared.PDPResponse{}, fmt.Errorf("%w: %s", shared.ErrPDPUnavailable, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		span.SetStatus(codes.Error, fmt.Sprintf("opa returned %d", resp.StatusCode))
 		return shared.PDPResponse{}, fmt.Errorf("%w: opa returned %d", shared.ErrPDPUnavailable, resp.StatusCode)
 	}
 
 	var opaResp opaResponse
 	if err := json.NewDecoder(resp.Body).Decode(&opaResp); err != nil {
+		span.SetStatus(codes.Error, err.Error())
 		return shared.PDPResponse{}, fmt.Errorf("decode opa response: %w", err)
 	}
 
@@ -256,6 +278,9 @@ func (c *opaClient) Evaluate(ctx context.Context, req shared.EnrichedMCPRequest)
 		// OPA returned an empty result — treat as deny (safe default).
 		decision = "deny"
 	}
+
+	span.SetAttributes(attribute.String("pdp.decision", decision))
+	slog.InfoContext(ctx, "keep: pdp decision", "decision", decision, "request_id", req.RequestID, "trace_id", traceID)
 
 	return shared.PDPResponse{
 		Decision:        decision,
