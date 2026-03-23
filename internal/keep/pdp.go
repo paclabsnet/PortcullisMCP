@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"path"
@@ -16,6 +17,26 @@ import (
 // PolicyDecisionPoint evaluates an enriched MCP request and returns a decision.
 type PolicyDecisionPoint interface {
 	Evaluate(ctx context.Context, req shared.EnrichedMCPRequest) (shared.PDPResponse, error)
+}
+
+// noopPDP is a PolicyDecisionPoint that allows every request unconditionally.
+// It is intended for local evaluation and getting-started scenarios only.
+// Do not use in production — it provides no access control whatsoever.
+type noopPDP struct{}
+
+// NewNoopPDPClient returns a PolicyDecisionPoint that allows all requests.
+// A warning is logged at startup to make clear that policy enforcement is disabled.
+func NewNoopPDPClient() PolicyDecisionPoint {
+	slog.Warn("keep: PDP type is \"noop\" — all requests will be allowed without policy evaluation; do not use in production")
+	return &noopPDP{}
+}
+
+func (n *noopPDP) Evaluate(_ context.Context, req shared.EnrichedMCPRequest) (shared.PDPResponse, error) {
+	return shared.PDPResponse{
+		Decision:  "allow",
+		Reason:    "noop pdp: policy enforcement disabled",
+		RequestID: req.RequestID,
+	}, nil
 }
 
 // opaClient calls the OPA REST API to evaluate policy.

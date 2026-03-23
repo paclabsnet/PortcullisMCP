@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
@@ -131,6 +132,41 @@ func TestOPAClient_Evaluate(t *testing.T) {
 				t.Errorf("reason = %q, want %q", resp.Reason, tt.expectedReason)
 			}
 		})
+	}
+}
+
+func TestNoopPDP_AlwaysAllows(t *testing.T) {
+	pdp := NewNoopPDPClient()
+
+	requests := []shared.EnrichedMCPRequest{
+		{ServerName: "s", ToolName: "t", RequestID: "r1"},
+		{ServerName: "s", ToolName: "delete_everything", RequestID: "r2",
+			UserIdentity: shared.UserIdentity{UserID: "attacker", Groups: []string{"nobody"}}},
+	}
+	for _, req := range requests {
+		resp, err := pdp.Evaluate(context.Background(), req)
+		if err != nil {
+			t.Errorf("req %s: unexpected error: %v", req.RequestID, err)
+		}
+		if resp.Decision != "allow" {
+			t.Errorf("req %s: decision = %q, want allow", req.RequestID, resp.Decision)
+		}
+		if resp.RequestID != req.RequestID {
+			t.Errorf("req %s: RequestID not echoed, got %q", req.RequestID, resp.RequestID)
+		}
+	}
+}
+
+func TestNewServer_UnknownPDPType(t *testing.T) {
+	cfg := Config{
+		PDP: PDPConfig{Type: "unknown-pdp"},
+	}
+	_, err := NewServer(cfg, "")
+	if err == nil {
+		t.Fatal("expected error for unknown PDP type, got nil")
+	}
+	if !strings.Contains(err.Error(), "unknown pdp type") {
+		t.Errorf("error = %q, want it to mention unknown pdp type", err.Error())
 	}
 }
 

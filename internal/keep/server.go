@@ -39,7 +39,15 @@ type Server struct {
 // NewServer creates a Keep server. configPath is retained so the admin reload
 // handler can re-read the file on demand.
 func NewServer(cfg Config, configPath string) (*Server, error) {
-	pdp := NewOPAClient(cfg.PDP.Endpoint)
+	var pdp PolicyDecisionPoint
+	switch cfg.PDP.Type {
+	case "noop":
+		pdp = NewNoopPDPClient()
+	case "opa", "":
+		pdp = NewOPAClient(cfg.PDP.Endpoint)
+	default:
+		return nil, fmt.Errorf("unknown pdp type %q; supported types: opa, noop", cfg.PDP.Type)
+	}
 
 	router := NewRouter(cfg.Backends)
 
