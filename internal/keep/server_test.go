@@ -233,6 +233,45 @@ func TestServer_HandleCall_Escalate(t *testing.T) {
 
 }
 
+func TestServer_HandleCall_Escalate_IncludesJWT(t *testing.T) {
+	// When a signer is configured, the 202 body must include both escalation_jti
+	// and escalation_jwt so Gate can build the approval URL without relying on the
+	// workflow_reference field.
+	pdp := &mockPDP{decision: "escalate", reason: "requires manager approval"}
+	signer, err := NewEscalationSigner(SigningConfig{Key: "test-signing-key-32bytes!!!!!!!!"})
+	if err != nil {
+		t.Fatalf("NewEscalationSigner: %v", err)
+	}
+
+	srv := &Server{
+		pdp:         pdp,
+		router:      &mockRouter{},
+		workflow:    &mockWorkflow{},
+		signer:      signer,
+		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
+		normalizer:  &passthroughNormalizer{silenced: true},
+	}
+
+	body, _ := json.Marshal(shared.EnrichedMCPRequest{ServerName: "s", ToolName: "t", TraceID: "r"})
+	req := httptest.NewRequest(http.MethodPost, "/call", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.handleCall(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+	var result map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if result["escalation_jti"] == "" {
+		t.Error("escalation_jti should be non-empty when signer is configured")
+	}
+	if result["escalation_jwt"] == "" {
+		t.Error("escalation_jwt should be non-empty when signer is configured")
+	}
+}
+
 func TestServer_HandleCall_PDPError(t *testing.T) {
 	pdp := &mockPDP{
 		err: shared.ErrPDPUnavailable,

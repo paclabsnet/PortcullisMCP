@@ -19,4 +19,4 @@
 //	go build -ldflags "-X github.com/paclabsnet/PortcullisMCP/internal/version.Version=x.y.z"
 package version
 
-var Version = "0.2.0"
+var Version = "0.2.1"

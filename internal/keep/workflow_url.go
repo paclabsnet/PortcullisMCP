@@ -17,7 +17,6 @@ package keep
 import (
 	"context"
 	"fmt"
-	"net/url"
 )
 
 // urlWorkflowHandler is the demo workflow plugin.
@@ -35,11 +34,11 @@ func newURLWorkflowHandler(cfg URLWorkflowConfig) (*urlWorkflowHandler, error) {
 	return &urlWorkflowHandler{guardURL: cfg.GuardURL}, nil
 }
 
-// Submit returns a Guard approval URL as the workflow reference.
-// The escalationJWT must be non-empty; if it is, the URL plugin cannot function.
-func (h *urlWorkflowHandler) Submit(_ context.Context, _ AuthorizedRequest, escalationJWT string) (string, error) {
-	if escalationJWT == "" {
-		return "", fmt.Errorf("url workflow: escalation JWT is required (configure keep.signing.key)")
-	}
-	return fmt.Sprintf("%s/approve?token=%s", h.guardURL, url.QueryEscape(escalationJWT)), nil
+// Submit returns an empty workflow reference. Gate is now responsible for
+// building the approval URL using the escalation_jti or escalation_jwt fields
+// from the 202 response, depending on its approval_management_strategy config.
+// The guard_url is retained in the config for future use (e.g. ServiceNow
+// redirect or display purposes) but is no longer embedded in a query string.
+func (h *urlWorkflowHandler) Submit(_ context.Context, _ AuthorizedRequest, _ string) (string, error) {
+	return "", nil
 }

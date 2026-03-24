@@ -27,6 +27,7 @@ type Config struct {
 	TokenStore     string                 `yaml:"token_store"`
 	DecisionLogs   DecisionLogBatchConfig `yaml:"decision_logs"`
 	Telemetry      telemetrycfg.Config    `yaml:"telemetry"`
+	Agent          AgentConfig            `yaml:"agent"`
 }
 
 type KeepConfig struct {
@@ -72,7 +73,21 @@ type DecisionLogBatchConfig struct {
 // If Endpoint is empty, the automatic token-claim flow is disabled and users must
 // add escalation tokens manually via the management API.
 type GuardConfig struct {
-	Endpoint     string `yaml:"endpoint"`      // e.g. "https://guard.internal.example.com"
-	BearerToken  string `yaml:"bearer_token"`  // for /token/unclaimed/list and /token/deposit
-	PollInterval int    `yaml:"poll_interval"` // seconds between polls of /token/unclaimed/list (default: 60)
+	Endpoint                   string `yaml:"endpoint"`                     // e.g. "https://guard.internal.example.com"
+	BearerToken                string `yaml:"bearer_token"`                 // for /token/unclaimed/list, /token/deposit, and /pending
+	PollInterval               int    `yaml:"poll_interval"`                // seconds between polls of /token/unclaimed/list (default: 60)
+	ApprovalManagementStrategy string `yaml:"approval_management_strategy"` // "proactive" | "user-driven" (default: "user-driven")
+}
+
+// AgentConfig holds settings that control how Gate communicates with the MCP agent.
+type AgentConfig struct {
+	Approval AgentApprovalConfig `yaml:"approval"`
+}
+
+// AgentApprovalConfig controls the message Gate returns to the agent when
+// escalation is required. Supports {reason} and {url} template placeholders.
+type AgentApprovalConfig struct {
+	// Instructions overrides the default escalation message shown to the agent.
+	// If empty, a built-in default is used.
+	Instructions string `yaml:"instructions"`
 }

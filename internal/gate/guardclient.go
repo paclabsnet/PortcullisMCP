@@ -89,6 +89,45 @@ func (g *GuardClient) ListUnclaimedTokens(ctx context.Context, userID string) ([
 	return tokens, nil
 }
 
+// RegisterPending pushes a Keep-signed pending escalation JWT to Guard so that
+// Guard can serve a short ?jti= approval URL rather than embedding the full JWT
+// in the query string. Guard validates the JWT signature on receipt to prevent
+// rogue Gate instances from registering arbitrary JWTs.
+// POST /pending  body: {"jti": "...", "jwt": "..."}
+// Requires bearer auth.
+func (g *GuardClient) RegisterPending(ctx context.Context, jti, jwt string) error {
+	u := g.endpoint + "/pending"
+
+	body, err := json.Marshal(map[string]string{"jti": jti, "jwt": jwt})
+	if err != nil {
+		return fmt.Errorf("marshal pending request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("build pending request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if g.bearerToken != "" {
+		req.Header.Set("Authorization", "Bearer "+g.bearerToken)
+	}
+
+	resp, err := g.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("register pending request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		var errBody struct {
+			Error string `json:"error"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&errBody)
+		return fmt.Errorf("guard register pending returned %d: %s", resp.StatusCode, errBody.Error)
+	}
+	return nil
+}
+
 // ClaimToken atomically removes the token identified by jti from Guard's
 // unclaimed list and returns its raw JWT. Returns an empty string (and no
 // error) when the token does not exist in the unclaimed list — this is the
