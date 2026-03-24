@@ -1707,6 +1707,11 @@ tests:
             },
             "resource":{
               "arguments": {
+                "equals":999,
+                "gt": 10,
+                "gte": 19,
+                "lt":30,
+                "lte":41,                
                 "range_val":1999
               }
             },
