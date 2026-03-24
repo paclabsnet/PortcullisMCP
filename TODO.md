@@ -19,6 +19,7 @@ Currently the reason field for the JWTs is echoing the problem. It should probab
 - perhaps some sort of LogSink interface with multiple destinations?
 - priority: medium
 
+
 ### Task: Fix Escalation URL (Short JTI URL via Gate→Guard JWT Push)
 - **Problem**: Keep embeds the full escalation request JWT in the approval URL (`?token=<jwt>`). The JWT is ~500 chars and AI clients (e.g. Claude Desktop) occasionally mangle it, producing invalid signatures.
 - **Fix**: Gate pushes the JWT directly to Guard via a new `POST /pending` endpoint; approval URL is shortened to `?jti=<uuid>` only.
@@ -33,6 +34,9 @@ Currently the reason field for the JWTs is echoing the problem. It should probab
   - `guard/server.go` — add `POST /pending` handler: validate JWT signature, store JWT keyed by JTI; update `handleGet` to accept `?jti=` (lookup stored JWT by JTI) in addition to or instead of `?token=`
 - **Default message template**: `"Escalation required: {reason}\n\nApprove at: {url}"`
 - priority: high
+- this should be configurable at Gate. some enterprises may prefer Keep generates the message and Gate just does what Keep tells it to. They might also prefer not to invoke Guard proactively. Also reasonable to expect that the agents will be better in the future about faithfully copying URLs, which reduces the need for this feature
+   - perhaps a configuration:  pending-token-strategy:  proactive  or user-driven  .   
+
 
 ### Task: System Authority Escalation
 - Enterprises will need both User-authority escalations (user approves in seconds via Guard) and System-authority escalations (ServiceNow/Jira/etc. approves over hours/days)
