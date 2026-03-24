@@ -176,7 +176,7 @@ trace_id := object.get(input, "trace_id", 0)
 
 
 
-escalation_grant_list := util.find_applicable_escalation_grants( context.escalation_tokens, action, data.config.escalation_secret)
+escalation_grant_list := util.find_applicable_escalation_grants( context.escalation_tokens, action, principal, data.config.escalation_secret)
 
 
 response_list contains { "decision":   "deny",	

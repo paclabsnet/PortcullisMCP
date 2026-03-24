@@ -173,7 +173,7 @@ has_group_membership( user_groups, allowed_groups) := true if {
 #
 # and return those
 #
-find_applicable_escalation_grants( escalation_tokens, action, jwt_secret ) := escalation_grant_list if {
+find_applicable_escalation_grants( escalation_tokens, action, user, jwt_secret ) := escalation_grant_list if {
 
 #   print("#DEBUG: find_applicable_escalation_grants: ", action)
 #   print("#DEBUG++: escalation_tokens: ", escalation_tokens)
@@ -185,6 +185,7 @@ find_applicable_escalation_grants( escalation_tokens, action, jwt_secret ) := es
             valid == true
             action.service in claims.portcullis.services
             action.tool_name in claims.portcullis.tools
+            user.user_id == claims.sub
       ]
 
    # print("#DEBUG++: found grants: ", escalation_grant_list)   

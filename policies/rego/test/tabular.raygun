@@ -942,7 +942,7 @@ tests:
 # secret: a-string-secret-at-least-256-bits-long
 #
 # {
-#  "sub": "1234567890",
+#  "sub": "alice@example.com",
 #  "name": "John Doe",
 #  "admin": true,
 #  "iat": 1516239022,
@@ -951,17 +951,16 @@ tests:
 #    "services":    ["portcullis-localfs"],
 #    "groups" :     ["developer"],
 #    "arg_restrictions": [
-#       { "type":"prefix", "key_path": "path", "data": "/var/log/whatever.log", "required":true }
+#       { "type":"prefix", "key_path": "path", "data": "/var/log/whatever.log" }
 #    ],
 #    "reason":      "Allow writing to /var/log"
 #     
 #  }
 # }
 #
-#
   - name: returns allow after escalation
     skip: false
-    description: checking that the escalation token provides the appropriate override
+    description: localfs - writefile - valid escalation token
     decision-path: /v1/data/portcullis/tabular/decision
     expects:
       - substring: '"decision":"allow"'
@@ -986,7 +985,7 @@ tests:
             },
             "context": {
               "escalation_tokens":[
-                  { "raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiYWRtaW4iOnRydWUsImlhdCI6MTUxNjIzOTAyMiwicG9ydGN1bGxpcyI6eyJ0b29scyI6WyJ3cml0ZV9maWxlIiwiZWRpdF9maWxlIl0sInNlcnZpY2VzIjpbInBvcnRjdWxsaXMtbG9jYWxmcyJdLCJncm91cHMiOlsiZGV2ZWxvcGVyIl0sImFyZ19yZXN0cmljdGlvbnMiOlt7InR5cGUiOiJwcmVmaXgiLCJrZXlfcGF0aCI6InBhdGgiLCJkYXRhIjoiL3Zhci9sb2cvd2hhdGV2ZXIubG9nIiwicmVxdWlyZWQiOnRydWV9XSwicmVhc29uIjoiQWxsb3cgd3JpdGluZyB0byAvdmFyL2xvZyJ9fQ.hPTYnOWOIy5andqOWhUJCQNumLwL22ypHwhG5Xd8bUg" }
+                  { "raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsIm5hbWUiOiJKb2huIERvZSIsImFkbWluIjp0cnVlLCJpYXQiOjE1MTYyMzkwMjIsInBvcnRjdWxsaXMiOnsidG9vbHMiOlsid3JpdGVfZmlsZSIsImVkaXRfZmlsZSJdLCJzZXJ2aWNlcyI6WyJwb3J0Y3VsbGlzLWxvY2FsZnMiXSwiZ3JvdXBzIjpbImRldmVsb3BlciJdLCJhcmdfcmVzdHJpY3Rpb25zIjpbeyJ0eXBlIjoicHJlZml4Iiwia2V5X3BhdGgiOiJwYXRoIiwiZGF0YSI6Ii92YXIvbG9nL3doYXRldmVyLmxvZyJ9XSwicmVhc29uIjoiQWxsb3cgd3JpdGluZyB0byAvdmFyL2xvZyJ9fQ.MjvpiBTVZPmwmVSpR4iSITt4hOTIPuLEfKN0ppejie0" }
               ]
             }
           },
@@ -1000,7 +999,38 @@ tests:
 
 
 
-
+#
+# there are two tokens. only one is valid
+#
+#  {
+#  "sub":"alice@example.com",
+#  "portcullis": {
+#    "tools": [
+#      "fetch"
+#    ],
+#    "services": [
+#      "fetch"
+#    ],
+#    "groups": [
+#      "developer"
+#    ],
+#    "arg_restrictions": [
+#      {
+#        "type": "prefix",
+#        "key_path": "host",
+#        "data": "competitor.com",
+#        "required": true
+#      },
+#      {
+#        "type": "prefix",
+#        "key_path": "path",
+#        "data": "/v1/products",
+#        "required": true
+#      }
+#    ]
+#  }
+# }
+#
   - name: fetch - returns allow - sketchy - escalation
     skip: false
     description:  validating a URL fetch request to a sketchy URL, but an escalation token exists
@@ -1039,7 +1069,8 @@ tests:
             },
             "context": {
                 "escalation_tokens": [
-                    {"raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJwb3J0Y3VsbGlzIjp7InRvb2xzIjpbImZldGNoIl0sInNlcnZpY2VzIjpbImZldGNoIl0sImdyb3VwcyI6WyJkZXZlbG9wZXIiXSwiYXJnX3Jlc3RyaWN0aW9ucyI6W3sidHlwZSI6InByZWZpeCIsImtleV9wYXRoIjoiaG9zdCIsImRhdGEiOiJjb21wZXRpdG9yLmNvbSIsInJlcXVpcmVkIjp0cnVlfSx7InR5cGUiOiJwcmVmaXgiLCJrZXlfcGF0aCI6InBhdGgiLCJkYXRhIjoiL3YxL3Byb2R1Y3RzIiwicmVxdWlyZWQiOnRydWV9XX19.Nt4BbzBywam-pmw65XS-M1Tvt0pIpz3YvM3joJVoJsk"}
+                    {"raw": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsInBvcnRjdWxsaXMiOnsidG9vbHMiOlsiZmV0Y2giXSwic2VydmljZXMiOlsiZmV0Y2giXSwiZ3JvdXBzIjpbImRldmVsb3BlciJdLCJhcmdfcmVzdHJpY3Rpb25zIjpbeyJ0eXBlIjoicHJlZml4Iiwia2V5X3BhdGgiOiJob3N0IiwiZGF0YSI6ImNvbXBldGl0b3IuY29tIiwicmVxdWlyZWQiOnRydWV9LHsidHlwZSI6InByZWZpeCIsImtleV9wYXRoIjoicGF0aCIsImRhdGEiOiIvdjEvcHJvZHVjdHMiLCJyZXF1aXJlZCI6dHJ1ZX1dfX0.M2wJB1sZgslKfTMdU47sUVeovcsQqz8vqPg7OggfURE"},
+                    {"raw": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJwb3J0Y3VsbGlzIjp7InRvb2xzIjpbImZldGNoIl0sInNlcnZpY2VzIjpbImZldGNoIl0sImdyb3VwcyI6WyJkZXZlbG9wZXIiXSwiYXJnX3Jlc3RyaWN0aW9ucyI6W3sidHlwZSI6InByZWZpeCIsImtleV9wYXRoIjoiaG9zdCIsImRhdGEiOiJjb21wZXRpdG9yLmNvbSIsInJlcXVpcmVkIjp0cnVlfSx7InR5cGUiOiJwcmVmaXgiLCJrZXlfcGF0aCI6InBhdGgiLCJkYXRhIjoiL3YxL3Byb2R1Y3RzIiwicmVxdWlyZWQiOnRydWV9XX19.Nt4BbzBywam-pmw65XS-M1Tvt0pIpz3YvM3joJVoJsk"}
                 ]
             }
           },
@@ -1050,13 +1081,30 @@ tests:
 
 
 # {
+#  "sub":"alice@example.com",
 #  "portcullis": {
-#    "tools":       ["fetch"],
-#    "services":    ["fetch"],
-#    "groups" :     ["developer"],
+#    "tools": [
+#      "fetch"
+#    ],
+#    "services": [
+#      "fetch"
+#    ],
+#    "groups": [
+#      "developer"
+#    ],
 #    "arg_restrictions": [
-#       { "type":"prefix", "key_path": "host", "data": "openpolicyAGENT.com", "required":true },
-#       { "type":"prefix", "key_path": "host", "data": "STYRA.com", "required":true }       
+#      {
+#        "type": "prefix",
+#        "key_path": "host",
+#        "data": "openpolicyAGENT.com",
+#        "required": true
+#      },
+#      {
+#        "type": "prefix",
+#        "key_path": "host",
+#        "data": "STYRA.com",
+#        "required": true
+#      }
 #    ]
 #  }
 # }
@@ -1098,7 +1146,8 @@ tests:
             },
             "context": {
                 "escalation_tokens": [
-                   {"raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJwb3J0Y3VsbGlzIjp7InRvb2xzIjpbImZldGNoIl0sInNlcnZpY2VzIjpbImZldGNoIl0sImdyb3VwcyI6WyJkZXZlbG9wZXIiXSwiYXJnX3Jlc3RyaWN0aW9ucyI6W3sidHlwZSI6InByZWZpeCIsImtleV9wYXRoIjoiaG9zdCIsImRhdGEiOiJvcGVucG9saWN5QUdFTlQuY29tIiwicmVxdWlyZWQiOnRydWV9LHsidHlwZSI6InByZWZpeCIsImtleV9wYXRoIjoiaG9zdCIsImRhdGEiOiJTVFlSQS5jb20iLCJyZXF1aXJlZCI6dHJ1ZX1dfX0.AjQp3zI_rPRvxNwqPGVeY8hE7MeUAxqjqrTHXSHtN0Y"}
+                   {"raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJwb3J0Y3VsbGlzIjp7InRvb2xzIjpbImZldGNoIl0sInNlcnZpY2VzIjpbImZldGNoIl0sImdyb3VwcyI6WyJkZXZlbG9wZXIiXSwiYXJnX3Jlc3RyaWN0aW9ucyI6W3sidHlwZSI6InByZWZpeCIsImtleV9wYXRoIjoiaG9zdCIsImRhdGEiOiJvcGVucG9saWN5QUdFTlQuY29tIiwicmVxdWlyZWQiOnRydWV9LHsidHlwZSI6InByZWZpeCIsImtleV9wYXRoIjoiaG9zdCIsImRhdGEiOiJTVFlSQS5jb20iLCJyZXF1aXJlZCI6dHJ1ZX1dfX0.AjQp3zI_rPRvxNwqPGVeY8hE7MeUAxqjqrTHXSHtN0Y"},
+                   {"raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsInBvcnRjdWxsaXMiOnsidG9vbHMiOlsiZmV0Y2giXSwic2VydmljZXMiOlsiZmV0Y2giXSwiZ3JvdXBzIjpbImRldmVsb3BlciJdLCJhcmdfcmVzdHJpY3Rpb25zIjpbeyJ0eXBlIjoicHJlZml4Iiwia2V5X3BhdGgiOiJob3N0IiwiZGF0YSI6Im9wZW5wb2xpY3lBR0VOVC5jb20iLCJyZXF1aXJlZCI6dHJ1ZX0seyJ0eXBlIjoicHJlZml4Iiwia2V5X3BhdGgiOiJob3N0IiwiZGF0YSI6IlNUWVJBLmNvbSIsInJlcXVpcmVkIjp0cnVlfV19fQ.ZnNpuN9ZqZuZnM3McmlYNIljyHDlndPs9rqz3GnLuyc"}
                 ]
             }
           },
@@ -1113,7 +1162,7 @@ tests:
 # secret: a-string-secret-at-least-256-bits-long
 #
 # {
-#  "sub": "1234567890",
+#  "sub": "alice@example.com",
 #  "name": "John Doe",
 #  "admin": true,
 #  "iat": 1516239022,
@@ -1122,7 +1171,7 @@ tests:
 #    "services":    ["portcullis-localfs"],
 #    "groups" :     ["developer"],
 #    "arg_restrictions": [
-#       { "type":"prefix", "key_path": "path", "data": "/var/log/whatever.log", "required":true }
+#       { "type":"prefix", "key_path": "path", "data": "/var/log/whatever.log" }
 #    ],
 #    "reason":      "Allow writing to /var/log"
 #     
@@ -1130,7 +1179,7 @@ tests:
 # }
 #
 #
-  - name: returns allow after escalation
+  - name: allow - localfs - write_file - after escalation
     skip: false
     description: checking that the escalation token provides the appropriate override
     decision-path: /v1/data/portcullis/tabular/decision
@@ -1157,7 +1206,7 @@ tests:
             },
             "context": {
               "escalation_tokens":[
-                  { "raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiYWRtaW4iOnRydWUsImlhdCI6MTUxNjIzOTAyMiwicG9ydGN1bGxpcyI6eyJ0b29scyI6WyJ3cml0ZV9maWxlIiwiZWRpdF9maWxlIl0sInNlcnZpY2VzIjpbInBvcnRjdWxsaXMtbG9jYWxmcyJdLCJncm91cHMiOlsiZGV2ZWxvcGVyIl0sImFyZ19yZXN0cmljdGlvbnMiOlt7InR5cGUiOiJwcmVmaXgiLCJrZXlfcGF0aCI6InBhdGgiLCJkYXRhIjoiL3Zhci9sb2cvd2hhdGV2ZXIubG9nIiwicmVxdWlyZWQiOnRydWV9XSwicmVhc29uIjoiQWxsb3cgd3JpdGluZyB0byAvdmFyL2xvZyJ9fQ.hPTYnOWOIy5andqOWhUJCQNumLwL22ypHwhG5Xd8bUg" }
+                  { "raw": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsIm5hbWUiOiJKb2huIERvZSIsImFkbWluIjp0cnVlLCJpYXQiOjE1MTYyMzkwMjIsInBvcnRjdWxsaXMiOnsidG9vbHMiOlsid3JpdGVfZmlsZSIsImVkaXRfZmlsZSJdLCJzZXJ2aWNlcyI6WyJwb3J0Y3VsbGlzLWxvY2FsZnMiXSwiZ3JvdXBzIjpbImRldmVsb3BlciJdLCJhcmdfcmVzdHJpY3Rpb25zIjpbeyJ0eXBlIjoicHJlZml4Iiwia2V5X3BhdGgiOiJwYXRoIiwiZGF0YSI6Ii92YXIvbG9nL3doYXRldmVyLmxvZyJ9XSwicmVhc29uIjoiQWxsb3cgd3JpdGluZyB0byAvdmFyL2xvZyJ9fQ.MjvpiBTVZPmwmVSpR4iSITt4hOTIPuLEfKN0ppejie0" }
               ]
             }
           },
@@ -1213,14 +1262,125 @@ tests:
           "trace_id": "req-def456"
         }
 
-
-
-  - name: fetch - returns escalation for https://www.styra.com/news
+#
+# two tokens, both invalid in different ways
+#
+# token 1:  right claim, wrong sub:
+# {
+#   "sub": "not_alice@example.com",
+#   "name": "John Doe",
+#   "admin": true,
+#   "iat": 1516239022,
+#   "portcullis": {
+#     "tools":       ["fetch_url", "edit_file"],
+#     "services":    ["fetch", "portcullis-localfs"],
+#     "groups" :     ["developer"],
+#     "arg_restrictions": [
+#        { "type":"prefix", "key_path": "host", "data": "api.styra.com"  }
+#     ],
+#     "reason":      "Allow calling styra api"
+#     
+#  }
+# }
+#
+# token 2: right sub, wrong claim
+#
+# {
+#   "sub": "alice@example.com",
+#   "name": "John Doe",
+#   "admin": true,
+#   "iat": 1516239022,
+#   "portcullis": {
+#     "tools":       ["fetch_url", "edit_file"],
+#     "services":    ["fetch", "portcullis-localfs"],
+#     "groups" :     ["developer"],
+#     "arg_restrictions": [
+#        { "type":"prefix", "key_path": "host", "data": "not_api.styra.com"  }
+#     ],
+#     "reason":      "Allow calling styra api"     
+#  }
+# }
+#
+  - name: fetch - returns escalation for https://api.styra.com/v1/data - with tokens
     skip: false
-    description:  validating a URL fetch request to a perfectly fine URL, but one that we have set up for escalation
+    description:  two tokens, one has the correct sub, but wrong content, the other has the right content, wrong sub
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"data":"api.styra.com"'
+      - substring: '"decision":"escalate"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {                
+            "action": {
+                "tool_name": "fetch_url",
+                "service" : "fetch"
+            },
+            "resource": {
+                "arguments": {
+                    "raw": "https://api.styra.com/v1/data",
+                    "scheme": "https",
+                    "host": "api.styra.com",
+                    "port": "",
+                    "path": "/v1/data",
+                    "query": ""
+                }
+            },
+            "principal": {
+                "user_id": "alice@example.com",
+                "email": "alice@example.com",
+                "display_name": "Alice Developer",
+                "groups": ["developer", "internal-api-users"],
+                "roles": ["api-consumer"],
+                "department": "engineering",
+                "auth_method": ["pwd", "mfa"],
+                "token_expiry": 1741651200,
+                "source_type": "oidc"
+            },
+            "context": {
+                "escalation_tokens": [
+                   {"raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJub3RfYWxpY2VAZXhhbXBsZS5jb20iLCJuYW1lIjoiSm9obiBEb2UiLCJhZG1pbiI6dHJ1ZSwiaWF0IjoxNTE2MjM5MDIyLCJwb3J0Y3VsbGlzIjp7InRvb2xzIjpbImZldGNoX3VybCIsImVkaXRfZmlsZSJdLCJzZXJ2aWNlcyI6WyJmZXRjaCIsInBvcnRjdWxsaXMtbG9jYWxmcyJdLCJncm91cHMiOlsiZGV2ZWxvcGVyIl0sImFyZ19yZXN0cmljdGlvbnMiOlt7InR5cGUiOiJwcmVmaXgiLCJrZXlfcGF0aCI6Imhvc3QiLCJkYXRhIjoiYXBpLnN0eXJhLmNvbSJ9XSwicmVhc29uIjoiQWxsb3cgY2FsbGluZyBzdHlyYSBhcGkifX0.Xbr3muopl3fQt7KtP_2HKCa2Bqd2nO4E0T9IxfngCWg"},
+                   {"raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsIm5hbWUiOiJKb2huIERvZSIsImFkbWluIjp0cnVlLCJpYXQiOjE1MTYyMzkwMjIsInBvcnRjdWxsaXMiOnsidG9vbHMiOlsiZmV0Y2hfdXJsIiwiZWRpdF9maWxlIl0sInNlcnZpY2VzIjpbImZldGNoIiwicG9ydGN1bGxpcy1sb2NhbGZzIl0sImdyb3VwcyI6WyJkZXZlbG9wZXIiXSwiYXJnX3Jlc3RyaWN0aW9ucyI6W3sidHlwZSI6InByZWZpeCIsImtleV9wYXRoIjoiaG9zdCIsImRhdGEiOiJub3RfYXBpLnN0eXJhLmNvbSJ9XSwicmVhc29uIjoiQWxsb3cgY2FsbGluZyBzdHlyYSBhcGkifX0.LIIF2cC-1Rc-VwL7lEO5sZlCNz4hdRiKQxR3nYL21tQ"}
+                ]
+            }
+          },
+          "session_id": "sess-abc123",
+          "trace_id": "req-def456"
+        }
+
+
+
+
+#
+# token contents:
+# {
+#  "iss": "portcullis-guard",
+#  "iat": 1773767336,
+#  "portcullis": {
+#    "arg_restrictions": [
+#      {
+#        "data": "www.styra.com",
+#        "key_path": "host",
+#        "type": "prefix"
+#      }
+#    ],
+#    "tools": [
+#      "fetch_url"
+#    ],
+#    "services": [
+#      "fetch"
+#    ]
+#  }
+# }
+#
+  - name: fetch - returns escalation because of incomplete token
+    skip: false
+    description:  this action requires escalation, we offer a token, but the token is missing the 'sub' claim
     decision-path: /v1/data/portcullis/tabular/decision
     expects:
       - substring: '"data":"www.styra.com"'
+      - substring: '"decision":"escalate"'
     input:
       type: inline
       value: >
@@ -1253,6 +1413,7 @@ tests:
             },
             "context": {
                 "escalation_tokens": [
+                  {"raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJwb3J0Y3VsbGlzLWd1YXJkIiwiaWF0IjoxNzczNzY3MzM2LCJwb3J0Y3VsbGlzIjp7ImFyZ19yZXN0cmljdGlvbnMiOlt7ImRhdGEiOiJ3d3cuc3R5cmEuY29tIiwia2V5X3BhdGgiOiJob3N0IiwidHlwZSI6InByZWZpeCJ9XSwidG9vbHMiOlsiZmV0Y2hfdXJsIl0sInNlcnZpY2VzIjpbImZldGNoIl19fQ.Y7gnf08ZcaxIxEwuy91FPP3E3fwKnsjdgLeECF2puyI"}
                 ]
             }
           },
@@ -1261,12 +1422,12 @@ tests:
         }
 
 
-
 #
 # token contents:
 # {
 #  "iss": "portcullis-guard",
 #  "iat": 1773767336,
+#  "sub": "alice@example.com",  <---- DIFFERENT!
 #  "portcullis": {
 #    "arg_restrictions": [
 #      {
@@ -1322,7 +1483,7 @@ tests:
             },
             "context": {
                 "escalation_tokens": [
-                  {"raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJwb3J0Y3VsbGlzLWd1YXJkIiwiaWF0IjoxNzczNzY3MzM2LCJwb3J0Y3VsbGlzIjp7ImFyZ19yZXN0cmljdGlvbnMiOlt7ImRhdGEiOiJ3d3cuc3R5cmEuY29tIiwia2V5X3BhdGgiOiJob3N0IiwidHlwZSI6InByZWZpeCJ9XSwidG9vbHMiOlsiZmV0Y2hfdXJsIl0sInNlcnZpY2VzIjpbImZldGNoIl19fQ.Y7gnf08ZcaxIxEwuy91FPP3E3fwKnsjdgLeECF2puyI"}
+                  {"raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJwb3J0Y3VsbGlzLWd1YXJkIiwiaWF0IjoxNzczNzY3MzM2LCJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsInBvcnRjdWxsaXMiOnsiYXJnX3Jlc3RyaWN0aW9ucyI6W3siZGF0YSI6Ind3dy5zdHlyYS5jb20iLCJrZXlfcGF0aCI6Imhvc3QiLCJ0eXBlIjoicHJlZml4In1dLCJ0b29scyI6WyJmZXRjaF91cmwiXSwic2VydmljZXMiOlsiZmV0Y2giXX19.xH9QEeRrGTitCFXF8JcpUPYRlZ4iQ0AyGlzBRN0ijFU"}
                 ]
             }
           },
