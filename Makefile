@@ -52,12 +52,12 @@ clean:
 
 # Start demo stack (OPA + Keep + Guard + mock backends) via docker compose
 demo-start:
-	@docker-compose -f deploy/docker-sandbox/docker-compose.yml up -d
+	@docker compose -f deploy/docker-sandbox/docker-compose.yml up -d --build
 	@echo "Demo stack running. Keep: http://localhost:8080  Guard: http://localhost:8444  OPA: http://localhost:8181"
 
 # Stop demo stack
 demo-stop:
-	@docker-compose -f deploy/docker-sandbox/docker-compose.yml down
+	@docker compose -f deploy/docker-sandbox/docker-compose.yml down
 
 # Run the mock enterprise API backend (development only)
 run-mock:

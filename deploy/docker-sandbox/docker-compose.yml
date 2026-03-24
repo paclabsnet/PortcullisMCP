@@ -23,7 +23,7 @@ services:
 
   keep:
     build:
-      context: ..
+      context: ../..
       dockerfile: deploy/docker-sandbox/Dockerfile
       target: keep
       args:
@@ -43,7 +43,7 @@ services:
 
   guard:
     build:
-      context: ..
+      context: ../..
       dockerfile: deploy/docker-sandbox/Dockerfile
       target: guard
       args:
@@ -61,7 +61,7 @@ services:
 
   mock-enterprise-api:
     build:
-      context: ..
+      context: ../..
       dockerfile: deploy/docker-sandbox/Dockerfile
       target: mock-enterprise-api
     container_name: portcullis-mock-enterprise-api
@@ -70,7 +70,7 @@ services:
 
   fetch-mcp:
     build:
-      context: ..
+      context: ../..
       dockerfile: deploy/docker-sandbox/Dockerfile
       target: fetch-mcp
     container_name: portcullis-fetch-mcp

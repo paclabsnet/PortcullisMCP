@@ -17,28 +17,42 @@
 - perhaps some sort of LogSink interface with multiple destinations?
 - priority: medium
 
+### Task: Fix Escalation URL (Short JTI URL via Gate→Guard JWT Push)
+- **Problem**: Keep embeds the full escalation request JWT in the approval URL (`?token=<jwt>`). The JWT is ~500 chars and AI clients (e.g. Claude Desktop) occasionally mangle it, producing invalid signatures.
+- **Fix**: Gate pushes the JWT directly to Guard via a new `POST /pending` endpoint; approval URL is shortened to `?jti=<uuid>` only.
+- **Security**: Guard must validate the JWT signature on receipt (using its existing `keepKey`) to prevent a rogue Gate instance from registering arbitrary JWTs and granting itself escalation tokens.
+- **Implementation scope**:
+  - `shared/types.go` — add `EscalationJWT string` to `EscalationPendingError`
+  - `keep/server.go` — add `escalation_jwt` (raw signed JWT) to 202 response body alongside `escalation_jti`; remove `workflow_reference` from 202 body (Gate builds the URL itself)
+  - `gate/forwarder.go` — decode `escalation_jwt` from 202 body and populate `EscalationPendingError.EscalationJWT`
+  - `gate/guardclient.go` — add `RegisterPending(ctx, jti, jwt string) error` calling new `POST /pending`
+  - `gate/config.go` — add `EscalationMessage string` to `GuardConfig` (configurable message template shown to agent)
+  - `gate/server.go` — on User-authority escalation: call `RegisterPending`; build short URL as `{guard.endpoint}/approve?jti={jti}`; format message using `EscalationMessage` template (or default)
+  - `guard/server.go` — add `POST /pending` handler: validate JWT signature, store JWT keyed by JTI; update `handleGet` to accept `?jti=` (lookup stored JWT by JTI) in addition to or instead of `?token=`
+- **Default message template**: `"Escalation required: {reason}\n\nApprove at: {url}"`
+- priority: high
+
+### Task: System Authority Escalation
+- Enterprises will need both User-authority escalations (user approves in seconds via Guard) and System-authority escalations (ServiceNow/Jira/etc. approves over hours/days)
+- The PDP determines the authority based on risk level, user role, and tool
+- **User authority**: Gate gets `escalation_jti` + `escalation_jwt`, pushes JWT to Guard, stores pending entry by JTI; retry path and 60s poll both apply
+- **System authority**: Gate gets workflow metadata only (reference URL, ticket ID, SLA, etc.), no JTI; presents metadata to agent via configurable message template; no pending entry stored; 60s poll is the only collection path (acceptable given approval latency)
+- When a System workflow approves, it calls Guard's `/token/deposit`; Gate picks up the resulting token on next poll
+- Implementation scope: `shared/types.go` (add `Authority`, `EscalationJWT`, `WorkflowMetadata` to `EscalationPendingError`), `keep/server.go` (add `authority` + `escalation_jwt` to 202 body), `gate/config.go` (add per-authority message templates), `gate/forwarder.go`, `gate/server.go` (split behavior by authority), `gate/guardclient.go` (add `RegisterPending`), `guard/server.go` (add `POST /pending`, change `handleGet` to `?jti=` lookup)
+- priority: medium
+
 ### Task: Acquire Human Credentials (at Gate)
-- Modify Gate to support a local token store
-- what about adding credentials to a keychain instead of a local file, and Gate pulls from the keychain? 
-  - Perhaps an option.
-- Device authorization grant  (see below in Implementation Details)
+- [x] Token file (Option B) — Gate reads `identity.oidc.token_file`; fails hard (no OS fallback) when source is "oidc" and token is missing or invalid; `~` is now expanded correctly on read
+- [ ] Keychain storage — optional future enhancement
+- [ ] Device authorization grant (RFC 8628) — fallback for when no token file exists; deferred until enterprise adoption confirmed (see Implementation Details below)
 - priority: medium-high
 
-### Task: Improve JWT security at the PDP
-- the PDP should not only verify that the JWTs are valid, but it should also only accept JWTs where the UserID from the Principal matches the Subject embedded in the JWT
-(owner: @johndbro1)
-note - this is for the individual escalation JWTs.  Part of the validation process
-- priority: medium
 
 ### Task: Fail closed for Gate if Keep is unavailable
 - this is not super important, since if Keep is down, no non-local MCP requests can occur
 - Basically, ensure that Gate indicates to the user that the Portcullis server is not available right now, try again later.
 - low priority
 
-### Task: at the PDP, Get rid of RequestId, use TraceID instead
-- this allows the trace to be included in the deny message
-(owner: @johndbro1)
-- low priority
 
 ### Task: Optionally Include the traceid in the Deny, Escalate and Workflow messages back to the user
 - purpose: allows a user to escalate to the enterprise security team if they aren't allowed to do something they think they should be able to
@@ -48,39 +62,8 @@ note - this is for the individual escalation JWTs.  Part of the validation proce
 - not sure if this is necessary. It might be helpful for troubleshooting
 - very low priority
 
-### Task: Tabular -> Custom failover
-- instead of Tabular and Custom being equivalent, perhaps we just use custom when the tabular rules don't come up with an answer
-- basically
-```
-decision := custom.decision if {
-   decision == undefined
-}
-```
-
-An interesting idea if it works. Will need to update the Rego to test.
-(owner: @johndbro1)
-
-This could be useful as a way to implement the 'workflow' option as an example
-
-priority: medium
 
 
-### Task: Update the implementation of the 'input eval ladder' 
-In rego, there's a better way to run an input through a variety of tests to see if one passes.
-- documented in policy_todo.txt
-
-priority: medium
-
-
-### Task: In addition to allow / deny / escalate , add workflow
-This will handle the scenario where the *user* is not authorized to do something (escalate is used when the *user*
-is authorized, but the *agent* is not)
-
-The big problem - we shouldn't do this automatically.  We should give the user the opportunity to make the request to the workflow system, asking for the additional privileges/authority.   
-
-Ideally: at Keep, we call the workflow provider, which returns some sort of URL we can send to Gate.  Gate can display this URL to the user, to give the User the chance to request the additional privileges/authority.  
-
-- priority: low (for now)
 
 ### Task: When PDP responds with Workflow, it can specify a provider?
 Discuss - right now, the PDP will just respond with 'workflow'.  Which is fine, but what if
@@ -115,16 +98,15 @@ i.e. instead of running as a stdio MCP, it can run as an autonomous local proces
 ### Task: 'Workflow' response from PDP
 In addition to 'allow', 'deny' and 'escalate', we will add 'workflow' as a viable response from the PDP.
 
-When the PDP responds with 'workflow', this means to invoke ServiceNow or some other tool to make the
-necessary approvals.
+When the PDP responds with 'workflow', this should tell Keep to invoke ServiceNow or some other tool to make the necessary approvals.
 
 Need more research:
-- does Keep send the same JWT to the workflow tool?  Or does it send the key elements of the JSON, and let
-  the workflow tool handle the details? Or is this something that is an implementation detail of the appropriate
-  workflow provider (YES)
-- it seems more secure to send a JWT, because that way there's evidence that the request was created properly
-  by the system flow.  But on the other hand, this requires the workflow tool to be able to process and 
-  validate JWTs
+- does Keep send the same JWT to the workflow tool?  Or does it send the key elements of
+  the JSON, and let the workflow tool handle the details? Or is this something that is an 
+  implementation detail of the appropriate workflow provider (YES)
+- it seems more secure to send a JWT, because that way there's evidence that the request
+  was created properly by the system flow.  But on the other hand, this requires the workflow 
+  tool to be able to process and  validate JWTs
 - perhaps this should be configurable?
 
 

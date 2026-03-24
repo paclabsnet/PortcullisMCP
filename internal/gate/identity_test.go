@@ -300,24 +300,33 @@ func TestIdentityCache_OIDCSource(t *testing.T) {
 	}
 }
 
-func TestIdentityCache_OIDCFallsBackToOS(t *testing.T) {
-	// OIDC source with a missing token file — should fall back to OS identity.
+func TestIdentityCache_OIDCFailsWithoutTokenFile(t *testing.T) {
+	// OIDC source with a missing token file — must return an error, not fall back to OS.
 	cfg := IdentityConfig{
 		Source: "oidc",
 		OIDC:   OIDCConfig{TokenFile: "/does/not/exist/token"},
 		UserID: "fallback@example.com",
 	}
-	cache, err := NewIdentityCache(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("NewIdentityCache should fall back to OS, got error: %v", err)
+	_, err := NewIdentityCache(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("expected error when OIDC token file is missing, got nil")
 	}
-	id := cache.Get(context.Background())
-	// Fell back to OS; UserID should be the override.
-	if id.UserID != "fallback@example.com" {
-		t.Errorf("UserID = %q, want fallback@example.com", id.UserID)
+}
+
+func TestIdentityCache_OIDCFailsWithEmptyTokenFile(t *testing.T) {
+	// OIDC source with an empty token file — must return an error.
+	dir := t.TempDir()
+	tokenFile := filepath.Join(dir, "oidc-token")
+	if err := os.WriteFile(tokenFile, []byte("   \n"), 0600); err != nil {
+		t.Fatal(err)
 	}
-	if id.SourceType != "os" {
-		t.Errorf("SourceType = %q, want os after fallback", id.SourceType)
+	cfg := IdentityConfig{
+		Source: "oidc",
+		OIDC:   OIDCConfig{TokenFile: tokenFile},
+	}
+	_, err := NewIdentityCache(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("expected error when OIDC token file is empty, got nil")
 	}
 }
 

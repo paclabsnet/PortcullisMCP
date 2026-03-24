@@ -235,6 +235,9 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 				escalationJWT = jwtStr
 				escalationJTI = jti
 			}
+		} else {
+			slog.WarnContext(ctx, "escalation signer not configured; escalation_jti will be empty and Gate cannot auto-claim the token",
+				"tool", req.ToolName, "user", req.Principal.UserID, "trace_id", traceID)
 		}
 		wfRef, err := s.workflow.Submit(ctx, req, escalationJWT)
 		if err != nil {
@@ -243,6 +246,14 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "failed to submit escalation")
 			return
 		}
+		slog.InfoContext(ctx, "escalation pending",
+			"tool", req.ToolName,
+			"server", req.ServerName,
+			"user", req.Principal.UserID,
+			"escalation_jti", escalationJTI,
+			"workflow_reference", wfRef,
+			"trace_id", traceID,
+		)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(w).Encode(map[string]string{
@@ -339,6 +350,9 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 				escalationJWT = jwtStr
 				escalationJTI = jti
 			}
+		} else {
+			slog.WarnContext(ctx, "escalation signer not configured; escalation_jti will be empty and Gate cannot auto-claim the token",
+				"tool", req.ToolName, "user", req.Principal.UserID, "trace_id", traceID)
 		}
 		wfRef, err := s.workflow.Submit(ctx, req, escalationJWT)
 		if err != nil {
@@ -347,6 +361,14 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "failed to submit escalation")
 			return
 		}
+		slog.InfoContext(ctx, "escalation pending",
+			"tool", req.ToolName,
+			"server", req.ServerName,
+			"user", req.Principal.UserID,
+			"escalation_jti", escalationJTI,
+			"workflow_reference", wfRef,
+			"trace_id", traceID,
+		)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(w).Encode(map[string]string{

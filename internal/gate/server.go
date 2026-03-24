@@ -187,8 +187,20 @@ func (g *Gate) Run(ctx context.Context) error {
 	// Start the Guard poll worker if a Guard endpoint is configured.
 	// This discovers tokens approved via remote workflows (e.g. ServiceNow)
 	// that Gate would not otherwise learn about until the next tool call.
+	// The first poll runs immediately so tokens approved before Gate started
+	// (or while Gate was restarting) are claimed without waiting 60 seconds.
 	if g.guardClient != nil {
-		go g.pollGuardWorker(ctx)
+		interval := 60 * time.Second
+		if g.cfg.Guard.PollInterval > 0 {
+			interval = time.Duration(g.cfg.Guard.PollInterval) * time.Second
+		}
+		slog.Info("guard poll worker starting", "endpoint", g.cfg.Guard.Endpoint, "interval", interval)
+		go func() {
+			g.claimAllUnclaimedTokens(ctx)
+			g.pollGuardWorker(ctx)
+		}()
+	} else {
+		slog.Warn("guard endpoint not configured; escalation tokens must be added manually")
 	}
 
 	// Shutdown decision log worker on context cancellation
@@ -478,6 +490,7 @@ func (g *Gate) claimAllUnclaimedTokens(ctx context.Context) {
 		slog.Warn("poll guard unclaimed tokens failed", "error", err)
 		return
 	}
+	slog.Info("polled guard for unclaimed tokens", "user_id", userID, "count", len(unclaimed))
 	if len(unclaimed) == 0 {
 		return
 	}
@@ -492,6 +505,7 @@ func (g *Gate) claimAllUnclaimedTokens(ctx context.Context) {
 			continue
 		}
 		if raw == "" {
+			slog.Warn("guard poll: token listed as unclaimed but claim returned empty (already claimed or race)", "jti", entry.JTI)
 			continue
 		}
 

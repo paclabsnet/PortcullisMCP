@@ -23,14 +23,28 @@
 # Any MCP-compatible agent that supports stdio transport uses the same pattern:
 # command = portcullis-gate, args = [-config, /path/to/gate.yaml]
 
+#
+# THIS IS THE OIDC TOKEN variant, using mock-idp.dev as the issuer.  You will need to do the following:
+# 1) create your own static JWT at https://mock-idp.dev   (free!)  OR copy the one in docs/demo-oidc-token.md
+# 2) put this token in ~/.portcullis/oidc-token      (by default, you can configure below)
+# 3) make sure that you use the oidc version of the Portcullis-Keep config as well
+#
+#
+
 keep:
   endpoint: "http://localhost:8080"
   auth:
     type: "bearer"
     token: "dev-secret-token"   # must match keep's bearer_token setting
 
+
+
 identity:
-  source: "os"                  # uses your OS login; switch to "oidc" in production
+  source: "oidc"                # oidc token issued by mock-idp.dev
+  oidc:
+    token_file: ~/.portcullis/oidc-token        # change this if you like
+
+
 
 # Guard endpoint for automatic escalation token collection.
 # When configured, Gate will automatically claim tokens approved via the Guard
