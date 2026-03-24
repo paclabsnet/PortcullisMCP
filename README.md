@@ -26,6 +26,20 @@ Agent <--> portcullis-gate <--> portcullis-keep <--> PDP (OPA or custom)
 
 ## Quick Start
 
+### Prerequisites
+
+- **Go 1.24+**
+- **Docker** (optional, for full demo stack)
+- **Make** (standard on Linux/Mac; see below for Windows)
+
+#### Installing Make on Windows
+If you don't have `make` installed, the easiest way is via a package manager:
+- **Winget (Built-in):** `winget install ezwinports.make`
+- **Chocolatey:** `choco install make`
+- **Scoop:** `scoop install make`
+
+Alternatively, if you have **Git for Windows** installed, you can use `mingw32-make` (you may want to alias it to `make`).
+
 ### Minimal (no Docker, no OPA)
 
 This path runs Keep with the `noop` PDP, which allows all requests. Useful for understanding the flow before adding policy enforcement.

@@ -4,9 +4,6 @@
 You can visit mock-idp.dev to mint your own OIDC token for testing purposes. You have to update the configuration for Portcullis-Gate and Portcullis-Keep to trust that issuer, which
 will soon be set up in the docker example.
 
-@TODO: set up demo keep.yaml and gate.yaml to trust mock-idp.dev
-
-
 
 ```json
 {

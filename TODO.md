@@ -2,6 +2,8 @@
 
 ## Tasks
 
+### Task: Update 'Reason' when creating escalation tokens
+Currently the reason field for the JWTs is echoing the problem. It should probably be more like reason: "User <X> has approved a temporary escalation of privileges for the Agent" or something like that.
 
 
 ### Task: Improve API
