@@ -1886,3 +1886,139 @@ tests:
           "session_id": "0",
           "trace_id": "0"
         }
+
+
+
+
+
+
+  - name: mock-enterprise-api - update_customer - returns escalate
+    skip: false
+    description: the user is not an admin
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"escalate"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {
+            "action":{
+              "service": "mock-enterprise-api",
+              "tool_name": "update_customer"
+            },
+            "resource":{
+              "arguments" : {
+                  "customer_id":3000
+              }
+            },
+            "principal": {
+              "user_id": "alice@example.com",
+              "display_name": "Alice Developer",
+              "groups": ["developer", "NOT_admin"]
+            },
+            "context": {
+              "escalation_tokens":[
+              ]
+            }
+          },
+          "session_id": "tbd123",
+          "trace_id": "req-abc123"
+        }
+
+
+
+  - name: mock-enterprise-api - update_customer - returns escalate
+    skip: false
+    description: the user is not an admin
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"escalate"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {
+            "action":{
+              "service": "mock-enterprise-api",
+              "tool_name": "update_customer"
+            },
+            "resource":{
+              "arguments" : {
+                  "customer_id":3000
+              }
+            },
+            "principal": {
+              "user_id": "alice@example.com",
+              "display_name": "Alice Developer",
+              "groups": ["developer", "NOT_admin"]
+            },
+            "context": {
+              "escalation_tokens":[
+                {"raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJwb3J0Y3VsbGlzLWd1YXJkIiwiaWF0IjoxNzczNzY3MzM2LCJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsInBvcnRjdWxsaXMiOnsiYXJnX3Jlc3RyaWN0aW9ucyI6W3siZGF0YSI6MzAwMCwia2V5X3BhdGgiOiJjdXN0b21lcl9pZCIsInR5cGUiOiJndGUifV0sInRvb2xzIjpbInVwZGF0ZV9jdXN0b21lciJdLCJzZXJ2aWNlcyI6WyJtb2NrLWVudGVycHJpc2UtYXBpIl19fQ.cZgIg06BR-VhVOvaufyr4UPqCwdZtmsYfvQdACo-OwU"}
+              ]
+            }
+          },
+          "session_id": "tbd123",
+          "trace_id": "req-abc123_gte_3000"
+        }
+
+
+
+
+# {
+#   "iss": "portcullis-guard",
+#   "iat": 1773767336,
+#   "sub": "alice@example.com",
+#   "portcullis": {
+#     "arg_restrictions": [
+#       {
+#         "data": 3000,
+#         "key_path": "customer_id",
+#         "type": "gte"
+#       }
+#     ],
+#     "tools": [
+#       "update_customer"
+#     ],
+#     "services": [
+#      "mock-enterprise-api"
+#     ]
+#   }
+# }
+  - name: mock-enterprise-api - update_customer - returns allow with e-token
+    skip: false
+    description: the user is not an admin
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"allow"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {
+            "action":{
+              "service": "mock-enterprise-api",
+              "tool_name": "update_customer"
+            },
+            "resource":{
+              "arguments" : {
+                  "customer_id":3000
+              }
+            },
+            "principal": {
+              "user_id": "alice@example.com",
+              "display_name": "Alice Developer",
+              "groups": ["developer", "NOT_admin"]
+            },
+            "context": {
+              "NOTE":"One of these tokens was signed with the wrong key, leaving it here to exercise the filter",
+              "escalation_tokens":[
+                {"raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJwb3J0Y3VsbGlzLWd1YXJkIiwiaWF0IjoxNzczNzY3MzM2LCJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsInBvcnRjdWxsaXMiOnsiYXJnX3Jlc3RyaWN0aW9ucyI6W3siZGF0YSI6MzAwMCwia2V5X3BhdGgiOiJjdXN0b21lcl9pZCIsInR5cGUiOiJndGUifV0sInRvb2xzIjpbInVwZGF0ZV9jdXN0b21lciJdLCJzZXJ2aWNlcyI6WyJtb2NrLWVudGVycHJpc2UtYXBpIl19fQ._5RxZGRdlhb-qe8pvuss8yCVrBHF3d_-4r3zsEsYV4s"},
+                {"raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJwb3J0Y3VsbGlzLWd1YXJkIiwiaWF0IjoxNzczNzY3MzM2LCJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsInBvcnRjdWxsaXMiOnsiYXJnX3Jlc3RyaWN0aW9ucyI6W3siZGF0YSI6MzAwMCwia2V5X3BhdGgiOiJjdXN0b21lcl9pZCIsInR5cGUiOiJndGUifV0sInRvb2xzIjpbInVwZGF0ZV9jdXN0b21lciJdLCJzZXJ2aWNlcyI6WyJtb2NrLWVudGVycHJpc2UtYXBpIl19fQ.cZgIg06BR-VhVOvaufyr4UPqCwdZtmsYfvQdACo-OwU"}
+              ]
+            }
+          },
+          "session_id": "tbd123",
+          "trace_id": "req-abc123_gte_3000"
+        }

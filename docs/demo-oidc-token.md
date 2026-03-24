@@ -1,8 +1,7 @@
 
 # OIDC
 
-You can visit mock-idp.dev to mint your own OIDC token for testing purposes. You have to update the configuration for Portcullis-Gate and Portcullis-Keep to trust that issuer, which
-will soon be set up in the docker example.
+You can visit mock-idp.dev to mint your own OIDC token for testing purposes. You have to update the configuration for Portcullis-Gate and Portcullis-Keep to trust that issuer. gate-config.minimal-oidc.yaml and keep-config.minimal-oidc.yaml do exactly this.
 
 
 ```json

@@ -181,7 +181,7 @@ find_applicable_escalation_grants( escalation_tokens, action, user, jwt_secret )
    escalation_grant_list := [ claims |
       some token in escalation_tokens
          [valid, _, claims ] := io.jwt.decode_verify(token.raw, {"secret": jwt_secret, "time": time.now_ns()})
-            # print("#DEBUG++: valid, ", valid, ", claims: ",claims)
+            print("#DEBUG++: valid, ", valid, ", claims: ",claims)
             valid == true
             action.service in claims.portcullis.services
             action.tool_name in claims.portcullis.tools

@@ -149,18 +149,9 @@
 				}, 
                                 "escalate": {
                                         "arg_restrictions" :[
-                                                { "type":"prefix","key_path":"customer_id", "data":"1"},
-                                                { "type":"prefix","key_path":"customer_id", "data":"2"},
-                                                { "type":"prefix","key_path":"customer_id", "data":"3"},
-                                                { "type":"prefix","key_path":"customer_id", "data":"4"},
-                                                { "type":"prefix","key_path":"customer_id", "data":"5"},
-                                                { "type":"prefix","key_path":"customer_id", "data":"6"},
-                                                { "type":"prefix","key_path":"customer_id", "data":"7"},
-                                                { "type":"prefix","key_path":"customer_id", "data":"8"},
-                                                { "type":"prefix","key_path":"customer_id", "data":"9"}
+                                                { "type":"gte","key_path":"customer_id", "data":0 }
                                         ]
                                 }
-
                         },
 			"query_order": {
 				"allow" : {

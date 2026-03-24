@@ -83,6 +83,9 @@ make build && make install && make demo-start
 ```
 
 #### Windows, Not familiar with golang
+
+The instructions for installing make on Windows are included in the Quickstart instructions above.
+
 `make build`
 
 find portcullis-gate.exe
@@ -112,7 +115,7 @@ Configure Gate as above, then try these prompts with your agent:
 "Please use portcullis to update the name of customer <id> to Arbitrary Name"
 ```
 
-The last request should trigger an escalation. The agent will surface a link. Click it, review the request in Guard, and approve it.
+The last request should trigger an escalation. The agent will present a link to you (the user). Click it, review the request in Guard. It should be a request to allow the update_customer tool to update the customer you  and approve it.
 Then ask the agent to try again — this time it should succeed.
 
 ```sh
