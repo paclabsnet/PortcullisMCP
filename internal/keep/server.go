@@ -246,6 +246,16 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "failed to submit escalation")
 			return
 		}
+		// If neither the signed JWT nor a workflow reference was produced, the
+		// escalation cannot be actioned by Gate or the user. Failing here is
+		// better than returning a 202 that looks successful but leads nowhere.
+		if escalationJWT == "" && wfRef == "" {
+			span.SetStatus(codes.Error, "escalation misconfigured")
+			slog.ErrorContext(ctx, "escalation required but no approval mechanism available — configure escalation_request_signing.key",
+				"tool", req.ToolName, "user", req.Principal.UserID, "trace_id", traceID)
+			writeError(w, http.StatusInternalServerError, "escalation required but no approval mechanism is available — check server configuration")
+			return
+		}
 		slog.InfoContext(ctx, "escalation pending",
 			"tool", req.ToolName,
 			"server", req.ServerName,
@@ -360,6 +370,16 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 			span.SetStatus(codes.Error, err.Error())
 			slog.ErrorContext(ctx, "workflow submit failed", "error", err, "trace_id", traceID)
 			writeError(w, http.StatusInternalServerError, "failed to submit escalation")
+			return
+		}
+		// If neither the signed JWT nor a workflow reference was produced, the
+		// escalation cannot be actioned by Gate or the user. Failing here is
+		// better than returning a 202 that looks successful but leads nowhere.
+		if escalationJWT == "" && wfRef == "" {
+			span.SetStatus(codes.Error, "escalation misconfigured")
+			slog.ErrorContext(ctx, "escalation required but no approval mechanism available — configure escalation_request_signing.key",
+				"tool", req.ToolName, "user", req.Principal.UserID, "trace_id", traceID)
+			writeError(w, http.StatusInternalServerError, "escalation required but no approval mechanism is available — check server configuration")
 			return
 		}
 		slog.InfoContext(ctx, "escalation pending",

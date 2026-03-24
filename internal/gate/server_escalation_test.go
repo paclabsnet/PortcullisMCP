@@ -160,6 +160,27 @@ func TestBuildEscalationMessage_NoGuardEndpoint(t *testing.T) {
 	}
 }
 
+func TestBuildEscalationMessage_NoURL_MisconfiguredMessage(t *testing.T) {
+	// When no URL can be constructed from any source, the message should
+	// indicate misconfiguration rather than presenting a broken empty URL.
+	g := newGateForEscalationTests(GuardConfig{Endpoint: "http://guard.example.com"})
+	e := &shared.EscalationPendingError{
+		Reason: "needs approval",
+		// EscalationJTI, EscalationJWT, and Reference all empty
+	}
+	msg := g.buildEscalationMessage(e)
+
+	if strings.Contains(msg, "Do not truncate") {
+		t.Errorf("should not show URL instructions when no URL available; got: %s", msg)
+	}
+	if !strings.Contains(msg, "needs approval") {
+		t.Errorf("message should still contain reason; got: %s", msg)
+	}
+	if !strings.Contains(msg, "misconfigured") {
+		t.Errorf("message should indicate misconfiguration; got: %s", msg)
+	}
+}
+
 func TestBuildEscalationMessage_DefaultInstructions(t *testing.T) {
 	// When no custom instructions are configured, the default template is used.
 	g := newGateForEscalationTests(GuardConfig{Endpoint: "http://guard.example.com"})

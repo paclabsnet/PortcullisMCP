@@ -14,7 +14,11 @@
 
 package gate
 
-import telemetrycfg "github.com/paclabsnet/PortcullisMCP/internal/telemetry"
+import (
+	"fmt"
+
+	telemetrycfg "github.com/paclabsnet/PortcullisMCP/internal/telemetry"
+)
 
 // Config holds the full portcullis-gate configuration loaded from gate.yaml.
 type Config struct {
@@ -77,6 +81,17 @@ type GuardConfig struct {
 	BearerToken                string `yaml:"bearer_token"`                 // for /token/unclaimed/list, /token/deposit, and /pending
 	PollInterval               int    `yaml:"poll_interval"`                // seconds between polls of /token/unclaimed/list (default: 60)
 	ApprovalManagementStrategy string `yaml:"approval_management_strategy"` // "proactive" | "user-driven" (default: "user-driven")
+}
+
+// Validate returns an error if the configuration contains invalid values.
+func (c Config) Validate() error {
+	switch c.Guard.ApprovalManagementStrategy {
+	case "", "user-driven", "proactive":
+		// valid
+	default:
+		return fmt.Errorf("invalid approval_management_strategy %q: must be \"user-driven\" or \"proactive\"", c.Guard.ApprovalManagementStrategy)
+	}
+	return nil
 }
 
 // AgentConfig holds settings that control how Gate communicates with the MCP agent.

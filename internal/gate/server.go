@@ -125,6 +125,10 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 		guardClient = NewGuardClient(cfg.Guard)
 	}
 
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+
 	g := &Gate{
 		cfg:                cfg,
 		identity:           identity,
@@ -499,6 +503,20 @@ func (g *Gate) buildEscalationMessage(e *shared.EscalationPendingError) string {
 	// Fall back to any reference URL Keep provided directly (e.g. ServiceNow ticket URL).
 	if approvalURL == "" && e.Reference != "" {
 		approvalURL = e.Reference
+	}
+
+	// If no URL could be constructed from any source, the escalation cannot be
+	// actioned. Return a clear message rather than a broken template with an
+	// empty {url} substitution. This is a defensive fallback — Keep should have
+	// already returned 500 in this situation.
+	if approvalURL == "" {
+		slog.Warn("escalation required but no approval URL available — check Keep escalation_request_signing configuration",
+			"reason", e.Reason)
+		msg := "Escalation required: " + e.Reason
+		if msg != "" {
+			msg += "\n\nNo approval URL is available. The escalation system may be misconfigured — please contact your administrator."
+		}
+		return msg
 	}
 
 	instructions := g.cfg.Agent.Approval.Instructions

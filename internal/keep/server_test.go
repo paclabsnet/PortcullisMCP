@@ -233,6 +233,53 @@ func TestServer_HandleCall_Escalate(t *testing.T) {
 
 }
 
+func TestServer_HandleCall_Escalate_NoSignerNoWorkflowRef_Returns500(t *testing.T) {
+	// When the signer is not configured AND the workflow handler returns no
+	// reference (as the URL handler does now), Keep must return 500 rather than
+	// a 202 that Gate and the user cannot act on.
+	pdp := &mockPDP{decision: "escalate", reason: "needs approval"}
+	srv := &Server{
+		pdp:         pdp,
+		router:      &mockRouter{},
+		workflow:    &mockWorkflow{requestID: ""}, // returns empty reference
+		// signer intentionally nil
+		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
+		normalizer:  &passthroughNormalizer{silenced: true},
+	}
+
+	body, _ := json.Marshal(shared.EnrichedMCPRequest{ServerName: "s", ToolName: "t", TraceID: "r"})
+	req := httptest.NewRequest(http.MethodPost, "/call", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.handleCall(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500; body: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestServer_HandleCall_Escalate_NoSignerWithWorkflowRef_Returns202(t *testing.T) {
+	// When the signer is not configured but the workflow handler produces a
+	// reference (e.g. a ServiceNow ticket URL), the 202 is still actionable.
+	pdp := &mockPDP{decision: "escalate", reason: "needs approval"}
+	srv := &Server{
+		pdp:         pdp,
+		router:      &mockRouter{},
+		workflow:    &mockWorkflow{requestID: "https://servicenow.example.com/INC123"},
+		// signer intentionally nil
+		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
+		normalizer:  &passthroughNormalizer{silenced: true},
+	}
+
+	body, _ := json.Marshal(shared.EnrichedMCPRequest{ServerName: "s", ToolName: "t", TraceID: "r"})
+	req := httptest.NewRequest(http.MethodPost, "/call", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.handleCall(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Errorf("status = %d, want 202; body: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestServer_HandleCall_Escalate_IncludesJWT(t *testing.T) {
 	// When a signer is configured, the 202 body must include both escalation_jti
 	// and escalation_jwt so Gate can build the approval URL without relying on the
