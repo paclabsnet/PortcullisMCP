@@ -20,7 +20,7 @@ Currently the reason field for the JWTs is echoing the problem. It should probab
 - priority: medium
 
 
-### Task: Fix Escalation URL (Short JTI URL via Gate→Guard JWT Push)
+### Task: Simplify Escalation URL (Short JTI URL via Gate→Guard JWT Push)
 - **Problem**: Keep embeds the full escalation request JWT in the approval URL (`?token=<jwt>`). The JWT is ~500 chars and AI clients (e.g. Claude Desktop) occasionally mangle it, producing invalid signatures.
 - **Fix**: Gate pushes the JWT directly to Guard via a new `POST /pending` endpoint; approval URL is shortened to `?jti=<uuid>` only.
 - **Security**: Guard must validate the JWT signature on receipt (using its existing `keepKey`) to prevent a rogue Gate instance from registering arbitrary JWTs and granting itself escalation tokens.
