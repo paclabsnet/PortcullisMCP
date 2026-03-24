@@ -1,0 +1,49 @@
+listen:
+  address: "127.0.0.1:8080"
+  # TLS disabled for local testing - uncomment to enable
+  # tls:
+  #   cert: "/etc/portcullis/keep.crt"
+  #   key:  "/etc/portcullis/keep.key"
+  #   client_ca: "/etc/portcullis/client-ca.crt"
+  auth:
+    bearer_token: "dev-secret-token"  # shared secret for local testing
+
+pdp:
+  # type: "noop" allows all requests without a policy engine - useful for getting started.
+  # Switch to type: "opa" with a real endpoint for any real deployment.
+  type: "noop"
+  # endpoint: "http://localhost:8181/v1/data/portcullis/decision"
+
+# oidc demo version, using a mock iDp for testing purposes.  visit https://mock-idp.dev 
+# if you want to create new tokens 
+identity:
+  normalizer: "oidc-verify"
+  oidc_verify:
+    issuer: "https://mock-idp.dev"             # Must match the 'iss' claim in your token
+    jwks_url: "https://mock-idp.dev/jwt/.well-known/jwks.json" # URL where Keep fetches public keys
+    audiences: ["portcullis-mcp"]              # Optional: must match the 'aud' claim  
+
+backends:
+  # HTTP MCP backend for demo - run the mock server with:
+  #   go run ./examples/mock-enterprise-api
+  mock-enterprise-api:
+    type: "http"
+    url: "http://localhost:3000/mcp"
+    allow_private_addresses: true  # localhost is loopback; fine for local dev
+
+escalation:
+  workflow:
+    type: "url"
+    url:
+      guard_url: "http://localhost:8444"
+
+escalation_request_signing:
+  key: "dev-keep-signing-secret"   # must match guard's keep.escalation_request_signing_key; use ${ENV_VAR} in production
+  ttl: 3600
+
+decision_logs:
+  enabled: true
+  console: true  # Log to console for development
+  buffer_size: 100
+  flush_interval: 5
+  max_batch_size: 50

@@ -69,7 +69,7 @@ func (c *IdentityCache) Get(ctx context.Context) shared.UserIdentity {
 		return c.identity
 	}
 	if err := c.refresh(ctx); err != nil {
-		slog.Warn("identity refresh failed, using cached identity", "error", err)
+		slog.Warn("identity refresh failed, using last known identity", "error", err)
 		c.refreshAt = time.Now().Add(10 * time.Second) // back off to avoid log spam
 	}
 	return c.identity
@@ -135,25 +135,30 @@ func (c *IdentityCache) refresh(ctx context.Context) error {
 
 // resolveIdentityWithExpiry resolves the identity and returns the JWT expiry
 // time (zero if not OIDC or exp claim absent).
+//
+// When source is "oidc", the token file must exist and contain a valid JWT.
+// If it does not, an error is returned — there is no fallback to OS identity.
+// This ensures that an enterprise deployment that requires OIDC credentials
+// cannot silently degrade to a weaker identity source.
 func resolveIdentityWithExpiry(ctx context.Context, cfg IdentityConfig) (shared.UserIdentity, time.Time, error) {
 	if cfg.Source == "oidc" {
-		raw, err := os.ReadFile(cfg.OIDC.TokenFile)
-		if err == nil {
-			token := strings.TrimSpace(string(raw))
-			if token != "" {
-				id, expiry, err := identityFromJWT(token)
-				if err == nil {
-					return id, expiry, nil
-				}
-				slog.Warn("OIDC identity resolution failed; falling back to OS identity — policy enforcement may be weaker",
-					"error", err)
-			} else {
-				slog.Warn("OIDC token file is empty; falling back to OS identity — policy enforcement may be weaker")
-			}
-		} else {
-			slog.Warn("OIDC identity resolution failed; falling back to OS identity — policy enforcement may be weaker",
-				"error", err)
+		tokenFile, err := expandHome(cfg.OIDC.TokenFile)
+		if err != nil {
+			return shared.UserIdentity{}, time.Time{}, fmt.Errorf("expand oidc token file path: %w", err)
 		}
+		raw, err := os.ReadFile(tokenFile)
+		if err != nil {
+			return shared.UserIdentity{}, time.Time{}, fmt.Errorf("read oidc token file %q: %w", tokenFile, err)
+		}
+		token := strings.TrimSpace(string(raw))
+		if token == "" {
+			return shared.UserIdentity{}, time.Time{}, fmt.Errorf("oidc token file %q is empty", tokenFile)
+		}
+		id, expiry, err := identityFromJWT(token)
+		if err != nil {
+			return shared.UserIdentity{}, time.Time{}, fmt.Errorf("parse oidc token from %q: %w", tokenFile, err)
+		}
+		return id, expiry, nil
 	}
 	id, err := resolveOSIdentity(cfg)
 	return id, time.Time{}, err

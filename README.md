@@ -26,6 +26,20 @@ Agent <--> portcullis-gate <--> portcullis-keep <--> PDP (OPA or custom)
 
 ## Quick Start
 
+### Prerequisites
+
+- **Go 1.24+**
+- **Docker** (optional, for full demo stack)
+- **Make** (standard on Linux/Mac; see below for Windows)
+
+#### Installing Make on Windows
+If you don't have `make` installed, the easiest way is via a package manager:
+- **Winget (Built-in):** `winget install ezwinports.make`
+- **Chocolatey:** `choco install make`
+- **Scoop:** `scoop install make`
+
+Alternatively, if you have **Git for Windows** installed, you can use `mingw32-make` (you may want to alias it to `make`).
+
 ### Minimal (no Docker, no OPA)
 
 This path runs Keep with the `noop` PDP, which allows all requests. Useful for understanding the flow before adding policy enforcement.
@@ -61,11 +75,28 @@ This path runs the complete stack: OPA with a sample policy, Keep, Guard, and tw
 
 **Prerequisites:** Go 1.24+, Docker
 
+To build the binaries and start the demo:
+
+#### Linux / Mac / Unix / Windows (familiar with golang)
 ```sh
-# Build binaries and start the demo stack
-make build && make demo-start
+make build && make install && make demo-start
 ```
 
+#### Windows, Not familiar with golang
+
+The instructions for installing make on Windows are included in the Quickstart instructions above.
+
+`make build`
+
+find portcullis-gate.exe
+
+put it in `C:\Tools`
+ - when you create your MCP configuration, tell it to find the binary in C:\Tools\portcullis-gate.exe
+
+finally
+`make demo-start` which will start the set of docker processes
+
+#### Docker Demo 
 Services started:
 - Keep on `http://localhost:8080`
 - Guard on `http://localhost:8444`
@@ -75,6 +106,8 @@ Services started:
 Configure Gate as above, then try these prompts with your agent:
 
 ```
+"what services are available from portcullis mcp?"
+
 "Please use portcullis to fetch the latest news from <website>"
 
 "Please use portcullis to query orders for customer <id>"
@@ -82,7 +115,8 @@ Configure Gate as above, then try these prompts with your agent:
 "Please use portcullis to update the name of customer <id> to Arbitrary Name"
 ```
 
-The last request should trigger an escalation. The agent will surface a link. Click it, review the request in Guard, and approve it to receive a JWT. Paste the JWT into the Gate management UI at `http://localhost:7777`. Then ask the agent to try again — this time it should succeed.
+The last request should trigger an escalation. The agent will present a link to you (the user). Click it, review the request in Guard. It should be a request to allow the update_customer tool to update the customer you  and approve it.
+Then ask the agent to try again — this time it should succeed.
 
 ```sh
 # Stop the demo stack

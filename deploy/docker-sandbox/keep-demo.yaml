@@ -7,10 +7,23 @@ pdp:
   type: "opa"
   endpoint: "http://opa:8181/v1/data/portcullis/tabular/decision"
 
+
+
 # passthrough mode: accept OS-sourced identities with all claims intact.
+# Change to normalizer: "strict" for production deployments.
+# identity:
+#  normalizer: "passthrough"
+#  accept_forged_identities: true  # suppress per-request warnings in local dev
+
+# oidc mode (demo), using a mock iDp for testing purposes.  visit https://mock-idp.dev 
+# if you want to mint new tokens with different attributes
+#
 identity:
-  normalizer: "passthrough"
-  accept_forged_identities: true  # suppress per-request warnings in demo stack
+  normalizer: "oidc-verify"
+  oidc_verify:
+    issuer: "https://mock-idp.dev"             # Must match the 'iss' claim in your token
+    jwks_url: "https://mock-idp.dev/jwt/.well-known/jwks.json" # URL where Keep fetches public keys
+    audiences: ["portcullis-mcp"]              # Optional: must match the 'aud' claim  
 
 backends:
   mock-enterprise-api:
