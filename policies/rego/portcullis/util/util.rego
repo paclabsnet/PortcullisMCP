@@ -4,12 +4,31 @@ package portcullis.util
 import rego.v1
 
 
+import data.portcullis.rule_match
+
+
+#
+# The argument matching stuff is a little more complicated than I would like. I'm not sure that
+# I can make it less complicated without using various Rego shortcuts that make things hard to follow.
+#
+# 1) the AND scenario - we have an arg_restriction that is actually multiple arg_restrictions ANDed together
+# 2) the regular scenario - we have a single arg_restriction
+#
+# In both of these scenarios, we have to extract the appropriate values from the request_args, 
+# using the instructions in the arg_restriction as a guide to the extraction process
+#
+# Once we've gotten the correct data element out of the request_args, we can finally do the actual tests
+# where we compare that element to the data in the arg_restriction, using the rule type implemented in the rule_match
+# package.
+#
+#
 
 
 
-
-
-arg_restriction_matched_list( arg_restriction_rule_array, request_args) := rule_element_matched_list if {
+#
+# returns the array of 
+#
+find_arg_restriction_matches( arg_restriction_rule_array, request_args) := rule_element_matched_list if {
 
    # because some of the matches can be an 'and' of multiple rules, we potentially get a mix of arrays
    # with one element, and arrays with multiple, and we want to flatten those out. The grants don't
@@ -17,7 +36,7 @@ arg_restriction_matched_list( arg_restriction_rule_array, request_args) := rule_
    # 
    unflattened_rule_element_matched_list := [ rule_element_matched_list |
                                some restriction in arg_restriction_rule_array
-                                  rule_element_matched_list := arg_restriction_matched_type_ladder( restriction, request_args)
+                                  rule_element_matched_list := find_arg_restriction_matches_for_ANDED_group( restriction, request_args)
                            ]
 
    rule_element_matched_list := array.flatten(unflattened_rule_element_matched_list)
@@ -25,6 +44,9 @@ arg_restriction_matched_list( arg_restriction_rule_array, request_args) := rule_
 }
 
 
+#
+# returns true if any of the arg restriction requirements are met
+#
 any_arg_restriction_rule_honored( arg_restriction_rule_array, request_args) := true if {
 
    some restriction in arg_restriction_rule_array
@@ -33,6 +55,9 @@ any_arg_restriction_rule_honored( arg_restriction_rule_array, request_args) := t
 } else := no_arg_restrictions_to_honor( arg_restriction_rule_array )
 
 
+#
+# returns true if there are no arg restrictions to evaluate
+#
 no_arg_restrictions_to_honor( arg_restriction_rule_array ) := true if {
    count(arg_restriction_rule_array) == 0
 } else := false
@@ -40,35 +65,14 @@ no_arg_restrictions_to_honor( arg_restriction_rule_array ) := true if {
 
 
 #
-# check one specific arg_restriction
+# check one specific arg_restriction, which can be several sub-restrictions ANDED together
 #
 arg_restriction_honored( restriction, request_args) := true if {
 
-#  print("#DEBUG: arg_restriction_honored")
-
-  key_path_array := split(restriction.key_path, ".")
-
-  # this only returns true if the element doesn't exist and is not required
-  # 
-  element_does_not_exist_but_is_not_required( request_args, key_path_array, object.get(restriction, "required", true))
-
-  # if we get here, it means the element didn't exist, but it wasn't required, so we've honored this restriction 
-
-} else := arg_restriction_honored_existence_required( restriction, request_args )
-
-
-#
-# most common case - the element is required, so first we verify that the element exists,
-# and if it does, we verify that the element matches the restriction
-#
-arg_restriction_honored_existence_required( restriction, request_args) := true if {
-
-#  print("#DEBUG: arg_restriction_honored_existence_required: request_args: ", request_args, ", restriction: ", restriction)
-
-  rule_element_matched_list := arg_restriction_matched_type_ladder( restriction, request_args )
+  rule_element_matched_list := find_arg_restriction_matches_for_ANDED_group( restriction, request_args )
   count(rule_element_matched_list) > 0
 
-} else := false
+} else := false   
 
 
 
@@ -78,116 +82,51 @@ arg_restriction_honored_existence_required( restriction, request_args) := true i
 # we can add as many different types as we want by creating this ladder
 # of fail-through checks
 #
-arg_restriction_matched_type_ladder( restriction, request_args ) := rule_element_matched_list if {
+find_arg_restriction_matches_for_ANDED_group( restriction, request_args ) := rule_element_matched_list if {
 
-   print("#DEBUG: arg_restriction_matched_type_ladder: ", request_args, ", ", restriction)
+   # print("#DEBUG: find_arg_restriction_matches_for_ANDED_group: ", request_args, ", ", restriction)
 
    lower(restriction.type) == "and"
 
-   rule_element_matched_list := all_arg_restriction_rule_matched( restriction.list, request_args)
+   rule_element_matched_list := find_every_arg_restriction_rule_matches( restriction.list, request_args)
 
-   print("#DEBUG++: rule_element_matched_list: ", rule_element_matched_list)
+   # print("#DEBUG++: rule_element_matched_list: ", rule_element_matched_list)
 
-# prefix MUST be the next item on the ladder, or the all_arg_restriction function above won't work properly
-} else := arg_restriction_matched_type_ladder_dereference_element( restriction, request_args)
+} else := find_arg_restriction_matches_for_single_element( restriction, request_args)
 
 
 #
 # up until this point, we haven't been looking at the contents of the restriction, just
-# the type. now we have to get into the details
+# the type. now we have to get into the details and start comparing values to actual
+# data restrictions
 #
-arg_restriction_matched_type_ladder_dereference_element( restriction, request_args ) := rule_element_matched_list if {
+find_arg_restriction_matches_for_single_element( restriction, request_args ) := rule_element_matched_list if {
 
-  print("#DEBUG: arg_restriction_matched_type_ladder_deference_element: args:", request_args, ", restriction:", restriction)
+  # print("#DEBUG: find_arg_restriction_matches_for_single_element: args:", request_args, ", restriction:", restriction)
 
+  # turn the dot notation path into an array of keys  "domain.host" -> ["domain","host"]
   key_path_array := split(restriction.key_path, ".")
-   
+
+  # 
+  #  given a complex object, and an array of keys, traverse the elements of the object
+  #  by following each key
+  #   
   element := traverse_json( request_args, key_path_array)
 
-  rule_element_matched_list := arg_restriction_matched_type_ladder_prefix(restriction, element)
+  rule_element_matched_list := rule_match.match(restriction, element)
 
 } else := []
 
 
-#
-# does the first part of the element match the restriction prefix
-#
-arg_restriction_matched_type_ladder_prefix( restriction, element ) := rule_element_matched_list if {
-   
-  print("#DEBUG: arg_restriction_matched_type_ladder_prefix: element:", element, ", ", restriction)
 
-   lower(restriction.type) == "prefix"
-   
-   startswith(lower(element), lower(restriction.data))
 
-   rule_element_matched_list := [ { "rule": restriction, "arg": element } ]
-
-} else := arg_restriction_matched_type_ladder_suffix( restriction, element )
 
 
 #
-# does the end of the element match the restriction suffix
+#  if there are <N> arg restrictions, we test each one and build a list of matches.
+#  if the match list is also size <N>, we know we have matched every restriction
 #
-arg_restriction_matched_type_ladder_suffix( restriction, element ) := rule_element_matched_list if {
-
-  print("#DEBUG: arg_restriction_matched_type_ladder_suffix: element:", element, ", ", restriction)
-
-   lower(restriction.type) == "suffix"
-   
-   endswith(lower(element), lower(restriction.data))
-
-   rule_element_matched_list := [ { "rule": restriction, "arg": element } ]
-
-} else := arg_restriction_matched_type_ladder_whole( restriction, element )
-
-
-#
-# does the end of the element match the restriction suffix
-#
-arg_restriction_matched_type_ladder_whole( restriction, element ) := rule_element_matched_list if {
-
-  print("#DEBUG: arg_restriction_matched_type_ladder_whole: element:", element, ", ", restriction)
-
-   lower(restriction.type) == "whole"
-   
-   lower(element) == lower(restriction.data)
-
-   rule_element_matched_list := [ { "rule": restriction, "arg": element } ]
-
-} else := arg_restriction_matched_type_ladder_contains( restriction, element)
-
-
-
-
-arg_restriction_matched_type_ladder_contains( restriction, element ) := rule_element_matched_list if {
-
-  print("#DEBUG: arg_restriction_matched_type_ladder_contains: element:", element, ", ", restriction)
-
-   lower(restriction.type) == "contains"
-   
-   contains(lower(element), lower(restriction.data))
-
-   rule_element_matched_list := [ { "rule": restriction, "arg": element } ]
-
-} else := []
-
-#
-# this is a bit of a 'pro gamer move'.  Rego does not support recursion. so we can't
-# have this in a scenario where all_arg_restrictions calls any_arg_restrictions .  But in
-# practice, that's probably fine. 
-#
-# the other hack that makes this a pro-gamer move is taking advantage of knowing that
-# the prefix check is immediately after the 'AND' check on the ladder.  This requires
-# discipline, which I do not love, because people forget.  But for the purposes of this
-# proof of concept, it's fine.  
-#
-# Note also that the AND is implicitly required.  what would be the point of an AND if
-# one of the restrictions were optional?
-#
-all_arg_restriction_rule_matched( arg_restriction_rule_array, request_args ) := rule_element_matched_list if {
-
-
-#   print("#DEBUG: all_arg - array: ", arg_restriction_rule_array, ", request: ", request_args)
+find_every_arg_restriction_rule_matches( arg_restriction_rule_array, request_args ) := rule_element_matched_list if {
 
   #
   # we have <N> arg restrictions to look at, and so we'll go through each of them to see if one
@@ -199,20 +138,13 @@ all_arg_restriction_rule_matched( arg_restriction_rule_array, request_args ) := 
   # 
   rule_element_matched_list := [ rule_element_item | 
                                  some restriction in arg_restriction_rule_array
-                                    child_rule_element_matched_list := arg_restriction_matched_type_ladder_dereference_element( restriction, request_args)
+                                    child_rule_element_matched_list := find_arg_restriction_matches_for_single_element( restriction, request_args)
                                     count(child_rule_element_matched_list) > 0
                                     rule_element_item := child_rule_element_matched_list[0]
                                     
                       ]
 
-   count(rule_element_matched_list) == count(arg_restriction_rule_array)
-
-#   every restriction in arg_restriction_rule_array {
-#
-#       matched_arg_list := arg_restriction_matched_type_ladder_dereference_element( restriction, request_args)
-#       count(match_list) > 0
-#
-#   }
+  count(rule_element_matched_list) == count(arg_restriction_rule_array)
 
 } else := []
 
@@ -220,10 +152,6 @@ all_arg_restriction_rule_matched( arg_restriction_rule_array, request_args ) := 
 
 
 
-element_does_not_exist_but_is_not_required( request_args, key_path_array, required ) := true if {
-   not object.get(request_args, key_path_array, null) == null
-   required == false 
-}
 
 ##############################################
 #
@@ -247,8 +175,8 @@ has_group_membership( user_groups, allowed_groups) := true if {
 #
 find_applicable_escalation_grants( escalation_tokens, action, jwt_secret ) := escalation_grant_list if {
 
-   print("#DEBUG: find_applicable_escalation_grants: ", action)
-   print("#DEBUG++: escalation_tokens: ", escalation_tokens)
+#   print("#DEBUG: find_applicable_escalation_grants: ", action)
+#   print("#DEBUG++: escalation_tokens: ", escalation_tokens)
 
    escalation_grant_list := [ claims |
       some token in escalation_tokens

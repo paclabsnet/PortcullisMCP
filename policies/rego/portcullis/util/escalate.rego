@@ -186,7 +186,7 @@ find_rule_arg_restrictions_matching_request_args(
     rule_arg_restrictions,
     request_arguments) := escalation_claim_list if {
    
-    rule_element_matched_list := util.arg_restriction_matched_list( rule_arg_restrictions, request_arguments)
+    rule_element_matched_list := util.find_arg_restriction_matches( rule_arg_restrictions, request_arguments)
     
     # count the matches
     count(rule_element_matched_list) > 0

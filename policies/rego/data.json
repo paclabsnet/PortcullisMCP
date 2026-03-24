@@ -191,10 +191,10 @@
                                 },
                                 "escalate" : {
                                         "arg_restrictions" :[
-                                               { "type":"prefix","key_path":"host", "data":"STyRa.CoM"},
-                                                { "type":"prefix","key_path":"host", "data":"www.STyRa.CoM"},
+                                              { "type":"regex", "key_path":"host", "data":"(?i)^[a-z0-9.-]+\\.styra\\.com$"},
+                                              { "type":"prefix","key_path":"host", "data":"www.STyRa.CoM"},
                                               { "type":"prefix","key_path":"host", "data":"www.OpenPolicyAgent.org"},
-                                               { "type":"prefix","key_path":"host", "data":"OpenPolicyAgent.org"}
+                                              { "type":"prefix","key_path":"host", "data":"OpenPolicyAgent.org"}
                                         ]
                                 }
                         },
@@ -219,7 +219,23 @@
                                                    ]
                                                 }, 
                                                 { "type":"prefix","key_path":"host", "data":"STyRa.CoM"},
+                                                { "type":"regex","key_path":"host", "data":"(?i)^[a-z0-9.-]+\\.styra\\.com$"},
                                                 { "type":"prefix","key_path":"host", "data":"OpenPolicyAgent.com"}
+                                        ]
+                                }
+                        }
+                }, 
+                "mock-calculator" : {
+                        "calculate" : {
+                                "allow" : {
+                                        "arg_restrictions" :[
+                                              { "type":"equals","key_path":"equal_val", "data":1000},
+                                              { "type":"gt","key_path":"gt_val", "data":10},
+                                              { "type":"gte","key_path":"gte_val", "data":20},
+                                              { "type":"lt","key_path":"lt_val", "data":30},
+                                              { "type":"lte","key_path":"lte_val", "data":40},
+                                              { "type":"within_range","key_path":"range_val", "data":[50,60]},
+                                              { "type":"outside_range","key_path":"range_val", "data":[0,2000]}
                                         ]
                                 }
                         }

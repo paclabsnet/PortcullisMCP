@@ -1167,6 +1167,52 @@ tests:
 
 
 
+  - name: fetch - returns escalation for https://api.styra.com/v1/data
+    skip: false
+    description:  validating a URL fetch request to a perfectly fine URL, but one that we have set up for escalation
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"data":"api.styra.com"'
+      - substring: '"decision":"escalate"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {                
+            "action": {
+                "tool_name": "fetch_url",
+                "service" : "fetch"
+            },
+            "resource": {
+                "arguments": {
+                    "raw": "https://api.styra.com/v1/data",
+                    "scheme": "https",
+                    "host": "api.styra.com",
+                    "port": "",
+                    "path": "/v1/data",
+                    "query": ""
+                }
+            },
+            "principal": {
+                "user_id": "alice@example.com",
+                "email": "alice@example.com",
+                "display_name": "Alice Developer",
+                "groups": ["developer", "internal-api-users"],
+                "roles": ["api-consumer"],
+                "department": "engineering",
+                "auth_method": ["pwd", "mfa"],
+                "token_expiry": 1741651200,
+                "source_type": "oidc"
+            },
+            "context": {
+                "escalation_tokens": [
+                ]
+            }
+          },
+          "session_id": "sess-abc123",
+          "trace_id": "req-def456"
+        }
+
 
 
   - name: fetch - returns escalation for https://www.styra.com/news
@@ -1351,4 +1397,326 @@ tests:
           },
           "session_id": "tbd123",
           "trace_id": "req-abc123"
+        }
+
+
+
+
+
+  - name: mock_calculator  - returns allow for good value 1000
+    description: equals 1000
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"allow"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {
+            "action":{
+              "service": "mock-calculator",
+              "tool_name": "calculate"
+            },
+            "resource":{
+              "arguments": {
+                "equal_val": 1000,
+                "gt_val":11,
+                "gte_val":20,
+                "lt_val":29,
+                "lte_val":40,
+                "range_val":50
+              }
+            },
+            "principal": {
+              "user_id": "alice@example.com",
+              "groups": ["a"]
+            },
+            "context": {
+            }
+          },
+          "session_id": "0",
+          "trace_id": "0"
+        }
+
+
+  - name: mock_calculator  - returns allow for good value 11
+    description: gt 10
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"allow"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {
+            "action":{
+              "service": "mock-calculator",
+              "tool_name": "calculate"
+            },
+            "resource":{
+              "arguments": {
+                "equal_val": 1000,
+                "gt_val":11,
+                "gte_val":20,
+                "lt_val":29,
+                "lte_val":40,
+                "range_val":50
+              }
+            },
+            "principal": {
+              "user_id": "alice@example.com",
+              "groups": ["a"]
+            },
+            "context": {
+            }
+          },
+          "session_id": "0",
+          "trace_id": "0"
+        }
+
+
+
+  - name: mock_calculator  - returns allow for good value 20
+    description: gte 20
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"allow"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {
+            "action":{
+              "service": "mock-calculator",
+              "tool_name": "calculate"
+            },
+            "resource":{
+              "arguments": {
+                "equal_val": 1000,
+                "gt_val":11,
+                "gte_val":20,
+                "lt_val":29,
+                "lte_val":40,
+                "range_val":50
+              }
+            },
+            "principal": {
+              "user_id": "alice@example.com",
+              "groups": ["a"]
+            },
+            "context": {
+            }
+          },
+          "session_id": "0",
+          "trace_id": "0"
+        }
+
+
+
+  - name: mock_calculator  - returns allow for good value 29
+    description: lt 30
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"allow"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {
+            "action":{
+              "service": "mock-calculator",
+              "tool_name": "calculate"
+            },
+            "resource":{
+              "arguments": {
+                "equal_val": 1000,
+                "gt_val":11,
+                "gte_val":20,
+                "lt_val":29,
+                "lte_val":40,
+                "range_val":50
+              }
+            },
+            "principal": {
+              "user_id": "alice@example.com",
+              "groups": ["a"]
+            },
+            "context": {
+            }
+          },
+          "session_id": "0",
+          "trace_id": "0"
+        }
+
+
+
+  - name: mock_calculator  - returns allow for good value 40
+    description: lte 40
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"allow"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {
+            "action":{
+              "service": "mock-calculator",
+              "tool_name": "calculate"
+            },
+            "resource":{
+              "arguments": {
+                "equal_val": 1000,
+                "gt_val":11,
+                "gte_val":20,
+                "lt_val":29,
+                "lte_val":40,
+                "range_val":50
+              }
+            },
+            "principal": {
+              "user_id": "alice@example.com",
+              "groups": ["a"]
+            },
+            "context": {
+            }
+          },
+          "session_id": "0",
+          "trace_id": "0"
+        }
+
+
+
+  - name: mock_calculator  - returns allow for good value 50
+    description: range_val 50:60
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"allow"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {
+            "action":{
+              "service": "mock-calculator",
+              "tool_name": "calculate"
+            },
+            "resource":{
+              "arguments": {
+                "equal_val": 1000,
+                "gt_val":11,
+                "gte_val":20,
+                "lt_val":29,
+                "lte_val":40,
+                "range_val":50
+              }
+            },
+            "principal": {
+              "user_id": "alice@example.com",
+              "groups": ["a"]
+            },
+            "context": {
+            }
+          },
+          "session_id": "0",
+          "trace_id": "0"
+        }
+
+
+  - name: mock_calculator  - returns deny for out of range value 49
+    description: range_val 50:60
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"deny"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {
+            "action":{
+              "service": "mock-calculator",
+              "tool_name": "calculate"
+            },
+            "resource":{
+              "arguments": {
+                "range_val":49
+              }
+            },
+            "principal": {
+              "user_id": "alice@example.com",
+              "groups": ["a"]
+            },
+            "context": {
+            }
+          },
+          "session_id": "0",
+          "trace_id": "0"
+        }
+
+
+
+  - name: mock_calculator  - returns allow for good value 2001
+    description: range_val 0:2000
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"allow"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {
+            "action":{
+              "service": "mock-calculator",
+              "tool_name": "calculate"
+            },
+            "resource":{
+              "arguments": {
+                "equal_val": 1000,
+                "gt_val":11,
+                "gte_val":20,
+                "lt_val":29,
+                "lte_val":40,
+                "range_val":2001
+              }
+            },
+            "principal": {
+              "user_id": "alice@example.com",
+              "groups": ["a"]
+            },
+            "context": {
+            }
+          },
+          "session_id": "0",
+          "trace_id": "0"
+        }
+
+
+  - name: mock_calculator  - returns deny for out of range value 1999
+    description: 1999 is not out of range_val 0:2000
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"deny"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {
+            "action":{
+              "service": "mock-calculator",
+              "tool_name": "calculate"
+            },
+            "resource":{
+              "arguments": {
+                "range_val":1999
+              }
+            },
+            "principal": {
+              "user_id": "alice@example.com",
+              "groups": ["a"]
+            },
+            "context": {
+            }
+          },
+          "session_id": "0",
+          "trace_id": "0"
         }
