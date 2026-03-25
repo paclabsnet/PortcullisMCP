@@ -1,4 +1,4 @@
-.PHONY: build install test clean demo-start demo-stop run-mock run-keep help
+.PHONY: build install test clean demo-start demo-stop run-mock run-mock-workflow run-keep help
 
 # Detect OS for binary extension
 GOOS     := $(shell go env GOOS)
@@ -63,6 +63,15 @@ demo-stop:
 run-mock:
 	@go run ./examples/mock-enterprise-api
 
+# Run the mock workflow server (development only)
+# Simulates an enterprise approval system: receives Keep webhooks, waits APPROVAL_DELAY, deposits to Guard.
+# Example: make run-mock-workflow GUARD_URL=http://localhost:8444 GUARD_TOKEN=dev-guard-token
+run-mock-workflow:
+	@GUARD_URL=$${GUARD_URL:-http://localhost:8444} \
+	 GUARD_TOKEN=$${GUARD_TOKEN:-dev-guard-token} \
+	 APPROVAL_DELAY=$${APPROVAL_DELAY:-5s} \
+	 go run ./examples/mock-workflow-server
+
 # Run portcullis-keep with minimal config (development only)
 run-keep:
 	@$(KEEP_BIN) -config config/keep-config.minimal.yaml
@@ -78,8 +87,9 @@ help:
 	@echo "  clean      - Remove build artifacts"
 	@echo "  demo-start - Start demo stack (OPA + Keep + Guard + backends) via docker compose"
 	@echo "  demo-stop  - Stop demo stack"
-	@echo "  run-mock   - Run the mock enterprise API backend (dev only)"
-	@echo "  run-keep   - Run portcullis-keep with minimal config (dev only)"
+	@echo "  run-mock          - Run the mock enterprise API backend (dev only)"
+	@echo "  run-mock-workflow - Run the mock workflow approval server (dev only)"
+	@echo "  run-keep          - Run portcullis-keep with minimal config (dev only)"
 	@echo ""
 	@echo "Quick start (development):"
 	@echo "  1. make build        # compile binaries"

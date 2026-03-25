@@ -227,7 +227,7 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		writeDeny(w, pdpResp.Reason, traceID)
 
 	case "escalate":
-		escalationJWT := ""
+		pendingJWT := ""
 		escalationJTI := ""
 		if s.signer != nil {
 			jwtStr, jti, err := s.signer.Sign(req, pdpResp.Reason, pdpResp.EscalationScope)
@@ -235,14 +235,14 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 				slog.ErrorContext(ctx, "escalation jwt sign failed", "error", err, "trace_id", traceID)
 				// Non-fatal: continue without JWT; some workflow handlers may still function.
 			} else {
-				escalationJWT = jwtStr
+				pendingJWT = jwtStr
 				escalationJTI = jti
 			}
 		} else {
 			slog.WarnContext(ctx, "escalation signer not configured; escalation_jti will be empty and Gate cannot auto-claim the token",
 				"tool", req.ToolName, "user", req.Principal.UserID, "trace_id", traceID)
 		}
-		wfRef, err := s.workflow.Submit(ctx, req, escalationJWT)
+		wfRef, err := s.workflow.Submit(ctx, req, pendingJWT)
 		if err != nil {
 			span.SetStatus(codes.Error, err.Error())
 			slog.ErrorContext(ctx, "workflow submit failed", "error", err, "trace_id", traceID)
@@ -252,7 +252,7 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		// If neither the signed JWT nor a workflow reference was produced, the
 		// escalation cannot be actioned by Gate or the user. Failing here is
 		// better than returning a 202 that looks successful but leads nowhere.
-		if escalationJWT == "" && wfRef == "" {
+		if pendingJWT == "" && wfRef == "" {
 			span.SetStatus(codes.Error, "escalation misconfigured")
 			slog.ErrorContext(ctx, "escalation required but no approval mechanism available — configure escalation_request_signing.key",
 				"tool", req.ToolName, "user", req.Principal.UserID, "trace_id", traceID)
@@ -274,7 +274,7 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 			"reason":             pdpResp.Reason,
 			"workflow_reference": wfRef,
 			"escalation_jti":     escalationJTI,
-			"pending_jwt":        escalationJWT,
+			"pending_jwt":        pendingJWT,
 		})
 
 	default:
@@ -354,21 +354,21 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		writeDeny(w, pdpResp.Reason, traceID)
 
 	case "escalate":
-		escalationJWT := ""
+		pendingJWT := ""
 		escalationJTI := ""
 		if s.signer != nil {
 			jwtStr, jti, err := s.signer.Sign(req, pdpResp.Reason, pdpResp.EscalationScope)
 			if err != nil {
 				slog.ErrorContext(ctx, "escalation jwt sign failed", "error", err, "trace_id", traceID)
 			} else {
-				escalationJWT = jwtStr
+				pendingJWT = jwtStr
 				escalationJTI = jti
 			}
 		} else {
 			slog.WarnContext(ctx, "escalation signer not configured; escalation_jti will be empty and Gate cannot auto-claim the token",
 				"tool", req.ToolName, "user", req.Principal.UserID, "trace_id", traceID)
 		}
-		wfRef, err := s.workflow.Submit(ctx, req, escalationJWT)
+		wfRef, err := s.workflow.Submit(ctx, req, pendingJWT)
 		if err != nil {
 			span.SetStatus(codes.Error, err.Error())
 			slog.ErrorContext(ctx, "workflow submit failed", "error", err, "trace_id", traceID)
@@ -378,7 +378,7 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		// If neither the signed JWT nor a workflow reference was produced, the
 		// escalation cannot be actioned by Gate or the user. Failing here is
 		// better than returning a 202 that looks successful but leads nowhere.
-		if escalationJWT == "" && wfRef == "" {
+		if pendingJWT == "" && wfRef == "" {
 			span.SetStatus(codes.Error, "escalation misconfigured")
 			slog.ErrorContext(ctx, "escalation required but no approval mechanism available — configure escalation_request_signing.key",
 				"tool", req.ToolName, "user", req.Principal.UserID, "trace_id", traceID)
@@ -400,7 +400,7 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 			"reason":             pdpResp.Reason,
 			"workflow_reference": wfRef,
 			"escalation_jti":     escalationJTI,
-			"pending_jwt":        escalationJWT,
+			"pending_jwt":        pendingJWT,
 		})
 
 	default:

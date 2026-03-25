@@ -13,8 +13,8 @@
 
 
 
-### Task: Implement "Mock Workflow" Loopback for System Authority Testing
-- **Problem**: Testing "System Authority" (workflow approvals like ServiceNow) is difficult without a real enterprise installation or a mock workflow tool.
+### Task: Implement "Mock Workflow" Loopback for System Workflow Simulation [DONE]
+- **Problem**: Testing "System Workflow" (workflow approvals like ServiceNow) is difficult without a real enterprise installation or a mock workflow tool.
 - **Fix**: Create a "Mock Workflow Handler" that uses the existing Webhook flow to simulate an enterprise approval loop.
 - **Implementation scope**:
   - `examples/mock-workflow-server/main.go` — A tiny HTTP server that:
@@ -22,27 +22,27 @@
     2. Logs the request and "sleeps" for a configurable delay (e.g., 5-10 seconds).
     3. Calls Guard's `POST /token/deposit` with the `pending_jwt` and `user_id`.
   - Documentation/YAML — Provide a `keep-config.mock-workflow.yaml` that uses the `webhook` handler to point at this mock server.
-- **Benefit**: Allows end-to-end verification of the System Authority flow (Keep -> Webhook -> Guard -> Gate Polling) without real infrastructure.
+- **Benefit**: Allows end-to-end verification of the System Workflow Authority flow (Keep -> Webhook -> Guard -> Gate Polling) without real infrastructure.
 - priority: medium-high
 
 
 #### Proposed Implementation Plan:
 
-
   Operation:
    1. Parse GUARD_URL, GUARD_TOKEN, APPROVAL_DELAY, and PORT from environment.
    2. Listen: POST /webhook (configured in Keep's keep-config.mock-workflow.yaml).
    3. Process:
-       * collect the pending_jwt
-         * no need to verify that it was signed by Keep, since that would require this workflow server to know Keep's secret, and Guard will validate the pending JWT anyways
-         * pull the UserID from the pending_jwt claims
+       * collect the pending_jwt and UserID from the POST
+         * no need to verify that it was signed by Keep, since that would require this 
+           workflow server to know Keep's secret, and Guard will validate the pending JWT anyways
        * Log the incoming trace_id and UserID
        * Respond 200 OK immediately to Keep (releasing its connection).
    4. Asynchronous Step (Goroutine):
        * Sleep for APPROVAL_DELAY (e.g., 5 seconds).
        * Deposit: POST to Guard's /token/deposit using:
            * pending_jwt: (the Keep-signed request JWT).
-           * user_id: (the extracted/verified UID).
+           * user_id: (the UserID provided in the original POST)
+             * Portcullis-Guard will validate this UserID against the one in the JWT, so we don't have to do that here
            * Auth: Includes the Authorization: Bearer <GUARD_TOKEN> header.
    5. Test Configuration (config/keep-config.mock-workflow.yaml):
        * Set escalation.workflow.type to webhook.
@@ -67,7 +67,7 @@
 
 
 
-### Task: Plugabble Logging
+### Task: Pluggable Logging
 - We need Keep to support multiple decision logging strategies
 - perhaps some sort of LogSink interface with multiple destinations?
 - priority: medium
@@ -76,12 +76,12 @@
 ### Task: set enterprise logging configuration to redact
 - all keys should be redacted
 - some commonly useful keys should be included in the config, but commented out
+- it makes sense to do this at the same time as Pluggable Logging
 - priority: medium
 
 
 ### Task: Input sanitizing at Keep and Guard
 - standard good hygiene
-
 - medium-low priority
 
 
@@ -93,18 +93,27 @@ i.e. instead of running as a stdio MCP, it can run as an autonomous local proces
 
 
 
-### Task: System Authority Escalation
-- Enterprises will need both User-authority escalations (user approves in seconds via Guard) and System-authority escalations (ServiceNow/Jira/etc. approves over hours/days)
-- The PDP determines the authority based on risk level, user role, and tool
-- **User authority**: Gate gets `escalation_jti` + `escalation_jwt`, pushes JWT to Guard, stores pending entry by JTI; retry path and 60s poll both apply
-- **System authority**: Gate gets workflow metadata only (reference URL, ticket ID, SLA, etc.), no JTI; presents metadata to agent via configurable message template; no pending entry stored; 60s poll is the only collection path (acceptable given approval latency)
+### Task: System Workflow Escalation
+- Enterprises will need both User-authority escalations (user approves in seconds via Guard) and System Workflow-authority escalations (ServiceNow/Jira/etc. approves over hours/days)
+- The PDP determines the path based on risk level, user role, and tool
+- **User authority**: PDP returns 'escalate'. Gate gets `escalation_jti` + `escalation_jwt`, pushes JWT to Guard, stores pending entry by JTI; retry path and 60s poll both apply
+- **System Workflow authority**: PDP returns 'workflow'. 
+  - Several tasks that are ambiguous right now
+  - do we still send information to Gate to allow the user to launch the workflow? Or do we launch the workflow directly, and let the workflow system verify with the user that this work needs to be done?
+    - What do those data structures look like?  
+    - What information does Gate receive right away, vs later (does it receive anything at all)
+      - perhaps Gate gets workflow metadata only (reference URL, ticket ID, SLA, etc.), no JTI; presents metadata to agent via configurable message template; no pending entry stored; 
+        60s poll is the only collection path (acceptable given approval latency)
 - When a System workflow approves, it calls Guard's `/token/deposit`; Gate picks up the resulting token on next poll
-- Implementation scope: `shared/types.go` (add `Authority`, `EscalationJWT`, `WorkflowMetadata` to `EscalationPendingError`), `keep/server.go` (add `authority` + `escalation_jwt` to 202 body), `gate/config.go` (add per-authority message templates), `gate/forwarder.go`, `gate/server.go` (split behavior by authority), `gate/guardclient.go` (add `RegisterPending`), `guard/server.go` (add `POST /pending`, change `handleGet` to `?jti=` lookup)
-- priority: low
-- notes: this is difficult to do without an actual enterprise deployment to test against, and even then it will be much different. 
-- the interesting thing here in the short term is how to create a plugin model where we can create enterprise-specific system workflow interfaces, without having to change the core code of Portcullis (which will help with support and platform stability)
+- priority: very low
+- notes: this is difficult to do without an actual enterprise deployment to test against, and even then it will be much different from organization to organization
 
 
+### Task: Plugin model for System Workflow Initialization
+ - if Keep receives a 'Workflow' response from the PDP, it should call some sort of appropriately designed plugin to interface with the actual workflow system
+ - this logic needs to be kept out of the core functionality of Portcullis, so it doesn't pollute the open source project
+ - Needs a lot more research
+ - priority: low
 
 
 
