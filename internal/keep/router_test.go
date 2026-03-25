@@ -20,6 +20,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func TestRouter_CallTool_UnknownBackend(t *testing.T) {
@@ -321,6 +323,118 @@ func TestRouter_Reload_UpdatesExistingBackendConfig(t *testing.T) {
 	if conn.aliasToReal["aliased_tool"] != "real_tool" {
 		t.Errorf("after config update, aliasToReal[%q] = %q, want %q",
 			"aliased_tool", conn.aliasToReal["aliased_tool"], "real_tool")
+	}
+}
+
+// --- buildToolCache tests ---
+
+func makeTool(name string) *mcp.Tool {
+	return &mcp.Tool{Name: name}
+}
+
+func TestBuildToolCache_NoCollision(t *testing.T) {
+	surveys := []backendSurvey{
+		{name: "a", tools: []*mcp.Tool{makeTool("foo"), makeTool("bar")}},
+		{name: "b", tools: []*mcp.Tool{makeTool("baz")}},
+	}
+	all, err := buildToolCache(surveys)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(all) != 3 {
+		t.Errorf("expected 3 tools, got %d", len(all))
+	}
+}
+
+func TestBuildToolCache_AliasApplied(t *testing.T) {
+	surveys := []backendSurvey{
+		{
+			name:    "a",
+			toolMap: map[string]string{"query_db": "acme_query_db"},
+			tools:   []*mcp.Tool{makeTool("query_db"), makeTool("list_orders")},
+		},
+	}
+	all, err := buildToolCache(surveys)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	names := make(map[string]bool)
+	for _, at := range all {
+		names[at.Tool.Name] = true
+	}
+	if !names["acme_query_db"] {
+		t.Error("expected aliased name \"acme_query_db\" in cache")
+	}
+	if names["query_db"] {
+		t.Error("real name \"query_db\" should not appear in cache when aliased")
+	}
+}
+
+func TestBuildToolCache_CollisionAliasVsUnaliased(t *testing.T) {
+	// backend "b" has a real tool named "foo"; backend "a" aliases "bar" → "foo".
+	surveys := []backendSurvey{
+		{name: "a", toolMap: map[string]string{"bar": "foo"}, tools: []*mcp.Tool{makeTool("bar")}},
+		{name: "b", tools: []*mcp.Tool{makeTool("foo")}},
+	}
+	_, err := buildToolCache(surveys)
+	if err == nil {
+		t.Fatal("expected collision error, got nil")
+	}
+	if !strings.Contains(err.Error(), "foo") {
+		t.Errorf("error should mention colliding name \"foo\", got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "alias") {
+		t.Errorf("error should mention that one side is an alias, got: %v", err)
+	}
+}
+
+func TestBuildToolCache_CollisionUnaliasedVsUnaliased(t *testing.T) {
+	// Two backends each expose "query_db" with no aliasing.
+	surveys := []backendSurvey{
+		{name: "a", tools: []*mcp.Tool{makeTool("query_db")}},
+		{name: "b", tools: []*mcp.Tool{makeTool("query_db")}},
+	}
+	_, err := buildToolCache(surveys)
+	if err == nil {
+		t.Fatal("expected collision error, got nil")
+	}
+	if !strings.Contains(err.Error(), "query_db") {
+		t.Errorf("error should mention colliding name \"query_db\", got: %v", err)
+	}
+}
+
+func TestBuildToolCache_CollisionAliasVsAlias(t *testing.T) {
+	// Both backends alias different real tools to the same name.
+	// (This is also caught by the pre-survey check, but buildToolCache
+	// must handle it independently.)
+	surveys := []backendSurvey{
+		{name: "a", toolMap: map[string]string{"tool_a": "shared"}, tools: []*mcp.Tool{makeTool("tool_a")}},
+		{name: "b", toolMap: map[string]string{"tool_b": "shared"}, tools: []*mcp.Tool{makeTool("tool_b")}},
+	}
+	_, err := buildToolCache(surveys)
+	if err == nil {
+		t.Fatal("expected collision error, got nil")
+	}
+	if !strings.Contains(err.Error(), "shared") {
+		t.Errorf("error should mention colliding name \"shared\", got: %v", err)
+	}
+}
+
+func TestBuildToolCache_OriginalToolUnmutated(t *testing.T) {
+	// Aliasing must shallow-copy; the original *mcp.Tool must keep its real name.
+	orig := makeTool("real_name")
+	surveys := []backendSurvey{
+		{name: "a", toolMap: map[string]string{"real_name": "alias_name"}, tools: []*mcp.Tool{orig}},
+	}
+	all, err := buildToolCache(surveys)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if orig.Name != "real_name" {
+		t.Errorf("original tool was mutated: Name = %q", orig.Name)
+	}
+	if all[0].Tool.Name != "alias_name" {
+		t.Errorf("cached tool name = %q, want \"alias_name\"", all[0].Tool.Name)
 	}
 }
 

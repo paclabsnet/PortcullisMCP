@@ -194,24 +194,19 @@ func (r *Router) Reload(ctx context.Context, backends map[string]BackendConfig) 
 	r.mu.Unlock()
 
 	// Survey all backends (without holding mu to avoid deadlock with sessionFor).
-	var all []shared.AnnotatedTool
+	var surveys []backendSurvey
 	for _, name := range names {
 		tools, err := r.ListTools(ctx, name)
 		if err != nil {
 			slog.Warn("reload: list tools failed for backend", "backend", name, "error", err)
 			continue
 		}
-		tm := meta[name].toolMap
-		for _, t := range tools {
-			entry := shared.AnnotatedTool{ServerName: name, Tool: t}
-			if alias, ok := tm[t.Name]; ok {
-				// Shallow-copy the tool so we do not mutate the SDK-owned value.
-				toolCopy := *t
-				toolCopy.Name = alias
-				entry.Tool = &toolCopy
-			}
-			all = append(all, entry)
-		}
+		surveys = append(surveys, backendSurvey{name: name, toolMap: meta[name].toolMap, tools: tools})
+	}
+
+	all, err := buildToolCache(surveys)
+	if err != nil {
+		return err
 	}
 
 	r.cacheMu.Lock()
@@ -220,6 +215,67 @@ func (r *Router) Reload(ctx context.Context, backends map[string]BackendConfig) 
 
 	slog.Info("tool cache refreshed", "tool_count", len(all), "backend_count", len(names))
 	return nil
+}
+
+// backendSurvey holds the result of a single backend's ListTools call together
+// with its alias map, ready to be merged into the global tool cache.
+type backendSurvey struct {
+	name    string
+	toolMap map[string]string // real name → alias (from BackendConfig.ToolMap)
+	tools   []*mcp.Tool
+}
+
+// buildToolCache merges surveyed tools from all backends into a single list,
+// applying any alias mappings and returning an error if any effective name
+// (alias or real) appears more than once across all backends.
+// This catches alias-vs-alias, alias-vs-unaliased, and unaliased-vs-unaliased
+// collisions that would otherwise silently shadow tools in the agent's view.
+func buildToolCache(surveys []backendSurvey) ([]shared.AnnotatedTool, error) {
+	type effectiveEntry struct {
+		backendName string
+		realName    string // non-empty only when the effective name is an alias
+	}
+	seenEffective := make(map[string]effectiveEntry)
+	var all []shared.AnnotatedTool
+
+	for _, s := range surveys {
+		for _, t := range s.tools {
+			effectiveName := t.Name
+			var realName string
+			if alias, ok := s.toolMap[t.Name]; ok {
+				realName = t.Name
+				effectiveName = alias
+			}
+			if prior, dup := seenEffective[effectiveName]; dup {
+				return nil, fmt.Errorf(
+					"effective tool name %q collides: %s and %s — use tool_map to give one a unique alias",
+					effectiveName,
+					describeToolEntry(prior.backendName, effectiveName, prior.realName),
+					describeToolEntry(s.name, effectiveName, realName),
+				)
+			}
+			seenEffective[effectiveName] = effectiveEntry{backendName: s.name, realName: realName}
+
+			entry := shared.AnnotatedTool{ServerName: s.name, Tool: t}
+			if realName != "" {
+				// Shallow-copy the tool so we do not mutate the SDK-owned value.
+				toolCopy := *t
+				toolCopy.Name = effectiveName
+				entry.Tool = &toolCopy
+			}
+			all = append(all, entry)
+		}
+	}
+	return all, nil
+}
+
+// describeToolEntry returns a human-readable description of how a backend
+// exposes a tool, for use in collision error messages.
+func describeToolEntry(backendName, effectiveName, realName string) string {
+	if realName != "" {
+		return fmt.Sprintf("backend %q exposes it as an alias for %q", backendName, realName)
+	}
+	return fmt.Sprintf("backend %q exposes %q as its real name", backendName, effectiveName)
 }
 
 // sessionFor returns an active MCP client session for the named backend,
