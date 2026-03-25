@@ -30,7 +30,13 @@ Gate is misconfigured
    * Resilience: Gate remains "connected" to the Agent, preventing the Agent from giving up on the server entirely.
    * Compliance: As per your requirement, if the OIDC token is missing, Gate successfully blocks all work but explains why.
 
-   
+#### Additional Implementation Notes
+
+add a portcullis_status MCP tool at Gate that is always available. When the Gate is running normally, it responds with a message 
+indicating that the system is operating normally.  When gate is in degraded mode, it will respond with information about the
+problem as described above
+
+
 
 ### Task: Harden Configuration and Error Handling (Fail Fast)
 - **Problem**: The system is currently too permissive. Typos in YAML (e.g., `signing_key` vs `signing-key`) are silently ignored by the default decoder, and missing critical security components (like signing keys or OIDC providers) often result in a "degraded" startup with logged warnings rather than a fatal exit.

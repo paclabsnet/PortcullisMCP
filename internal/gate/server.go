@@ -155,6 +155,18 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 		Version: "0.1.0",
 	}, nil)
 
+	g.server.AddTool(
+		&mcp.Tool{
+			Name:        "portcullis_status",
+			Description: "Returns the current operational status of Portcullis Gate.",
+		},
+		func(_ context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return &mcp.CallToolResult{
+				Content: []mcp.Content{&mcp.TextContent{Text: "Portcullis Gate is functioning normally."}},
+			}, nil
+		},
+	)
+
 	if localFSSession != nil {
 		localTools, err := localFSSession.ListTools(ctx, &mcp.ListToolsParams{})
 		if err != nil {
