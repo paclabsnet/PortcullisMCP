@@ -8,20 +8,54 @@
 ### Task: Improve API
 - We need to version Keep's API with Gate, or version the Wrapped MCP Request, or both, so we know what to expect in the contents
 - We need to version the logging API (how Gate sends logs to Keep)
+- priority: high , but only after we've gotten all of the core communications done, no need in versioning our API too early
 
 
 
 
-### Task: Implement Tool Aliasing (Namespace Management) [DONE]
-- `BackendConfig.ToolMap map[string]string` (InternalName -> Alias) added to `config.go`
-- `Router.Reload()` builds `aliasToReal` per backend, validates no duplicate aliases across backends (hard error), applies aliases to tool names in the cache, and updates existing backend configs so ToolMap changes take effect on reload
-- `Router.CallTool()` un-aliases via `resolveToolName()` before dispatch (after PDP evaluation)
-- Tool cache served to Gate already has aliased names; the PDP always sees the alias
-- Connection-param changes (command, url) on existing backends still require a restart (known gap, noted in code)
+### Task: Implement "Mock Workflow" Loopback for System Authority Testing
+- **Problem**: Testing "System Authority" (workflow approvals like ServiceNow) is difficult without a real enterprise installation or a mock workflow tool.
+- **Fix**: Create a "Mock Workflow Handler" that uses the existing Webhook flow to simulate an enterprise approval loop.
+- **Implementation scope**:
+  - `examples/mock-workflow-server/main.go` — A tiny HTTP server that:
+    1. Receives a webhook from Keep containing the `pending_jwt`.
+    2. Logs the request and "sleeps" for a configurable delay (e.g., 5-10 seconds).
+    3. Calls Guard's `POST /token/deposit` with the `pending_jwt` and `user_id`.
+  - Documentation/YAML — Provide a `keep-config.mock-workflow.yaml` that uses the `webhook` handler to point at this mock server.
+- **Benefit**: Allows end-to-end verification of the System Authority flow (Keep -> Webhook -> Guard -> Gate Polling) without real infrastructure.
+- priority: medium-high
+
+
+#### Proposed Implementation Plan:
+
+
+  Operation:
+   1. Parse GUARD_URL, GUARD_TOKEN, APPROVAL_DELAY, and PORT from environment.
+   2. Listen: POST /webhook (configured in Keep's keep-config.mock-workflow.yaml).
+   3. Process:
+       * collect the pending_jwt
+         * no need to verify that it was signed by Keep, since that would require this workflow server to know Keep's secret, and Guard will validate the pending JWT anyways
+         * pull the UserID from the pending_jwt claims
+       * Log the incoming trace_id and UserID
+       * Respond 200 OK immediately to Keep (releasing its connection).
+   4. Asynchronous Step (Goroutine):
+       * Sleep for APPROVAL_DELAY (e.g., 5 seconds).
+       * Deposit: POST to Guard's /token/deposit using:
+           * pending_jwt: (the Keep-signed request JWT).
+           * user_id: (the extracted/verified UID).
+           * Auth: Includes the Authorization: Bearer <GUARD_TOKEN> header.
+   5. Test Configuration (config/keep-config.mock-workflow.yaml):
+       * Set escalation.workflow.type to webhook.
+       * Set webhook.url to http://localhost:<PORT>/webhook.
 
 
 
 
+
+
+### Naming Alignment Task 
+  - Rename escalation_jwt to pending_jwt in internal/keep/workflow_webhook.go and internal/keep/server.go to achieve perfect consistency across the codebase.
+  - priority: medium
 
 
 ### Task: Improve Secret Management
@@ -40,6 +74,25 @@
 - priority: medium
 
 
+### Task: set enterprise logging configuration to redact
+- all keys should be redacted
+- some commonly useful keys should be included in the config, but commented out
+- priority: medium
+
+
+### Task: Input sanitizing at Keep and Guard
+- standard good hygiene
+
+- medium-low priority
+
+
+
+### Task: add http for gate, so it can support multiple agents in parallel
+i.e. instead of running as a stdio MCP, it can run as an autonomous local process.
+- Portcullis-Gate needs to be concurrency-safe
+- priority: medium-low
+
+
 
 ### Task: System Authority Escalation
 - Enterprises will need both User-authority escalations (user approves in seconds via Guard) and System-authority escalations (ServiceNow/Jira/etc. approves over hours/days)
@@ -48,7 +101,11 @@
 - **System authority**: Gate gets workflow metadata only (reference URL, ticket ID, SLA, etc.), no JTI; presents metadata to agent via configurable message template; no pending entry stored; 60s poll is the only collection path (acceptable given approval latency)
 - When a System workflow approves, it calls Guard's `/token/deposit`; Gate picks up the resulting token on next poll
 - Implementation scope: `shared/types.go` (add `Authority`, `EscalationJWT`, `WorkflowMetadata` to `EscalationPendingError`), `keep/server.go` (add `authority` + `escalation_jwt` to 202 body), `gate/config.go` (add per-authority message templates), `gate/forwarder.go`, `gate/server.go` (split behavior by authority), `gate/guardclient.go` (add `RegisterPending`), `guard/server.go` (add `POST /pending`, change `handleGet` to `?jti=` lookup)
-- priority: medium
+- priority: low
+- notes: this is difficult to do without an actual enterprise deployment to test against, and even then it will be much different. 
+- the interesting thing here in the short term is how to create a plugin model where we can create enterprise-specific system workflow interfaces, without having to change the core code of Portcullis (which will help with support and platform stability)
+
+
 
 
 
@@ -57,7 +114,7 @@
 - [x] Token file (Option B) — Gate reads `identity.oidc.token_file`; fails hard (no OS fallback) when source is "oidc" and token is missing or invalid; `~` is now expanded correctly on read
 - [ ] Keychain storage — optional future enhancement
 - [ ] Device authorization grant (RFC 8628) — fallback for when no token file exists; deferred until enterprise adoption confirmed (see Implementation Details below)
-- priority: medium-high
+- priority: low
 
 
 ### Task: Fail closed for Gate if Keep is unavailable
@@ -70,9 +127,6 @@
 - purpose: allows a user to escalate to the enterprise security team if they aren't allowed to do something they think they should be able to
 - low priority
 
-### Task: Optionally create a Gate API to collect the list of DENY responses, along with trace/session information
-- not sure if this is necessary. It might be helpful for troubleshooting
-- very low priority
 
 
 
@@ -92,19 +146,6 @@ priority: low
 
 
 
-### Task: Input sanitizing at Keep and Guard
-- standard good hygiene
-
-- medium-low priority
-
-
-### Task: set enterprise logging configuration to redact
-- all keys should be redacted
-- some commonly useful keys should be commented out
-
-### Task: add http for gate, so it can support multiple agents in parallel
-i.e. instead of running as a stdio MCP, it can run as an autonomous local process.
-- Portcullis-Gate needs to be concurrency-safe
 
 
 ### Task: 'Workflow' response from PDP
@@ -121,8 +162,14 @@ Need more research:
   tool to be able to process and  validate JWTs
 - perhaps this should be configurable?
 
+- priority: low
 
 
+
+
+### Task: Optionally create a Gate API to collect the list of DENY responses, along with trace/session information
+- not sure if this is necessary. It might be helpful for troubleshooting
+- very low priority
 
 
 ## Implementation notes
