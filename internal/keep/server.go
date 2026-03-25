@@ -32,6 +32,7 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
+	"github.com/paclabsnet/PortcullisMCP/internal/shared/secrets"
 	"github.com/paclabsnet/PortcullisMCP/internal/telemetry"
 )
 
@@ -59,7 +60,22 @@ type Server struct {
 
 // NewServer creates a Keep server. configPath is retained so the admin reload
 // handler can re-read the file on demand.
-func NewServer(cfg Config, configPath string) (*Server, error) {
+func NewServer(ctx context.Context, cfg Config, configPath string) (*Server, error) {
+	// Resolve secret URIs for allowlisted fields.
+	var err error
+	cfg.Listen.Auth.BearerToken, err = secrets.Resolve(ctx, cfg.Listen.Auth.BearerToken)
+	if err != nil {
+		return nil, fmt.Errorf("keep: listen.auth.bearer_token: %w", err)
+	}
+	cfg.Admin.Token, err = secrets.Resolve(ctx, cfg.Admin.Token)
+	if err != nil {
+		return nil, fmt.Errorf("keep: admin.token: %w", err)
+	}
+	cfg.EscalationRequestSigning.Key, err = secrets.Resolve(ctx, cfg.EscalationRequestSigning.Key)
+	if err != nil {
+		return nil, fmt.Errorf("keep: escalation_request_signing.key: %w", err)
+	}
+
 	var pdp PolicyDecisionPoint
 	switch cfg.PDP.Type {
 	case "noop":

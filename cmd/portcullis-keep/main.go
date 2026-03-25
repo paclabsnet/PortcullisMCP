@@ -49,7 +49,7 @@ func main() {
 	}
 	defer func() { _ = shutdownTelemetry(context.Background()) }()
 
-	srv, err := keep.NewServer(cfg, *cfgPath)
+	srv, err := keep.NewServer(ctx, cfg, *cfgPath)
 	if err != nil {
 		slog.Error("init keep", "error", err)
 		os.Exit(1)

@@ -26,7 +26,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/paclabsnet/PortcullisMCP/internal/guard"
-	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 	"github.com/paclabsnet/PortcullisMCP/internal/version"
 )
 
@@ -45,7 +44,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	srv, err := guard.NewServer(cfg)
+	srv, err := guard.NewServer(ctx, cfg)
 	if err != nil {
 		slog.Error("init guard", "error", err)
 		os.Exit(1)
@@ -62,7 +61,6 @@ func loadConfig(path string) (guard.Config, error) {
 	if err != nil {
 		return guard.Config{}, err
 	}
-	data = shared.ExpandEnvVarsInYAML(data)
 	var cfg guard.Config
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)

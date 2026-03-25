@@ -19,26 +19,73 @@
 
   Execution Plan: Pluggable Secret Management
 
-  1. Add Dependencies
-  I will add gocloud.dev to the project's go.mod file to enable the URI-based secret resolution drivers.
+  1. Implement a simple "Fetch-Only" Resolver in internal/shared/secrets.
+    - Use Scheme Handlers:
+       * envvar:// -> Just calls os.LookupEnv. (5 lines of code)
+       * filevar:// -> Just calls os.ReadFile. (5 lines of code)
+       * vault:// -> Use the official HashiCorp Vault client (which we were going to use anyway).
+    - The Escape Hatch: We design our SecretResolver interface so that if we ever truly need the full Go CDK power later, we can
+      simply swap the implementation without changing the Keep or Guard code.
 
-  2. Create internal/shared/secrets/resolver.go
-  I'll implement a Resolve function that handles the URI logic:
-   * Direct Mode: If the string has no ://, it's returned as-is (backward compatibility).
-   * URI Mode: If it has a CDK-supported scheme (e.g., filevar://, envvar://), it uses runtimevar.OpenVariable to fetch the value.
-     if it uses `vault://` it will use the custom shim
-   * Schemes: I'll include support for filevar:// and envvar:// (built into Go CDK) immediately.
+
+  2. Recommendation: Write a Surgical "URI Parser"
+    Since the official hashicorp library doesn't support URIs, and we want to keep the "Lite" model, the most robust way is to use Go's standard
+    net/url package to parse the string ourselves and then call the official SDK.
+
+    - General Format
+      vault://[mount]/[path]#[key]
+
+      * vault://: The mandatory scheme identifying the resolver.
+      * [mount]: The name of the Secret Engine (e.g., secret, kv, production).
+      * [path]: The logical path to the secret.
+      * #[key]: The specific field name inside the secret's JSON payload.
+
+    - Example of how we'd implement it:
+
+```go
+    uri := "vault://secret/data/keep#mykey"
+   
+    u, _ := url.Parse(uri)
+   
+    // 1. Get the Mount (The Host)
+    mount := u.Host // Result: "secret"
+   
+    // 2. Get the Path and strip the leading slash
+    fullPath := strings.TrimPrefix(u.Path, "/") // Result: "data/keep"
+   
+    // 3. Extract everything after "data/" for KV v2
+    // We use strings.TrimPrefix to handle the specific KV v2 requirement
+    secretPath := strings.TrimPrefix(fullPath, "data/") // Result: "keep"
+   
+    key := u.Fragment   // result:  mykey
+    // Then use the official SDK:
+    secret, _ := client.KVv2(mount).Get(ctx, secretPath)
+    value := secret.Data[key]
+```
+    The full implementation will also handle parse errors, empty mounts, empty fragments (defaults to 'value')
+
+    Why this is the right move:
+    * Control: You aren't fighting a library's specific URI implementation.
+    * Official Stability: You use the official HashiCorp SDK for the actual network call, ensuring maximum security and feature
+      support (like TLS and namespaces).
+    * Clean YAML: Your users get the "Anchor Pattern" they expect from other modern tools.
+
+      The Portcullis Secret URI Specification
+      - can be found in README.md
+
+
 
   3. Update Server Constructors
-  I will update the NewServer functions in Keep and Guard to resolve their critical secrets during initialization:
-   * Keep Server: Resolves EscalationRequestSigning.Key and Auth.BearerToken.
-   * Guard Server: Resolves EscalationTokenSigning.Key, Keep.EscalationRequestSigningKey, and Auth.BearerToken.
-   * Context: Since secret resolution is an I/O operation, I'll ensure these constructors handle a context.Context (or use a
-     startup-scoped context) for timeouts.
+    We will update the NewServer functions in Keep and Guard to resolve their critical secrets during initialization:
+    * Keep Server: Resolves EscalationRequestSigning.Key and Auth.BearerToken.
+    * Guard Server: Resolves EscalationTokenSigning.Key, Keep.EscalationRequestSigningKey, and Auth.BearerToken.
+    * Context: Since secret resolution is an I/O operation, I'll ensure these constructors handle a context.Context (or use a
+      startup-scoped context) for timeouts.
+    * This will affect 30+ constructors including test cases, but it is the right thing to do, better now than later
 
   4. Configuration File Processing
     Configuration file processing must now be performed in a specific order:
-    - parse config file
+    - parse YAML
     - resolve secrets
     - validate resolved values (length/format) according to already-specified validation criteria that do not need to be revisited here
 
@@ -46,8 +93,8 @@
     - there is exceptionally low migration risk in this repo state
 
   6. Testing
-  - I'll add a unit test in internal/shared/secrets/resolver_test.go to verify that filevar:// and envvar:// resolution works as
-    expected.
+  - I'll add a unit test in internal/shared/secrets/resolver_test.go to verify that 
+    `filevar://` and `envvar://` resolution works as expected.
   - Verify that the ${ENV_VAR} pattern is no longer supported
   - Other tests required:
     - missing variable/file cases
@@ -59,7 +106,9 @@
 
 #### Important Refactoring
 1. Server constructors are currently context-free. Introducing context-aware secret resolution affects all call sites and tests. 
-
+2. We will need examples of using the the anchor pattern with `vault://path#key` so administrators will know how to include their
+   hashicorp vault configurations.
+   - examples are included in the README.md
 
 #### Specified Behaviors
 
@@ -89,11 +138,17 @@
 
 - Do you want fail-closed startup (recommended) when any required secret cannot be resolved?
   - the servers (Keep/Guard) should fail-closed at startup
-  - Gate should run in degraded mode, which is already a defined failure mode for Gate
+  - Gate should run in degraded mode, which is already a defined failure mode for Gate. It does not stop running, because that
+    would make it impossible for the user to determine what the problem is, it would just appear that Portcullis wasn't responding
+    without any feedback. It is better for Gate to remain operational and return error messages to the user and Agent when the
+    agent tries to use the MCPs
 
 - Should secret references be allowed in all config fields or only an allowlist?
 
-   - I recommend restricting secret resolution to fields that actually hold cryptographic material or authentication credentials:
+   - I recommend restricting vault-style secret resolution to fields that actually hold cryptographic 
+     material or authentication credentials.  So currently: `vault://` and in the future `awssec://`, `gcpsec://` and `azkv://` can only be
+     used for the hardcoded allowlist of fields.  
+      - note:  `filevar://` and `envvar://` can be used anywhere
 
       Keep Server
       * escalation_request_signing.key (HMAC/RSA Key)
@@ -107,6 +162,8 @@
 
       Gate (Future)
       * management_api.shared_secret
+
+    - future secrets that would be filled via `vault://` or similar mechanisms will have to be added to the allowlist
 
     - Recommendation
       We should implement the Resolve call explicitly in the constructors (NewServer) for these specific fields. This keeps the
@@ -122,24 +179,7 @@
 
 #### Vault Support
 
-  Refined Design: Hybrid Resolution Strategy
-
-  The core issue is that while gocloud.dev/runtimevar is excellent for cloud-native providers (AWS/GCP), it does not have a built-in
-  driver for fetching secret strings from HashiCorp Vault. To address this without increasing risk, we will use a Hybrid Resolver.
-
-  1. Explicit Driver Registration
-  In internal/shared/secrets/resolver.go, we will explicitly import and register the Go CDK drivers. This ensures that the registry
-  is populated and "Fail-Fast" behavior is enforced at startup.
-
-```go
-    import (
-        _ "gocloud.dev/runtimevar/filevar"
-        _ "gocloud.dev/runtimevar/envvar"
-        _ "gocloud.dev/runtimevar/constantvar"
-    )
-```
-
-  2. Vault Configuration (The "Meta-Secret" Problem)
+  1. Vault Configuration (The "Meta-Secret" Problem)
   To avoid the "Where does the Vault token come from?" chicken-and-egg problem, we will follow the Twelve-Factor App best practice:
   Infrastructure Configuration via Environment.
    * Vault Config: We will use the official github.com/hashicorp/vault/api client, which automatically respects standard environment
@@ -148,31 +188,6 @@
      sidecar or a Kubernetes Mutating Webhook. Portcullis doesn't need to "know" about the Vault infrastructure; it simply expects
      the standard environment to be present.
 
-  3. The vault:// Shim
-  Since there is no Go CDK driver for Vault strings, we will implement a surgical "Shim" in our resolver:
-   * Scheme: vault://<path/to/secret>#<key>
-   * Logic:
-       1. Initialize a vault.NewClient (using standard env).
-       2. Read the secret at <path/to/secret>.
-       3. Extract the value for <key>.
-
-  4. Updated Resolution Logic
-
-```go
-    func Resolve(ctx context.Context, uri string) (string, error) {
-        if !strings.Contains(uri, "://") {
-            return uri, nil // Direct mode
-        }
-        u, err := url.Parse(uri)
-        if err != nil { return "", err }
-        switch u.Scheme {
-        case "vault":
-            return resolveVault(ctx, u) // Handled by our native Vault shim
-        default:
-            return resolveGoCDK(ctx, uri) // Handled by Go CDK (File, Env - future: AWS, GCP, etc)
-        }
-    }
-```
 
   Why this addresses your concerns:
    * Implementation Risk: We've identified that vault:// requires a custom implementation (the shim) rather than a non-existent Go

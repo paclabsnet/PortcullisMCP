@@ -2,10 +2,10 @@ listen:
   address: "0.0.0.0:8444"
 
 keep:
-  escalation_request_signing_key: "${KEEP_SIGNING_KEY}"   # must match keep.signing.key
+  escalation_request_signing_key: "envvar://KEEP_SIGNING_KEY"   # must match keep.signing.key
 
 escalation_token_signing:
-  key: "${GUARD_SIGNING_KEY}"          # PDP must be configured to trust tokens signed with this key
+  key: "envvar://GUARD_SIGNING_KEY"          # PDP must be configured to trust tokens signed with this key
   ttl: 86400                           # escalation token TTL in seconds (default: 86400 = 24h)
 
 templates:
@@ -16,7 +16,7 @@ portcullis_gate_management_port: 7777   # gate management API port, shown in pos
 # Authentication for the /token/unclaimed/list and /token/deposit endpoints.
 # If bearer_token is empty, these endpoints are open (development only).
 auth:
-  bearer_token: "${GUARD_BEARER_TOKEN}"
+  bearer_token: "envvar://GUARD_BEARER_TOKEN"
 
 # Unclaimed token store settings.
 token_store:

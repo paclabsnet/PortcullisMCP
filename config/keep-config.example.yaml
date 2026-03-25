@@ -43,7 +43,9 @@ backends:
     command: "npx"
     args: ["-y", "@modelcontextprotocol/server-github"]
     env:
-      GITHUB_TOKEN: "${GITHUB_TOKEN}"
+      # Note: env values for backends are not resolved through the secret resolver.
+      # Use a literal value here or manage this secret through your process environment.
+      GITHUB_TOKEN: "your-github-token-here"
 
   # Streamable HTTP backends (current MCP standard, preferred for new deployments)
   fetch:
@@ -63,7 +65,7 @@ backends:
       list_orders:    "enterprise_list_orders"
 
 escalation_request_signing:
-  key: "${KEEP_SIGNING_KEY}"   # must match guard's keep.escalation_request_signing_key; use ${ENV_VAR} in production
+  key: "envvar://KEEP_SIGNING_KEY"   # must match guard's keep.escalation_request_signing_key
   ttl: 3600                    # escalation request JWT TTL in seconds (default: 3600)
 
 escalation:
@@ -87,7 +89,10 @@ decision_logs:
   console: false               # also log to console (default: false)
   url: "https://siem.internal.example.com/api/v1/logs"
   headers:
-    Authorization: "Bearer ${SIEM_API_TOKEN}"
+    # Note: decision_logs.headers values are not resolved through the secret resolver.
+    # Use a literal value here. To avoid committing secrets, populate this field
+    # from your secrets management tooling before starting the server.
+    Authorization: "Bearer your-siem-api-token-here"
     X-Source: "portcullis-keep"
 
 telemetry:

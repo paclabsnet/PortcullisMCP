@@ -177,7 +177,7 @@ func TestNewServer_UnknownPDPType(t *testing.T) {
 	cfg := Config{
 		PDP: PDPConfig{Type: "unknown-pdp"},
 	}
-	_, err := NewServer(cfg, "")
+	_, err := NewServer(context.Background(), cfg, "")
 	if err == nil {
 		t.Fatal("expected error for unknown PDP type, got nil")
 	}
