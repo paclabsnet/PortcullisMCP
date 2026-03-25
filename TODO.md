@@ -11,8 +11,8 @@
 - priority: high , but only after we've gotten all of the core communications done, no need in versioning our API too early
 
 
-### Task: handle the 'workflow' response from the PDP
-- when the PDP returns 'workflow' as a response, Keep must mint the PendingJWT as normal, but invoke the 
+### Task: handle the 'workflow' response from the PDP [DONE]
+- when the PDP returns 'workflow' as a response, Keep must mint the PendingJWT as normal, but invoke the
   escalation.workflow configuration to process the PendingJWT and invoke an external workflow
 - if no workflow handler is configured or resolvable for the request, Keep should treat this as a deny, with a message
   indicating that this request could be authorized, but there is no workflow configured to do so.

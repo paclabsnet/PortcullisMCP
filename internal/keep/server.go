@@ -277,6 +277,53 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 			"pending_jwt":        pendingJWT,
 		})
 
+	case "workflow":
+		if !s.hasWorkflow() {
+			span.SetStatus(codes.Error, "workflow required but not configured")
+			slog.ErrorContext(ctx, "workflow decision but no workflow handler is configured",
+				"tool", req.ToolName, "user", req.Principal.UserID, "trace_id", traceID)
+			writeDeny(w, "this action requires external workflow approval but no workflow system is configured — contact your administrator", traceID)
+			return
+		}
+		pendingJWT := ""
+		escalationJTI := ""
+		if s.signer != nil {
+			jwtStr, jti, err := s.signer.Sign(req, pdpResp.Reason, pdpResp.EscalationScope)
+			if err != nil {
+				slog.ErrorContext(ctx, "workflow jwt sign failed", "error", err, "trace_id", traceID)
+			} else {
+				pendingJWT = jwtStr
+				escalationJTI = jti
+			}
+		} else {
+			slog.WarnContext(ctx, "escalation signer not configured; workflow approval cannot be deposited to Guard",
+				"tool", req.ToolName, "user", req.Principal.UserID, "trace_id", traceID)
+		}
+		wfRef, err := s.workflow.Submit(ctx, req, pendingJWT)
+		if err != nil {
+			span.SetStatus(codes.Error, err.Error())
+			slog.ErrorContext(ctx, "workflow submit failed", "error", err, "trace_id", traceID)
+			writeError(w, http.StatusInternalServerError, "failed to submit workflow request")
+			return
+		}
+		slog.InfoContext(ctx, "workflow pending",
+			"tool", req.ToolName,
+			"server", req.ServerName,
+			"user", req.Principal.UserID,
+			"escalation_jti", escalationJTI,
+			"workflow_reference", wfRef,
+			"trace_id", traceID,
+		)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"status":             "workflow_pending",
+			"reason":             pdpResp.Reason,
+			"workflow_reference": wfRef,
+			"escalation_jti":     escalationJTI,
+			"pending_jwt":        pendingJWT,
+		})
+
 	default:
 		span.SetStatus(codes.Error, "unknown decision")
 		slog.ErrorContext(ctx, "unknown pdp decision", "decision", pdpResp.Decision, "trace_id", traceID)
@@ -403,6 +450,53 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 			"pending_jwt":        pendingJWT,
 		})
 
+	case "workflow":
+		if !s.hasWorkflow() {
+			span.SetStatus(codes.Error, "workflow required but not configured")
+			slog.ErrorContext(ctx, "workflow decision but no workflow handler is configured",
+				"tool", req.ToolName, "user", req.Principal.UserID, "trace_id", traceID)
+			writeDeny(w, "this action requires external workflow approval but no workflow system is configured — contact your administrator", traceID)
+			return
+		}
+		pendingJWT := ""
+		escalationJTI := ""
+		if s.signer != nil {
+			jwtStr, jti, err := s.signer.Sign(req, pdpResp.Reason, pdpResp.EscalationScope)
+			if err != nil {
+				slog.ErrorContext(ctx, "workflow jwt sign failed", "error", err, "trace_id", traceID)
+			} else {
+				pendingJWT = jwtStr
+				escalationJTI = jti
+			}
+		} else {
+			slog.WarnContext(ctx, "escalation signer not configured; workflow approval cannot be deposited to Guard",
+				"tool", req.ToolName, "user", req.Principal.UserID, "trace_id", traceID)
+		}
+		wfRef, err := s.workflow.Submit(ctx, req, pendingJWT)
+		if err != nil {
+			span.SetStatus(codes.Error, err.Error())
+			slog.ErrorContext(ctx, "workflow submit failed", "error", err, "trace_id", traceID)
+			writeError(w, http.StatusInternalServerError, "failed to submit workflow request")
+			return
+		}
+		slog.InfoContext(ctx, "workflow pending",
+			"tool", req.ToolName,
+			"server", req.ServerName,
+			"user", req.Principal.UserID,
+			"escalation_jti", escalationJTI,
+			"workflow_reference", wfRef,
+			"trace_id", traceID,
+		)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"status":             "workflow_pending",
+			"reason":             pdpResp.Reason,
+			"workflow_reference": wfRef,
+			"escalation_jti":     escalationJTI,
+			"pending_jwt":        pendingJWT,
+		})
+
 	default:
 		span.SetStatus(codes.Error, "unknown decision")
 		slog.ErrorContext(ctx, "unknown pdp decision", "decision", pdpResp.Decision, "trace_id", traceID)
@@ -501,6 +595,14 @@ func buildServerTLS(cfg TLSConfig) (*tls.Config, error) {
 		tlsCfg.ClientAuth = tls.RequireAndVerifyClientCert
 	}
 	return tlsCfg, nil
+}
+
+// hasWorkflow returns true when a real workflow handler is configured.
+// noopWorkflow (the default when no workflow type is set) does not count —
+// a "workflow" PDP decision requires an actual external system to approve it.
+func (s *Server) hasWorkflow() bool {
+	_, isNoop := s.workflow.(*noopWorkflow)
+	return !isNoop
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
