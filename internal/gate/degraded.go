@@ -17,9 +17,29 @@ package gate
 import (
 	"context"
 	"log/slog"
+	"net/http"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+// pingHealth performs a GET to <endpoint>/health with a 3-second timeout.
+// Returns "available" if any HTTP response is received, "unavailable" otherwise.
+func pingHealth(ctx context.Context, endpoint string) string {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"/health", nil)
+	if err != nil {
+		return "unavailable"
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "unavailable"
+	}
+	resp.Body.Close()
+	return "available"
+}
 
 // RunDegraded starts a minimal MCP server that registers a single
 // portcullis_status pseudo-tool. Every call to that tool returns the provided
@@ -37,18 +57,18 @@ func RunDegraded(ctx context.Context, reason string) error {
 		Version: "0.1.0",
 	}, nil)
 
-	srv.AddTool(
+	mcp.AddTool(srv,
 		&mcp.Tool{
 			Name:        "portcullis_status",
 			Description: "Returns the current status of Portcullis Gate. Portcullis Gate has failed to start — call this tool to see the error.",
 		},
-		func(_ context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		func(_ context.Context, _ *mcp.CallToolRequest, _ any) (*mcp.CallToolResult, any, error) {
 			return &mcp.CallToolResult{
 				IsError: true,
 				Content: []mcp.Content{&mcp.TextContent{
-					Text: "Portcullis Gate failed to start: " + reason,
+					Text: "Portcullis Gate is degraded: " + reason,
 				}},
-			}, nil
+			}, nil, nil
 		},
 	)
 

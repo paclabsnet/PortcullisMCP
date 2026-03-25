@@ -80,6 +80,11 @@ type Gate struct {
 	logDone       chan struct{}
 	logWg         sync.WaitGroup
 
+	// degradedReason is non-empty when Gate started but could not fully
+	// initialize (e.g. Keep unreachable at startup). portcullis_status reports
+	// this to the agent. Empty means Gate is functioning normally.
+	degradedReason string
+
 	// pendingEscalations tracks escalation requests awaiting user approval.
 	// Key: serverName+"/"+toolName. Protected by pendingMu.
 	pendingMu          sync.Mutex
@@ -155,15 +160,34 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 		Version: "0.1.0",
 	}, nil)
 
-	g.server.AddTool(
+	mcp.AddTool(g.server,
 		&mcp.Tool{
 			Name:        "portcullis_status",
-			Description: "Returns the current operational status of Portcullis Gate.",
+			Description: "Returns the current operational status of Portcullis Gate, Keep, and Guard.",
 		},
-		func(_ context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		func(ctx context.Context, _ *mcp.CallToolRequest, _ any) (*mcp.CallToolResult, any, error) {
+			gateStatus := "operating normally"
+			isErr := false
+			if g.degradedReason != "" {
+				gateStatus = "degraded — " + g.degradedReason
+				isErr = true
+			}
+
+			keepStatus := pingHealth(ctx, g.cfg.Keep.Endpoint)
+
+			guardStatus := "not configured"
+			if g.cfg.Guard.Endpoint != "" {
+				guardStatus = pingHealth(ctx, g.cfg.Guard.Endpoint)
+			}
+
+			msg := fmt.Sprintf(
+				"Portcullis Gate:  %s\nPortcullis Keep:  %s\nPortcullis Guard: %s",
+				gateStatus, keepStatus, guardStatus,
+			)
 			return &mcp.CallToolResult{
-				Content: []mcp.Content{&mcp.TextContent{Text: "Portcullis Gate is functioning normally."}},
-			}, nil
+				IsError: isErr,
+				Content: []mcp.Content{&mcp.TextContent{Text: msg}},
+			}, nil, nil
 		},
 	)
 
@@ -184,6 +208,7 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 		// Non-fatal: gate can still serve local filesystem tools if Keep is
 		// temporarily unavailable at startup.
 		slog.Warn("fetch tool list from keep failed", "error", err)
+		g.degradedReason = "Keep is unreachable — tool list may be incomplete. Error: " + err.Error()
 	}
 	for _, at := range keepTools {
 		g.toolServerMap[at.Tool.Name] = at.ServerName

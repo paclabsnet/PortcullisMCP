@@ -10,6 +10,16 @@ Currently the reason field for the JWTs is echoing the problem. It should probab
 - We need to version Keep's API with Gate, or version the Wrapped MCP Request, or both, so we know what to expect in the contents
 - We need to version the logging API (how Gate sends logs to Keep)
 
+### Task: Implement Tool Aliasing (Namespace Management)
+- **Problem**: Multiple backend MCP servers may provide tools with identical names (e.g., `query_database`). This causes collisions at the Gate, as the AI Agent cannot distinguish between them.
+- **Fix**: Allow Keep to alias tool names in the configuration. Keep presents the unique `alias` to the Agent but "un-aliases" it back to the original name before calling the backend.
+- **Implementation scope**:
+  - `internal/keep/config.go` — Add `ToolMap map[string]string` (Alias -> Internal Name) to `BackendConfig`.
+  - `internal/keep/router.go` — Update routing logic to look up the internal name before making the outbound call.
+  - `internal/keep/server.go` — In the `/tools` handler, rename tools using the `ToolMap` before sending the list to Gate.
+  - `internal/shared/types.go` — Consider updating `AnnotatedTool` to store both names for debugging/tracing.
+- priority: medium
+
 ### Task: Improve Secret Management
 - We probably need to support a way to gather secrets (Private keys, shared secrets) from a vault, but don't get rid of the config option for the sandbox model
 - priority: medium
