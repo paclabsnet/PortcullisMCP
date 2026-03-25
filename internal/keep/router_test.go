@@ -195,6 +195,135 @@ func TestCheckBackendURL_InvalidURL(t *testing.T) {
 	}
 }
 
+// --- tool aliasing tests ---
+
+func TestRouter_ResolveToolName_NoAlias(t *testing.T) {
+	r := NewRouter(map[string]BackendConfig{
+		"backend": {Type: "stdio", Command: "echo"},
+	})
+	if got := r.resolveToolName("backend", "query_db"); got != "query_db" {
+		t.Errorf("resolveToolName = %q, want %q", got, "query_db")
+	}
+}
+
+func TestRouter_ResolveToolName_WithAlias(t *testing.T) {
+	r := NewRouter(map[string]BackendConfig{})
+	r.backends["backend"] = &backendConn{
+		cfg:         BackendConfig{Type: "stdio", Command: "echo"},
+		aliasToReal: map[string]string{"acme_query_db": "query_db"},
+	}
+	if got := r.resolveToolName("backend", "acme_query_db"); got != "query_db" {
+		t.Errorf("resolveToolName = %q, want %q", got, "query_db")
+	}
+}
+
+func TestRouter_ResolveToolName_UnknownBackend(t *testing.T) {
+	r := NewRouter(map[string]BackendConfig{})
+	// Unknown backend: name is returned unchanged (caller will get "unknown backend" on CallTool).
+	if got := r.resolveToolName("nonexistent", "tool"); got != "tool" {
+		t.Errorf("resolveToolName for unknown backend = %q, want %q", got, "tool")
+	}
+}
+
+func TestRouter_Reload_BuildsAliasToReal(t *testing.T) {
+	r := NewRouter(map[string]BackendConfig{
+		"backend": {
+			Type:    "stdio",
+			Command: "echo",
+			ToolMap: map[string]string{
+				"query_database": "acme_query_database",
+			},
+		},
+	})
+	// Reload without live backends (survey will fail, but alias maps are built
+	// before the survey). Use a context with a deadline to keep the test fast.
+	ctx := context.Background()
+	// We expect reload to succeed (survey failure is non-fatal).
+	_ = r.Reload(ctx, map[string]BackendConfig{
+		"backend": {
+			Type:    "stdio",
+			Command: "echo",
+			ToolMap: map[string]string{
+				"query_database": "acme_query_database",
+			},
+		},
+	})
+
+	r.mu.Lock()
+	conn := r.backends["backend"]
+	r.mu.Unlock()
+
+	if conn.aliasToReal == nil {
+		t.Fatal("aliasToReal should be populated after Reload")
+	}
+	if got := conn.aliasToReal["acme_query_database"]; got != "query_database" {
+		t.Errorf("aliasToReal[%q] = %q, want %q", "acme_query_database", got, "query_database")
+	}
+	// Verify resolveToolName works end-to-end.
+	if got := r.resolveToolName("backend", "acme_query_database"); got != "query_database" {
+		t.Errorf("resolveToolName = %q, want %q", got, "query_database")
+	}
+}
+
+func TestRouter_Reload_DuplicateAliasAcrossBackends(t *testing.T) {
+	r := NewRouter(map[string]BackendConfig{
+		"backend_a": {
+			Type:    "stdio",
+			Command: "echo",
+			ToolMap: map[string]string{"tool_a": "shared_alias"},
+		},
+		"backend_b": {
+			Type:    "stdio",
+			Command: "echo",
+			ToolMap: map[string]string{"tool_b": "shared_alias"},
+		},
+	})
+	err := r.Reload(context.Background(), map[string]BackendConfig{
+		"backend_a": {
+			Type:    "stdio",
+			Command: "echo",
+			ToolMap: map[string]string{"tool_a": "shared_alias"},
+		},
+		"backend_b": {
+			Type:    "stdio",
+			Command: "echo",
+			ToolMap: map[string]string{"tool_b": "shared_alias"},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for duplicate alias across backends, got nil")
+	}
+	if !strings.Contains(err.Error(), "shared_alias") {
+		t.Errorf("error should mention the duplicate alias, got: %v", err)
+	}
+}
+
+func TestRouter_Reload_UpdatesExistingBackendConfig(t *testing.T) {
+	r := NewRouter(map[string]BackendConfig{
+		"backend": {Type: "stdio", Command: "echo"},
+	})
+	newCfg := map[string]BackendConfig{
+		"backend": {
+			Type:    "stdio",
+			Command: "echo",
+			ToolMap: map[string]string{"real_tool": "aliased_tool"},
+		},
+	}
+	_ = r.Reload(context.Background(), newCfg)
+
+	r.mu.Lock()
+	conn := r.backends["backend"]
+	r.mu.Unlock()
+
+	if conn.aliasToReal == nil {
+		t.Fatal("config update on reload should populate aliasToReal")
+	}
+	if conn.aliasToReal["aliased_tool"] != "real_tool" {
+		t.Errorf("after config update, aliasToReal[%q] = %q, want %q",
+			"aliased_tool", conn.aliasToReal["aliased_tool"], "real_tool")
+	}
+}
+
 // --- noRedirectHTTPClient tests ---
 
 func TestNoRedirectHTTPClient_RefusesRedirect(t *testing.T) {

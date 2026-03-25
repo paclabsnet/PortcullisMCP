@@ -123,6 +123,12 @@ type BackendConfig struct {
 	// deployed on internal networks (e.g. Docker Compose, on-premises services).
 	// Redirects are still refused regardless of this setting.
 	AllowPrivateAddresses bool `yaml:"allow_private_addresses"`
+
+	// ToolMap renames tools before presenting them to the agent.
+	// Key is the tool's real name on the backend; value is the alias
+	// the agent and PDP will see. Aliases must be unique across all backends.
+	// Example: {"query_database": "acme_query_database"}
+	ToolMap map[string]string `yaml:"tool_map"`
 }
 
 type EscalationConfig struct {

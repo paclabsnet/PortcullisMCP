@@ -12,26 +12,12 @@
 
 
 
-### Task: Implement Tool Aliasing (Namespace Management)
-- **Problem**: Multiple backend MCP servers may provide tools with identical names (e.g., `query_database`). This causes collisions at the Gate, as the AI Agent cannot distinguish between them.
-- **Fix**: Allow Keep to alias tool names in the configuration. Keep presents the unique `alias` to the Agent but "un-aliases" it back to the original name before calling the backend.
-- **Implementation scope**:
-  - `internal/keep/config.go` — Add `ToolMap map[string]string` (InternalName -> Alias) to `BackendConfig`.
-  - `internal/keep/router.go` — Update routing logic to look up the internal name before making the outbound call.
-  - `internal/keep/server.go` — In the `/tools` handler, rename tools using the `ToolMap` before sending the list to Gate.
-- priority: medium
-
-Important! Don't switch to the actual MCP tool_name until after calling the PDP.  This way, the tool name that is presented to the user, the tool name that is in the escalation & request tokens, and the tool name in the PDP policies will all be consistent.  
-
-#### Other observations:
-
-- Alias uniqueness validation
-  - If two backends both map a tool to the same alias, there's a silent collision — one will shadow the other. Currently tool name
-    collisions are just an operator mistake with no feedback. With aliasing, admins are explicitly choosing names, so a duplicate
-    alias should be a hard error at Reload() time.
-
-- Reload doesn't update existing backend configs
-  - note as a known gap for now, this can be addressed with a restart
+### Task: Implement Tool Aliasing (Namespace Management) [DONE]
+- `BackendConfig.ToolMap map[string]string` (InternalName -> Alias) added to `config.go`
+- `Router.Reload()` builds `aliasToReal` per backend, validates no duplicate aliases across backends (hard error), applies aliases to tool names in the cache, and updates existing backend configs so ToolMap changes take effect on reload
+- `Router.CallTool()` un-aliases via `resolveToolName()` before dispatch (after PDP evaluation)
+- Tool cache served to Gate already has aliased names; the PDP always sees the alias
+- Connection-param changes (command, url) on existing backends still require a restart (known gap, noted in code)
 
 
 
