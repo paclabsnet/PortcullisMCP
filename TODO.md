@@ -14,6 +14,24 @@ Currently the reason field for the JWTs is echoing the problem. It should probab
 - We probably need to support a way to gather secrets (Private keys, shared secrets) from a vault, but don't get rid of the config option for the sandbox model
 - priority: medium
 
+
+### Task: User-Friendly error handling at Gate
+The Gate is customer facing, launched by an Agent, and interacts with the Agent via MCP calls.
+Gate should not shut down when it has an error, because it will be difficult, if not impossible
+for a normal user to understand what is going on. 
+
+Instead, if there are any configuration errors or validation errors or network errors, or any other error in Gate
+that prevents it from functioning normally, it should move into 'Degraded mode' where it responds to every MCP
+request with an error message describing the problem. This will dramatically improve the user experience when
+Gate is misconfigured
+
+  Benefits
+   * Observability: The user gets immediate, actionable feedback in their primary workspace (the AI chat).
+   * Resilience: Gate remains "connected" to the Agent, preventing the Agent from giving up on the server entirely.
+   * Compliance: As per your requirement, if the OIDC token is missing, Gate successfully blocks all work but explains why.
+
+   
+
 ### Task: Harden Configuration and Error Handling (Fail Fast)
 - **Problem**: The system is currently too permissive. Typos in YAML (e.g., `signing_key` vs `signing-key`) are silently ignored by the default decoder, and missing critical security components (like signing keys or OIDC providers) often result in a "degraded" startup with logged warnings rather than a fatal exit.
 - **Fix**: Implement strict validation at startup to ensure the system never runs in an insecure or broken state.

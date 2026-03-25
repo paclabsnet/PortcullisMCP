@@ -438,6 +438,10 @@ func (g *Gate) collectEscalationTokens(ctx context.Context, serverName, toolName
 // In proactive mode it also pushes the signed JWT to Guard immediately so that
 // Guard can serve a short ?jti= approval URL. Returns an error (shown to the
 // agent) only when Guard is unreachable in proactive mode.
+//
+// When Guard is not configured, this is a no-op: the pending escalation cannot
+// be resolved (no poll worker runs), and policyErrToResult will convert the
+// escalation to a deny regardless.
 func (g *Gate) maybeStorePendingEscalation(ctx context.Context, serverName, toolName string, err error) error {
 	var escalationErr *shared.EscalationPendingError
 	if !errors.As(err, &escalationErr) {
@@ -446,8 +450,11 @@ func (g *Gate) maybeStorePendingEscalation(ctx context.Context, serverName, tool
 	if escalationErr.EscalationJTI == "" {
 		return nil
 	}
+	if g.guardClient == nil {
+		return nil
+	}
 
-	if g.isProactive() && g.guardClient != nil {
+	if g.isProactive() {
 		pushCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 		if regErr := g.guardClient.RegisterPending(pushCtx, escalationErr.EscalationJTI, escalationErr.EscalationJWT); regErr != nil {
