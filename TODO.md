@@ -43,6 +43,10 @@ Gate is misconfigured
   - `internal/gate/server.go` — ensure background workers (like `pollGuardWorker`) can intelligently handle network errors. Retry thoughtfully, log appropriately. Communicate to the user appropriately. Never let a worker block main shutdown. auto-recover when the network issues improve.  Don't overlog for network errors, which just causes noise
 - priority: high
 
+NOTE: After thinking it through, Gate should not fail fast, but operate in a degraded mode when there are problems at
+      startup. It will then be able to report these issues to the Agent, who can deliver them to the User, which 
+      will make configuration problems easier to detect and fix
+
 
 #### Harden Configuration and Error Handling (Fail Fast) Plan and Analysis
 
@@ -60,7 +64,7 @@ Concerns:
 - Guard polling currently treats outages as warnings in server.go:568, which is usually correct for transient network/auth blips.
 - Concern: killing Gate on temporary Guard/API failures could reduce availability more than it improves security.
   - Better split:
-    - Startup config/key/TLS errors: fatal.
+    - Startup config/key/TLS errors: move to degraded mode
     - Runtime dependency outages: degrade with clear errors/metrics, do not crash loop.
 - If you add Validate methods, avoid duplicating checks in two places with different messages/rules.
 - KnownFields catches unknown struct fields, but not semantic issues inside maps..
@@ -77,7 +81,7 @@ Narrow the task to:
 
 
 Good default policy:
-- Startup: strict/fatal on invalid config/keys/TLS.
+- Startup: strict/fatal on invalid config/keys/TLS - for keep and guard .  Gate moves to 'degraded mode'
 - Runtime workers: degrade service mode, keep process running, report health and errors, auto-recover when dependencies return.
 
 
