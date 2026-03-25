@@ -12,11 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package version holds the PortcullisMCP suite version.
-// Update Version on every change before committing.
-// The Makefile overrides this at build time via:
-//
-//	go build -ldflags "-X github.com/paclabsnet/PortcullisMCP/internal/version.Version=x.y.z"
-package version
+package gate
 
-var Version = "0.2.1"
+import "testing"
+
+func TestConfig_Validate_ApprovalManagementStrategy(t *testing.T) {
+	tests := []struct {
+		strategy string
+		wantErr  bool
+	}{
+		{"", false},
+		{"user-driven", false},
+		{"proactive", false},
+		{"Proactive", true},
+		{"USER-DRIVEN", true},
+		{"proactve", true}, // typo
+		{"unknown", true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.strategy, func(t *testing.T) {
+			cfg := Config{Guard: GuardConfig{ApprovalManagementStrategy: tc.strategy}}
+			err := cfg.Validate()
+			if (err != nil) != tc.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}

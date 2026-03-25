@@ -20,6 +20,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -121,6 +123,10 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 	var guardClient *GuardClient
 	if cfg.Guard.Endpoint != "" {
 		guardClient = NewGuardClient(cfg.Guard)
+	}
+
+	if err := cfg.Validate(); err != nil {
+		return nil, err
 	}
 
 	g := &Gate{
@@ -330,8 +336,10 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 			TraceID:          traceID,
 		}
 		if err := g.forwarder.Authorize(ctx, enriched); err != nil {
-			g.maybeStorePendingEscalation(shared.LocalFSServerName, toolName, err)
-			return policyErrToResult(err, toolName, traceID)
+			if storeErr := g.maybeStorePendingEscalation(ctx, shared.LocalFSServerName, toolName, err); storeErr != nil {
+				return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: storeErr.Error()}}}, nil
+			}
+			return g.policyErrToResult(err, toolName, traceID)
 		}
 		if g.localFS == nil {
 			return nil, fmt.Errorf("local filesystem server not configured")
@@ -359,8 +367,10 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 	}
 	result, err := g.forwarder.CallTool(ctx, enriched)
 	if err != nil {
-		g.maybeStorePendingEscalation(serverName, toolName, err)
-		return policyErrToResult(err, toolName, traceID)
+		if storeErr := g.maybeStorePendingEscalation(ctx, serverName, toolName, err); storeErr != nil {
+			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: storeErr.Error()}}}, nil
+		}
+		return g.policyErrToResult(err, toolName, traceID)
 	}
 	return result, err
 }
@@ -425,13 +435,28 @@ func (g *Gate) collectEscalationTokens(ctx context.Context, serverName, toolName
 
 // maybeStorePendingEscalation records a pending escalation in the in-memory map
 // when Keep responds with an escalation-required error that carries a JTI.
-func (g *Gate) maybeStorePendingEscalation(serverName, toolName string, err error) {
+// In proactive mode it also pushes the signed JWT to Guard immediately so that
+// Guard can serve a short ?jti= approval URL. Returns an error (shown to the
+// agent) only when Guard is unreachable in proactive mode.
+func (g *Gate) maybeStorePendingEscalation(ctx context.Context, serverName, toolName string, err error) error {
 	var escalationErr *shared.EscalationPendingError
 	if !errors.As(err, &escalationErr) {
-		return
+		return nil
 	}
 	if escalationErr.EscalationJTI == "" {
-		return
+		return nil
+	}
+
+	if g.isProactive() && g.guardClient != nil {
+		pushCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		if regErr := g.guardClient.RegisterPending(pushCtx, escalationErr.EscalationJTI, escalationErr.EscalationJWT); regErr != nil {
+			slog.Error("proactive: failed to register pending escalation with Guard",
+				"jti", escalationErr.EscalationJTI, "error", regErr)
+			return fmt.Errorf("escalation required but Guard is currently unreachable — please try again later")
+		}
+		slog.Info("proactive: registered pending escalation with Guard",
+			"jti", escalationErr.EscalationJTI, "server", serverName, "tool", toolName)
 	}
 
 	key := serverName + "/" + toolName
@@ -449,6 +474,59 @@ func (g *Gate) maybeStorePendingEscalation(serverName, toolName string, err erro
 
 	slog.Info("stored pending escalation",
 		"server", serverName, "tool", toolName, "jti", escalationErr.EscalationJTI)
+	return nil
+}
+
+// isProactive reports whether Gate is configured to push pending escalation JWTs
+// to Guard proactively (approval_management_strategy: "proactive").
+func (g *Gate) isProactive() bool {
+	return g.cfg.Guard.ApprovalManagementStrategy == "proactive"
+}
+
+// defaultApprovalInstructions is the built-in escalation message template.
+// Supports {reason} and {url} placeholders.
+const defaultApprovalInstructions = "Escalation required: {reason}\n\nPresent this complete URL to the user so they can click it to approve the request. Do not truncate or shorten the URL:\n{url}"
+
+// buildEscalationMessage constructs the agent-facing message for an escalation
+// response, substituting {reason} and {url} in the configured instructions template.
+func (g *Gate) buildEscalationMessage(e *shared.EscalationPendingError) string {
+	guardEndpoint := g.cfg.Guard.Endpoint
+
+	var approvalURL string
+	if guardEndpoint != "" {
+		if g.isProactive() && e.EscalationJTI != "" {
+			approvalURL = guardEndpoint + "/approve?jti=" + url.QueryEscape(e.EscalationJTI)
+		} else if e.EscalationJWT != "" {
+			approvalURL = guardEndpoint + "/approve?token=" + url.QueryEscape(e.EscalationJWT)
+		}
+	}
+	// Fall back to any reference URL Keep provided directly (e.g. ServiceNow ticket URL).
+	if approvalURL == "" && e.Reference != "" {
+		approvalURL = e.Reference
+	}
+
+	// If no URL could be constructed from any source, the escalation cannot be
+	// actioned. Return a clear message rather than a broken template with an
+	// empty {url} substitution. This is a defensive fallback — Keep should have
+	// already returned 500 in this situation.
+	if approvalURL == "" {
+		slog.Warn("escalation required but no approval URL available — check Keep escalation_request_signing configuration",
+			"reason", e.Reason)
+		msg := "Escalation required: " + e.Reason
+		if msg != "" {
+			msg += "\n\nNo approval URL is available. The escalation system may be misconfigured — please contact your administrator."
+		}
+		return msg
+	}
+
+	instructions := g.cfg.Agent.Approval.Instructions
+	if instructions == "" {
+		instructions = defaultApprovalInstructions
+	}
+
+	msg := strings.ReplaceAll(instructions, "{reason}", e.Reason)
+	msg = strings.ReplaceAll(msg, "{url}", approvalURL)
+	return msg
 }
 
 // pollGuardWorker periodically fetches the unclaimed token list from Guard for
@@ -532,13 +610,13 @@ func (g *Gate) claimAllUnclaimedTokens(ctx context.Context) {
 // policyErrToResult converts a policy error (deny or escalation) from Keep into
 // an MCP tool-level error result so the agent reads the message rather than
 // seeing a JSON-RPC protocol error.
-func policyErrToResult(err error, toolName, requestID string) (*mcp.CallToolResult, error) {
+func (g *Gate) policyErrToResult(err error, toolName, requestID string) (*mcp.CallToolResult, error) {
 	var escalationErr *shared.EscalationPendingError
 	switch {
 	case errors.As(err, &escalationErr):
 		return &mcp.CallToolResult{
 			IsError: true,
-			Content: []mcp.Content{&mcp.TextContent{Text: escalationErr.Error()}},
+			Content: []mcp.Content{&mcp.TextContent{Text: g.buildEscalationMessage(escalationErr)}},
 		}, nil
 	case errors.Is(err, shared.ErrDenied):
 		return &mcp.CallToolResult{

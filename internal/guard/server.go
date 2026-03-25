@@ -68,6 +68,15 @@ type unclaimedToken struct {
 	ExpiresAt time.Time
 }
 
+// pendingRequest is a Keep-signed escalation request JWT that Gate has pushed
+// to Guard proactively (via POST /pending). Stored so that handleGet can look
+// up the JWT by JTI and serve the approval page via a short ?jti= URL.
+type pendingRequest struct {
+	JTI       string
+	JWT       string
+	ExpiresAt time.Time
+}
+
 // Server is the portcullis-guard HTTP server.
 type Server struct {
 	cfg        Config
@@ -80,6 +89,11 @@ type Server struct {
 	// Outer key: UserID. Inner key: JTI.
 	unclaimedMu     sync.Mutex
 	unclaimedTokens map[string]map[string]unclaimedToken
+
+	// pendingRequests holds Keep-signed escalation request JWTs pushed by Gate
+	// in proactive mode. Keyed by JTI. Cleaned up after expiry.
+	pendingMu       sync.Mutex
+	pendingRequests map[string]pendingRequest
 }
 
 // NewServer creates a Guard server from config.
@@ -107,6 +121,7 @@ func NewServer(cfg Config) (*Server, error) {
 		ttl:             ttl,
 		templates:       tmpl,
 		unclaimedTokens: make(map[string]map[string]unclaimedToken),
+		pendingRequests: make(map[string]pendingRequest),
 	}, nil
 }
 
@@ -135,13 +150,16 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("POST /approve", s.handlePost)
 
 	// Token API endpoints — used by Gate to claim approved tokens.
-	// /token/unclaimed/list and /token/deposit require bearer auth.
+	// /token/unclaimed/list, /token/deposit, and /pending require bearer auth.
 	// /token/claim does not require auth: the JTI acts as a capability token.
 	// An attacker would need to already know the random UUID JTI to attempt a
 	// claim, and the resulting token is still validated by the PDP.
 	mux.HandleFunc("GET /token/unclaimed/list", s.requireTokenAuth(s.handleTokenUnclaimedList))
 	mux.HandleFunc("POST /token/deposit", s.requireTokenAuth(s.handleTokenDeposit))
 	mux.HandleFunc("POST /token/claim", s.handleTokenClaim)
+	// Proactive mode: Gate registers the pending escalation JWT before presenting
+	// the approval URL to the user, so the URL can be shortened to ?jti=<uuid>.
+	mux.HandleFunc("POST /pending", s.requireTokenAuth(s.handlePending))
 
 	// Start background cleanup of expired unclaimed tokens.
 	go s.cleanupWorker(ctx)
@@ -217,11 +235,26 @@ func (s *Server) issueEscalationToken(claims *escalationRequestClaims, requestJT
 }
 
 // handleGet renders the approval page for a Keep-signed escalation request.
+// Accepts either ?token=<jwt> (user-driven mode: JWT embedded in URL) or
+// ?jti=<uuid> (proactive mode: Gate pre-registered the JWT via POST /pending).
 func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 	tokenStr := r.URL.Query().Get("token")
 	if tokenStr == "" {
-		http.Error(w, "missing token", http.StatusBadRequest)
-		return
+		// Proactive mode: look up the pre-registered JWT by JTI.
+		jti := r.URL.Query().Get("jti")
+		if jti == "" {
+			http.Error(w, "missing token or jti", http.StatusBadRequest)
+			return
+		}
+		s.pendingMu.Lock()
+		pr, ok := s.pendingRequests[jti]
+		s.pendingMu.Unlock()
+		if !ok {
+			slog.Warn("approval page: pending request not found for jti", "jti", jti, "remote", r.RemoteAddr)
+			http.Error(w, "escalation request not found or expired", http.StatusNotFound)
+			return
+		}
+		tokenStr = pr.JWT
 	}
 	claims, err := s.verifyRequest(tokenStr)
 	if err != nil {
@@ -322,6 +355,73 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// ---- pending request store -------------------------------------------------
+
+// handlePending receives a Keep-signed pending escalation JWT from Gate.
+// Guard validates the JWT signature (preventing rogue Gate instances from
+// registering arbitrary JWTs), then stores it keyed by JTI. handleGet can
+// then look up the JWT from a short ?jti= URL instead of requiring the full
+// JWT in the query string.
+// POST /pending  body: {"jti": "...", "jwt": "..."}
+// Requires bearer auth.
+func (s *Server) handlePending(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		JTI string `json:"jti"`
+		JWT string `json:"jwt"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if body.JTI == "" || body.JWT == "" {
+		http.Error(w, "jti and jwt are required", http.StatusBadRequest)
+		return
+	}
+
+	// Validate the JWT signature to prevent rogue Gate instances from
+	// registering arbitrary JWTs and granting themselves escalation tokens.
+	claims, err := s.verifyRequest(body.JWT)
+	if err != nil {
+		slog.Warn("pending: invalid escalation request JWT",
+			"error", err, "jti", body.JTI, "remote", r.RemoteAddr)
+		http.Error(w, "invalid or expired escalation JWT", http.StatusUnauthorized)
+		return
+	}
+
+	// Verify the JTI in the body matches the JWT's own jti claim.
+	if claims.ID != body.JTI {
+		slog.Warn("pending: JTI mismatch",
+			"body_jti", body.JTI, "jwt_jti", claims.ID, "remote", r.RemoteAddr)
+		http.Error(w, "jti does not match JWT id claim", http.StatusBadRequest)
+		return
+	}
+
+	expiry := time.Now().Add(s.ttl)
+	if claims.ExpiresAt != nil {
+		expiry = claims.ExpiresAt.Time
+	}
+
+	s.pendingMu.Lock()
+	s.pendingRequests[body.JTI] = pendingRequest{
+		JTI:       body.JTI,
+		JWT:       body.JWT,
+		ExpiresAt: expiry,
+	}
+	s.pendingMu.Unlock()
+
+	slog.Info("escalation request registered via proactive push",
+		"jti", body.JTI,
+		"user_id", claims.UserID,
+		"server", claims.Server,
+		"tool", claims.Tool,
+		"remote", r.RemoteAddr,
+	)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "registered", "jti": body.JTI})
+}
+
 // ---- unclaimed token store -------------------------------------------------
 
 // addUnclaimed adds an approved escalation token to the unclaimed list for userID.
@@ -362,9 +462,8 @@ func (s *Server) cleanupWorker(ctx context.Context) {
 
 func (s *Server) cleanupExpired() {
 	now := time.Now()
-	s.unclaimedMu.Lock()
-	defer s.unclaimedMu.Unlock()
 
+	s.unclaimedMu.Lock()
 	for userID, tokens := range s.unclaimedTokens {
 		for jti, tok := range tokens {
 			if tok.ExpiresAt.Before(now) {
@@ -375,6 +474,15 @@ func (s *Server) cleanupExpired() {
 			delete(s.unclaimedTokens, userID)
 		}
 	}
+	s.unclaimedMu.Unlock()
+
+	s.pendingMu.Lock()
+	for jti, pr := range s.pendingRequests {
+		if pr.ExpiresAt.Before(now) {
+			delete(s.pendingRequests, jti)
+		}
+	}
+	s.pendingMu.Unlock()
 }
 
 // requireTokenAuth is middleware that requires a valid bearer token for the

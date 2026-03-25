@@ -15,6 +15,7 @@
 package guard
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -77,6 +78,13 @@ func writeTempTemplates(t *testing.T, dir string) {
 }
 
 // ---- NewServer / loadTemplates -----------------------------------------------
+
+// signKeepJWTWithID signs a JWT with a specific JTI (ID claim).
+func signKeepJWTWithID(t *testing.T, id string, claims escalationRequestClaims, expiry time.Time) string {
+	t.Helper()
+	claims.RegisteredClaims.ID = id
+	return signKeepJWT(t, claims, expiry)
+}
 
 func TestNewServer_MissingKeepKey(t *testing.T) {
 	_, err := NewServer(Config{
@@ -618,5 +626,250 @@ func TestHandlePost_IssuedTokenVerifiable(t *testing.T) {
 	}
 	if len(tc.Portcullis.ArgRestrictions) == 0 || tc.Portcullis.ArgRestrictions[0]["action"] != "deploy" {
 		t.Errorf("Portcullis.ArgRestrictions[0][action] = %v, want deploy", tc.Portcullis.ArgRestrictions)
+	}
+}
+
+// ---- handlePending ----------------------------------------------------------
+
+func TestHandlePending_Valid(t *testing.T) {
+	s := makeServer(t)
+	jti := "test-pending-jti"
+	jwtStr := signKeepJWTWithID(t, jti, escalationRequestClaims{
+		UserID: "alice@corp.com",
+		Server: "github",
+		Tool:   "push",
+	}, time.Now().Add(time.Hour))
+
+	body, _ := json.Marshal(map[string]string{"jti": jti, "jwt": jwtStr})
+	req := httptest.NewRequest(http.MethodPost, "/pending", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.handlePending(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Errorf("status = %d, want 201; body: %s", w.Code, w.Body.String())
+	}
+	var result map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if result["jti"] != jti {
+		t.Errorf("jti = %q, want %q", result["jti"], jti)
+	}
+
+	// Verify the pending request was stored.
+	s.pendingMu.Lock()
+	pr, ok := s.pendingRequests[jti]
+	s.pendingMu.Unlock()
+	if !ok {
+		t.Fatal("pending request not stored after handlePending")
+	}
+	if pr.JWT != jwtStr {
+		t.Errorf("stored JWT does not match sent JWT")
+	}
+}
+
+func TestHandlePending_InvalidJWT(t *testing.T) {
+	s := makeServer(t)
+	body, _ := json.Marshal(map[string]string{"jti": "j", "jwt": "not.a.valid.jwt"})
+	req := httptest.NewRequest(http.MethodPost, "/pending", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.handlePending(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", w.Code)
+	}
+}
+
+func TestHandlePending_WrongKey(t *testing.T) {
+	s := makeServer(t)
+	jti := "some-jti"
+	// Sign with wrong key.
+	claims := escalationRequestClaims{UserID: "attacker@evil.com"}
+	claims.RegisteredClaims.ID = jti
+	claims.RegisteredClaims.ExpiresAt = jwt.NewNumericDate(time.Now().Add(time.Hour))
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signed, _ := token.SignedString([]byte("wrong-key-entirely"))
+
+	body, _ := json.Marshal(map[string]string{"jti": jti, "jwt": signed})
+	req := httptest.NewRequest(http.MethodPost, "/pending", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.handlePending(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", w.Code)
+	}
+}
+
+func TestHandlePending_JTIMismatch(t *testing.T) {
+	s := makeServer(t)
+	// JWT contains JTI "real-jti" but body claims "different-jti".
+	jwtStr := signKeepJWTWithID(t, "real-jti", escalationRequestClaims{UserID: "u"}, time.Now().Add(time.Hour))
+
+	body, _ := json.Marshal(map[string]string{"jti": "different-jti", "jwt": jwtStr})
+	req := httptest.NewRequest(http.MethodPost, "/pending", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.handlePending(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", w.Code)
+	}
+}
+
+func TestHandlePending_MissingFields(t *testing.T) {
+	s := makeServer(t)
+
+	for _, body := range []string{
+		`{"jti": "j"}`,         // missing jwt
+		`{"jwt": "h.p.s"}`,     // missing jti
+		`{}`,                    // both missing
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/pending", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		s.handlePending(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("body=%q: status = %d, want 400", body, w.Code)
+		}
+	}
+}
+
+func TestHandlePending_RequiresBearerAuth(t *testing.T) {
+	// When a bearer token is configured, /pending must reject requests without it.
+	dir := t.TempDir()
+	writeTempTemplates(t, dir)
+	s, _ := NewServer(Config{
+		Keep:                   KeepConfig{EscalationRequestSigningKey: testKeepKey},
+		EscalationTokenSigning: SigningConfig{Key: testSigningKey, TTL: 3600},
+		Templates:              TemplatesConfig{Dir: dir},
+		Auth:                   AuthConfig{BearerToken: "secret-token"},
+	})
+
+	jti := "jti"
+	jwtStr := signKeepJWTWithID(t, jti, escalationRequestClaims{UserID: "u"}, time.Now().Add(time.Hour))
+	body, _ := json.Marshal(map[string]string{"jti": jti, "jwt": jwtStr})
+
+	// Request without auth header.
+	req := httptest.NewRequest(http.MethodPost, "/pending", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.requireTokenAuth(s.handlePending)(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401 without auth", w.Code)
+	}
+
+	// Request with correct auth header.
+	req2 := httptest.NewRequest(http.MethodPost, "/pending", strings.NewReader(string(body)))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("Authorization", "Bearer secret-token")
+	w2 := httptest.NewRecorder()
+	s.requireTokenAuth(s.handlePending)(w2, req2)
+
+	if w2.Code != http.StatusCreated {
+		t.Errorf("status = %d, want 201 with correct auth", w2.Code)
+	}
+}
+
+// ---- handleGet with ?jti= ---------------------------------------------------
+
+func TestHandleGet_ValidJTI(t *testing.T) {
+	// Register a pending request via handlePending, then verify handleGet
+	// serves the approval page via the short ?jti= URL.
+	s := makeServer(t)
+	jti := "proactive-jti-123"
+	jwtStr := signKeepJWTWithID(t, jti, escalationRequestClaims{
+		UserID: "alice@corp.com",
+		Server: "github",
+		Tool:   "push",
+		Reason: "needs approval",
+	}, time.Now().Add(time.Hour))
+
+	// Register via POST /pending.
+	pendBody, _ := json.Marshal(map[string]string{"jti": jti, "jwt": jwtStr})
+	pendReq := httptest.NewRequest(http.MethodPost, "/pending", strings.NewReader(string(pendBody)))
+	pendReq.Header.Set("Content-Type", "application/json")
+	pendW := httptest.NewRecorder()
+	s.handlePending(pendW, pendReq)
+	if pendW.Code != http.StatusCreated {
+		t.Fatalf("handlePending status = %d, want 201", pendW.Code)
+	}
+
+	// Now GET /approve?jti=<jti>
+	getReq := httptest.NewRequest(http.MethodGet, "/approve?jti="+jti, nil)
+	getW := httptest.NewRecorder()
+	s.handleGet(getW, getReq)
+
+	if getW.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200; body: %s", getW.Code, getW.Body.String())
+	}
+	if !strings.Contains(getW.Body.String(), "alice@corp.com") {
+		t.Errorf("approval page should contain user ID; body: %s", getW.Body.String())
+	}
+}
+
+func TestHandleGet_UnknownJTI(t *testing.T) {
+	s := makeServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/approve?jti=nonexistent-jti", nil)
+	w := httptest.NewRecorder()
+	s.handleGet(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", w.Code)
+	}
+}
+
+func TestHandleGet_TokenQueryParamStillWorks(t *testing.T) {
+	// Regression: user-driven mode with ?token= must continue to work.
+	s := makeServer(t)
+	tokenStr := signKeepJWT(t, escalationRequestClaims{
+		UserID: "bob@corp.com",
+		Server: "s",
+		Tool:   "t",
+	}, time.Now().Add(time.Hour))
+
+	req := httptest.NewRequest(http.MethodGet, "/approve?token="+url.QueryEscape(tokenStr), nil)
+	w := httptest.NewRecorder()
+	s.handleGet(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+}
+
+// ---- cleanupExpired for pendingRequests ------------------------------------
+
+func TestCleanupExpired_RemovesExpiredPendingRequests(t *testing.T) {
+	s := makeServer(t)
+
+	// Insert one expired and one valid pending request.
+	s.pendingMu.Lock()
+	s.pendingRequests["expired-jti"] = pendingRequest{
+		JTI:       "expired-jti",
+		JWT:       "jwt",
+		ExpiresAt: time.Now().Add(-time.Hour),
+	}
+	s.pendingRequests["valid-jti"] = pendingRequest{
+		JTI:       "valid-jti",
+		JWT:       "jwt",
+		ExpiresAt: time.Now().Add(time.Hour),
+	}
+	s.pendingMu.Unlock()
+
+	s.cleanupExpired()
+
+	s.pendingMu.Lock()
+	_, expiredExists := s.pendingRequests["expired-jti"]
+	_, validExists := s.pendingRequests["valid-jti"]
+	s.pendingMu.Unlock()
+
+	if expiredExists {
+		t.Error("expired pending request should have been removed")
+	}
+	if !validExists {
+		t.Error("valid pending request should not have been removed")
 	}
 }

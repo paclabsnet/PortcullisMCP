@@ -14,28 +14,63 @@ Currently the reason field for the JWTs is echoing the problem. It should probab
 - We probably need to support a way to gather secrets (Private keys, shared secrets) from a vault, but don't get rid of the config option for the sandbox model
 - priority: medium
 
+### Task: Harden Configuration and Error Handling (Fail Fast)
+- **Problem**: The system is currently too permissive. Typos in YAML (e.g., `signing_key` vs `signing-key`) are silently ignored by the default decoder, and missing critical security components (like signing keys or OIDC providers) often result in a "degraded" startup with logged warnings rather than a fatal exit.
+- **Fix**: Implement strict validation at startup to ensure the system never runs in an insecure or broken state.
+- **Implementation scope**:
+  - `config/*.go` — add `Validate() error` methods to all configuration structs (Check for empty endpoints, missing keys, invalid TTLs).
+  - `cmd/*/main.go` — switch to `yaml.NewDecoder(r).KnownFields(true).Decode(&cfg)` to catch misspelled configuration keys at parse time.
+  - `internal/keep/server.go` — make `EscalationSigner` initialization failure fatal if a signing key is provided but invalid.
+  - `internal/guard/server.go` — validate `Keep` public key and `Guard` private key immediately on `NewServer`.
+  - `internal/gate/server.go` — ensure background workers (like `pollGuardWorker`) can signal fatal terminal failures to the main process.
+- priority: high
+
+### Task: Implement Health and Liveness Endpoints (Observability)
+- **Problem**: Keep and Guard currently lack standard `/health` and `/ready` endpoints. Orchestrators (Kubernetes, Docker, systemd) cannot distinguish between a service that is starting up, a service that is healthy, and a service that has a "dead" internal component (e.g., failed OPA engine or invalid signing key).
+- **Fix**: Add dedicated health check handlers to both Keep and Guard.
+- **Implementation scope**:
+  - `internal/keep/server.go` — Add `GET /healthz` (liveness) and `GET /readyz` (readiness). Readiness should verify the PDP is loaded and the Escalate Signer is initialized.
+  - `internal/guard/server.go` — Add `GET /healthz` and `GET /readyz`. Readiness should verify signing keys are loaded and templates are parsed.
+- priority: medium-high
+
 ### Task: Plugabble Logging
 - We need Keep to support multiple decision logging strategies
 - perhaps some sort of LogSink interface with multiple destinations?
 - priority: medium
 
 
-### Task: Simplify Escalation URL (Short JTI URL via Gate→Guard JWT Push)
+### Task: Simplify Escalation URL (Short JTI URL via Gate→Guard JWT Push) — DONE
 - **Problem**: Keep embeds the full escalation request JWT in the approval URL (`?token=<jwt>`). The JWT is ~500 chars and AI clients (e.g. Claude Desktop) occasionally mangle it, producing invalid signatures.
 - **Fix**: Gate pushes the JWT directly to Guard via a new `POST /pending` endpoint; approval URL is shortened to `?jti=<uuid>` only.
 - **Security**: Guard must validate the JWT signature on receipt (using its existing `keepKey`) to prevent a rogue Gate instance from registering arbitrary JWTs and granting itself escalation tokens.
-- **Implementation scope**:
-  - `shared/types.go` — add `EscalationJWT string` to `EscalationPendingError`
-  - `keep/server.go` — add `escalation_jwt` (raw signed JWT) to 202 response body alongside `escalation_jti`; remove `workflow_reference` from 202 body (Gate builds the URL itself)
-  - `gate/forwarder.go` — decode `escalation_jwt` from 202 body and populate `EscalationPendingError.EscalationJWT`
-  - `gate/guardclient.go` — add `RegisterPending(ctx, jti, jwt string) error` calling new `POST /pending`
-  - `gate/config.go` — add `EscalationMessage string` to `GuardConfig` (configurable message template shown to agent)
-  - `gate/server.go` — on User-authority escalation: call `RegisterPending`; build short URL as `{guard.endpoint}/approve?jti={jti}`; format message using `EscalationMessage` template (or default)
-  - `guard/server.go` — add `POST /pending` handler: validate JWT signature, store JWT keyed by JTI; update `handleGet` to accept `?jti=` (lookup stored JWT by JTI) in addition to or instead of `?token=`
-- **Default message template**: `"Escalation required: {reason}\n\nApprove at: {url}"`
+- **Thoughts**:
+  - Keep continues to send the status, reason, and escalation_jti
+  - Keep sends the escalation_jwt 
+  - We will stop using the workflow_reference field for the time being, in any case
+    - in other words: Keep will not generate the approval URL
+    - we will not get rid of the workflow_reference field, since we might need it for ServiceNow, etc, in the future, but we will leave it empty and not send it if it doesn't have any content (ideally, not a deal-breaker if it is simpler to leave it in the structure with no data)
+  - Gate will be solely responsible for implementing these different strategies, Keep does not need to be in the loop now that we've gotten rid of the URL in either case.
 - priority: high
-- this should be configurable at Gate. some enterprises may prefer Keep generates the message and Gate just does what Keep tells it to. They might also prefer not to invoke Guard proactively. Also reasonable to expect that the agents will be better in the future about faithfully copying URLs, which reduces the need for this feature
-   - perhaps a configuration:  pending-token-strategy:  proactive  or user-driven  .   
+- this should be configurable at Gate. some enterprises might prefer not to invoke Guard proactively. Also reasonable to expect that the agents will be better in the future about faithfully copying URLs, which reduces the need for this feature.
+   - perhaps a configuration:  `approval-management-strategy`:  `proactive`  vs `user-driven`
+   - `user-driven` is the default, as the simpler option
+   - `user-driven` is the current strategy, slightly modified:
+      - Gate receives the escalation request from Keep
+      - Gate creates the `/approve` URL , which includes the `token=<JWT>` field. (same as what is delivered today)
+      - Gate delivers this to the Agent in the MCP response, to deliver to the user.  (same as today)
+      - Gate will optionally pull the text instructions for the Agent from the config file - `agent.approval.instructions`, with a default fallback that's hardcoded (the current text)
+     - `proactive` is the strategy of:
+      - Gate receives the escalation request from Keep
+      - Gate immediately pushes the pending JWT to Guard at the `/pending` endpoint and receives confirmation
+      - Gate creates the `/approve` URL, which includes the `jti=<JTI>` field 
+      - Gate delivers this to the Agent in the MCP response, to deliver to the user.  
+      - Gate will optionally pull the text instructions for the Agent from the config file - `agent.approval.instructions`, with a default fallback that's hardcoded (the current text)
+   - it is important that we don't change the data structure that we're sending, we just only send the   
+     fields that we need based on the configuration rules
+   - the new `/pending` endpoint at Guard should require a Bearer token header like the other endpoints that need 
+     some basic security
+   - if Guard is unavailable when Gate attempts to proactively deliver the JWT, we should indicate to the user that there are network issues and escalation can't happen at this time, try again later (or words to that affect)
+   - `agent.approval.instructions` is a new section in the Gate config. It's not related directly to either Keep or Guard, so it should live in its own configuration space.
 
 
 ### Task: System Authority Escalation
@@ -144,5 +179,36 @@ Need more research:
   Why not both?
   1. Token file — primary, enterprise-managed, zero Gate complexity
   2. Device flow — fallback when no valid token file exists; works everywhere, no localhost trust issues, fits the CLI/daemon model
+
+
+
+
+
+## Security Review
+
+1. High: Escalation request JWT is propagated through URLs and external workflow payloads
+- URL embedding in query string: workflow_url.go:44
+- Agent message explicitly asks to pass the full approval URL: types.go:113
+- Webhook payload includes full escalation JWT: workflow_webhook.go:51
+- ServiceNow description includes full escalation JWT: workflow_servicenow.go:58
+  Why this is major:
+  - Query strings and ticket fields are commonly copied, logged, indexed, and retained.
+  - That increases exposure of signed escalation artifacts across systems and operators.
+
+  Suggested direction:
+  - Move to short reference flow (JTI/state handle), keep signed JWT server-to-server only, and avoid sending JWT in browser-visible URLs and ticket text.
+
+2. High: Guard token-claim surface is capability-based and can be open depending on config
+- Claim endpoint intentionally unauthenticated: server.go:139
+- Guard can run with no bearer token protection for token APIs: server.go:385
+- Unclaimed-list response includes raw token material: server.go:414
+  
+Why this is major:
+- Security posture depends heavily on deployment hardening.
+- In permissive deployments, token retrieval paths expose high-value artifacts.
+
+Suggested direction:
+- Require auth by default for token APIs, return only metadata from list endpoints, and keep raw token retrieval tightly scoped/authenticated.
+
 
 

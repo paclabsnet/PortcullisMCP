@@ -14,7 +14,11 @@
 
 package gate
 
-import telemetrycfg "github.com/paclabsnet/PortcullisMCP/internal/telemetry"
+import (
+	"fmt"
+
+	telemetrycfg "github.com/paclabsnet/PortcullisMCP/internal/telemetry"
+)
 
 // Config holds the full portcullis-gate configuration loaded from gate.yaml.
 type Config struct {
@@ -27,6 +31,7 @@ type Config struct {
 	TokenStore     string                 `yaml:"token_store"`
 	DecisionLogs   DecisionLogBatchConfig `yaml:"decision_logs"`
 	Telemetry      telemetrycfg.Config    `yaml:"telemetry"`
+	Agent          AgentConfig            `yaml:"agent"`
 }
 
 type KeepConfig struct {
@@ -72,7 +77,32 @@ type DecisionLogBatchConfig struct {
 // If Endpoint is empty, the automatic token-claim flow is disabled and users must
 // add escalation tokens manually via the management API.
 type GuardConfig struct {
-	Endpoint     string `yaml:"endpoint"`      // e.g. "https://guard.internal.example.com"
-	BearerToken  string `yaml:"bearer_token"`  // for /token/unclaimed/list and /token/deposit
-	PollInterval int    `yaml:"poll_interval"` // seconds between polls of /token/unclaimed/list (default: 60)
+	Endpoint                   string `yaml:"endpoint"`                     // e.g. "https://guard.internal.example.com"
+	BearerToken                string `yaml:"bearer_token"`                 // for /token/unclaimed/list, /token/deposit, and /pending
+	PollInterval               int    `yaml:"poll_interval"`                // seconds between polls of /token/unclaimed/list (default: 60)
+	ApprovalManagementStrategy string `yaml:"approval_management_strategy"` // "proactive" | "user-driven" (default: "user-driven")
+}
+
+// Validate returns an error if the configuration contains invalid values.
+func (c Config) Validate() error {
+	switch c.Guard.ApprovalManagementStrategy {
+	case "", "user-driven", "proactive":
+		// valid
+	default:
+		return fmt.Errorf("invalid approval_management_strategy %q: must be \"user-driven\" or \"proactive\"", c.Guard.ApprovalManagementStrategy)
+	}
+	return nil
+}
+
+// AgentConfig holds settings that control how Gate communicates with the MCP agent.
+type AgentConfig struct {
+	Approval AgentApprovalConfig `yaml:"approval"`
+}
+
+// AgentApprovalConfig controls the message Gate returns to the agent when
+// escalation is required. Supports {reason} and {url} template placeholders.
+type AgentApprovalConfig struct {
+	// Instructions overrides the default escalation message shown to the agent.
+	// If empty, a built-in default is used.
+	Instructions string `yaml:"instructions"`
 }
