@@ -139,27 +139,6 @@ for different service / tool combos
 
 
 
-
-
-### Task: 'Workflow' response from PDP
-In addition to 'allow', 'deny' and 'escalate', we will add 'workflow' as a viable response from the PDP.
-
-When the PDP responds with 'workflow', this should tell Keep to invoke ServiceNow or some other tool to make the necessary approvals.
-
-Need more research:
-- does Keep send the same JWT to the workflow tool?  Or does it send the key elements of
-  the JSON, and let the workflow tool handle the details? Or is this something that is an 
-  implementation detail of the appropriate workflow provider (YES)
-- it seems more secure to send a JWT, because that way there's evidence that the request
-  was created properly by the system flow.  But on the other hand, this requires the workflow 
-  tool to be able to process and  validate JWTs
-- perhaps this should be configurable?
-
-- priority: low
-
-
-
-
 ### Task: Optionally create a Gate API to collect the list of DENY responses, along with trace/session information
 - not sure if this is necessary. It might be helpful for troubleshooting
 - very low priority
