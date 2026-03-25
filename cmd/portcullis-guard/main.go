@@ -15,6 +15,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"flag"
 	"log/slog"
@@ -63,5 +64,10 @@ func loadConfig(path string) (guard.Config, error) {
 	}
 	data = shared.ExpandEnvVarsInYAML(data)
 	var cfg guard.Config
-	return cfg, yaml.Unmarshal(data, &cfg)
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&cfg); err != nil {
+		return guard.Config{}, err
+	}
+	return cfg, cfg.Validate()
 }

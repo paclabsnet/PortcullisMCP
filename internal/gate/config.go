@@ -35,8 +35,8 @@ type Config struct {
 }
 
 type KeepConfig struct {
-	Endpoint string     `yaml:"endpoint"`
-	Auth     KeepAuth   `yaml:"auth"`
+	Endpoint string   `yaml:"endpoint"`
+	Auth     KeepAuth `yaml:"auth"`
 }
 
 type KeepAuth struct {
@@ -48,7 +48,7 @@ type KeepAuth struct {
 }
 
 type IdentityConfig struct {
-	Source      string     `yaml:"source"`       // "oidc" | "os"
+	Source      string     `yaml:"source"` // "oidc" | "os"
 	OIDC        OIDCConfig `yaml:"oidc"`
 	UserID      string     `yaml:"user_id"`      // optional: override user ID when source is "os" (for testing)
 	DisplayName string     `yaml:"display_name"` // optional: override display name when source is "os" (for testing)
@@ -74,8 +74,31 @@ type DecisionLogBatchConfig struct {
 }
 
 // GuardConfig holds connection settings for the portcullis-guard token claim API.
-// If Endpoint is empty, the automatic token-claim flow is disabled and users must
-// add escalation tokens manually via the management API.
+// Guard is required to be able to create escalation tokens that can be trusted by
+// the PDP, which is the core of the system. Having said that, a Portcullis system
+// without a Guard can still handle accept / deny (and possibly workflow) responses
+// from the PDP. In essence, Guard is what gives a human the ability to escalate the
+// Agents' authorization privileges for a short time
+//
+// to make this explicit: if you do not have a Portcullis-Guard configuration, we
+// do not offer escalation as an option for the Agent. Without access to Guard, an escalation
+// response from Portcullis-Keep will be treated as a deny.
+//
+// using the metaphor of an actual castle:
+//
+// An agent for a nearby lord walks up to the Gate of Castle Evermoor and seeks to enter to deliver
+// a message to Viscount Evermoor .  But it is late, and the policy is not to let anyone in after
+// dark unless the matter is urgent.  So the agent goes back to his lord, and acquires a signed
+// affadivit indicating that this request is, in fact urgent.
+//   - if there is a Guard at the Gate, the Guard can let the user into the Keep so he can visit the Lord
+//     and deliver the message
+//   - if there is no Guard on duty, it doesn't matter that the agent has a signed affadavit - the Portcullis
+//     is closed, and the agent is denied.
+//
+// Note: technically, a very knowledgeable user with access to the necessary secrets
+// can still make escalation work manually, but it requires creating a JWT by hand using
+// deep knowledge of the Rego structures and policies, and the capabilities
+// of PortcullisGate's web interface
 type GuardConfig struct {
 	Endpoint                   string `yaml:"endpoint"`                     // e.g. "https://guard.internal.example.com"
 	BearerToken                string `yaml:"bearer_token"`                 // for /token/unclaimed/list, /token/deposit, and /pending
@@ -85,12 +108,31 @@ type GuardConfig struct {
 
 // Validate returns an error if the configuration contains invalid values.
 func (c Config) Validate() error {
+	if c.Keep.Endpoint == "" {
+		return fmt.Errorf("keep.endpoint is required")
+	}
+
+	switch c.Identity.Source {
+	case "", "os":
+		// valid
+	case "oidc":
+		if c.Identity.OIDC.TokenFile == "" {
+			return fmt.Errorf("identity.oidc.token_file is required when identity.source is \"oidc\"")
+		}
+	default:
+		return fmt.Errorf("invalid identity.source %q: must be \"oidc\" or \"os\"", c.Identity.Source)
+	}
+
 	switch c.Guard.ApprovalManagementStrategy {
 	case "", "user-driven", "proactive":
 		// valid
 	default:
 		return fmt.Errorf("invalid approval_management_strategy %q: must be \"user-driven\" or \"proactive\"", c.Guard.ApprovalManagementStrategy)
 	}
+	if c.Guard.ApprovalManagementStrategy == "proactive" && c.Guard.Endpoint == "" {
+		return fmt.Errorf("guard.endpoint is required when approval_management_strategy is \"proactive\"")
+	}
+
 	return nil
 }
 

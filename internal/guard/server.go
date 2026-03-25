@@ -98,11 +98,8 @@ type Server struct {
 
 // NewServer creates a Guard server from config.
 func NewServer(cfg Config) (*Server, error) {
-	if cfg.Keep.EscalationRequestSigningKey == "" {
-		return nil, fmt.Errorf("keep.escalation_request_signing_key is required")
-	}
-	if cfg.EscalationTokenSigning.Key == "" {
-		return nil, fmt.Errorf("escalation_token_signing.key is required")
+	if err := cfg.Validate(); err != nil {
+		return nil, err
 	}
 	ttl := time.Duration(cfg.EscalationTokenSigning.TTL) * time.Second
 	if ttl == 0 {

@@ -38,6 +38,7 @@ const (
 func makeServer(t *testing.T) *Server {
 	t.Helper()
 	s, err := NewServer(Config{
+		Listen:                 ListenConfig{Address: ":0"},
 		Keep:                   KeepConfig{EscalationRequestSigningKey: testKeepKey},
 		EscalationTokenSigning: SigningConfig{Key: testSigningKey, TTL: 3600},
 		Templates:              TemplatesConfig{Dir: "templates"},
@@ -133,6 +134,7 @@ func TestNewServer_DefaultTTL(t *testing.T) {
 	writeTempTemplates(t, dir)
 
 	s, err := NewServer(Config{
+		Listen:                 ListenConfig{Address: ":0"},
 		Keep:                   KeepConfig{EscalationRequestSigningKey: testKeepKey},
 		EscalationTokenSigning: SigningConfig{Key: testSigningKey, TTL: 0},
 		Templates:              TemplatesConfig{Dir: dir},
@@ -150,6 +152,7 @@ func TestNewServer_CustomTTL(t *testing.T) {
 	writeTempTemplates(t, dir)
 
 	s, err := NewServer(Config{
+		Listen:                 ListenConfig{Address: ":0"},
 		Keep:                   KeepConfig{EscalationRequestSigningKey: testKeepKey},
 		EscalationTokenSigning: SigningConfig{Key: testSigningKey, TTL: 7200},
 		Templates:              TemplatesConfig{Dir: dir},
@@ -346,6 +349,7 @@ func TestIssueEscalationToken_TTL(t *testing.T) {
 	dir := t.TempDir()
 	writeTempTemplates(t, dir)
 	s, _ := NewServer(Config{
+		Listen:                 ListenConfig{Address: ":0"},
 		Keep:                   KeepConfig{EscalationRequestSigningKey: testKeepKey},
 		EscalationTokenSigning: SigningConfig{Key: testSigningKey, TTL: 7200},
 		Templates:              TemplatesConfig{Dir: dir},
@@ -521,9 +525,10 @@ func TestHandlePost_GatePortDefault(t *testing.T) {
 	dir := t.TempDir()
 	writeTempTemplates(t, dir)
 	s, _ := NewServer(Config{
-		Keep:                        KeepConfig{EscalationRequestSigningKey: testKeepKey},
-		EscalationTokenSigning:      SigningConfig{Key: testSigningKey, TTL: 60},
-		Templates:                   TemplatesConfig{Dir: dir},
+		Listen:                       ListenConfig{Address: ":0"},
+		Keep:                         KeepConfig{EscalationRequestSigningKey: testKeepKey},
+		EscalationTokenSigning:       SigningConfig{Key: testSigningKey, TTL: 60},
+		Templates:                    TemplatesConfig{Dir: dir},
 		PortcullisGateManagementPort: 0,
 	})
 
@@ -551,9 +556,10 @@ func TestHandlePost_GatePortCustom(t *testing.T) {
 	dir := t.TempDir()
 	writeTempTemplates(t, dir)
 	s, _ := NewServer(Config{
-		Keep:                        KeepConfig{EscalationRequestSigningKey: testKeepKey},
-		EscalationTokenSigning:      SigningConfig{Key: testSigningKey, TTL: 60},
-		Templates:                   TemplatesConfig{Dir: dir},
+		Listen:                       ListenConfig{Address: ":0"},
+		Keep:                         KeepConfig{EscalationRequestSigningKey: testKeepKey},
+		EscalationTokenSigning:       SigningConfig{Key: testSigningKey, TTL: 60},
+		Templates:                    TemplatesConfig{Dir: dir},
 		PortcullisGateManagementPort: 9999,
 	})
 
@@ -742,6 +748,7 @@ func TestHandlePending_RequiresBearerAuth(t *testing.T) {
 	dir := t.TempDir()
 	writeTempTemplates(t, dir)
 	s, _ := NewServer(Config{
+		Listen:                 ListenConfig{Address: ":0"},
 		Keep:                   KeepConfig{EscalationRequestSigningKey: testKeepKey},
 		EscalationTokenSigning: SigningConfig{Key: testSigningKey, TTL: 3600},
 		Templates:              TemplatesConfig{Dir: dir},

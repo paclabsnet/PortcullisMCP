@@ -16,6 +16,7 @@ package keep
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 
 	"gopkg.in/yaml.v3"
@@ -161,6 +162,46 @@ type DecisionLogConfig struct {
 	Console       bool              `yaml:"console"`        // also log to console
 }
 
+// Validate returns an error if the configuration contains invalid values.
+func (c Config) Validate() error {
+	if c.Listen.Address == "" {
+		return fmt.Errorf("listen.address is required")
+	}
+	if c.PDP.Type != "noop" && c.PDP.Endpoint == "" {
+		return fmt.Errorf("pdp.endpoint is required when pdp.type is not \"noop\"")
+	}
+
+	switch c.Identity.Normalizer {
+	case "", "strict", "passthrough", "oidc-verify":
+		// valid
+	default:
+		return fmt.Errorf("invalid identity.normalizer %q: must be \"strict\", \"passthrough\", or \"oidc-verify\"", c.Identity.Normalizer)
+	}
+	if c.Identity.Normalizer == "oidc-verify" {
+		if c.Identity.OIDCVerify.Issuer == "" {
+			return fmt.Errorf("identity.oidc_verify.issuer is required when normalizer is \"oidc-verify\"")
+		}
+		if c.Identity.OIDCVerify.JWKSURL == "" {
+			return fmt.Errorf("identity.oidc_verify.jwks_url is required when normalizer is \"oidc-verify\"")
+		}
+	}
+
+	switch c.Escalation.Workflow.Type {
+	case "", "noop", "url", "servicenow", "webhook":
+		// valid
+	default:
+		return fmt.Errorf("invalid escalation.workflow.type %q: must be \"noop\", \"url\", \"servicenow\", or \"webhook\"", c.Escalation.Workflow.Type)
+	}
+	if c.Escalation.Workflow.Type == "servicenow" && c.Escalation.Workflow.ServiceNow.Instance == "" {
+		return fmt.Errorf("escalation.workflow.servicenow.instance is required when workflow type is \"servicenow\"")
+	}
+	if c.Escalation.Workflow.Type == "webhook" && c.Escalation.Workflow.Webhook.URL == "" {
+		return fmt.Errorf("escalation.workflow.webhook.url is required when workflow type is \"webhook\"")
+	}
+
+	return nil
+}
+
 // LoadConfig reads and parses a keep config file, expanding environment variables.
 // It uses strict unmarshaling to ensure that unknown or deprecated fields
 // cause a configuration error at startup.
@@ -173,5 +214,8 @@ func LoadConfig(path string) (Config, error) {
 	var cfg Config
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
-	return cfg, dec.Decode(&cfg)
+	if err := dec.Decode(&cfg); err != nil {
+		return Config{}, err
+	}
+	return cfg, cfg.Validate()
 }
