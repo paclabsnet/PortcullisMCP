@@ -29,7 +29,7 @@ func pingHealth(ctx context.Context, endpoint string) string {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"/health", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"/healthz", nil)
 	if err != nil {
 		return "unavailable"
 	}
