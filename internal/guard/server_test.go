@@ -337,6 +337,12 @@ func TestIssueEscalationToken_Claims(t *testing.T) {
 	if len(tc.Portcullis.Services) != 1 || tc.Portcullis.Services[0] != "github" {
 		t.Errorf("Portcullis.Services = %v, want [github]", tc.Portcullis.Services)
 	}
+	if !strings.Contains(tc.Portcullis.Reason, "Alice") {
+		t.Errorf("Portcullis.Reason should contain the approver display name; got: %q", tc.Portcullis.Reason)
+	}
+	if !strings.Contains(tc.Portcullis.Reason, "escalation of privileges") {
+		t.Errorf("Portcullis.Reason should describe the escalation; got: %q", tc.Portcullis.Reason)
+	}
 	if expiry.IsZero() {
 		t.Error("expected non-zero expiry time")
 	}
@@ -366,6 +372,44 @@ func TestIssueEscalationToken_TTL(t *testing.T) {
 	}
 	if diff > 5*time.Second {
 		t.Errorf("expiry differs from 2h TTL by %v", diff)
+	}
+}
+
+func TestIssueEscalationToken_ReasonUsesDisplayName(t *testing.T) {
+	s := makeServer(t)
+	claims := &escalationRequestClaims{
+		UserID:          "alice@corp.com",
+		UserDisplayName: "Alice Smith",
+	}
+	tokenStr, _, err := s.issueEscalationToken(claims, "jti-1", nil)
+	if err != nil {
+		t.Fatalf("issueEscalationToken: %v", err)
+	}
+	parsed, _ := jwt.ParseWithClaims(tokenStr, &escalationTokenClaims{}, func(t *jwt.Token) (any, error) {
+		return []byte(testSigningKey), nil
+	})
+	tc := parsed.Claims.(*escalationTokenClaims)
+	if !strings.Contains(tc.Portcullis.Reason, "Alice Smith") {
+		t.Errorf("reason should contain display name %q; got: %q", "Alice Smith", tc.Portcullis.Reason)
+	}
+}
+
+func TestIssueEscalationToken_ReasonFallsBackToUserID(t *testing.T) {
+	s := makeServer(t)
+	claims := &escalationRequestClaims{
+		UserID:          "bob@corp.com",
+		UserDisplayName: "", // no display name
+	}
+	tokenStr, _, err := s.issueEscalationToken(claims, "jti-2", nil)
+	if err != nil {
+		t.Fatalf("issueEscalationToken: %v", err)
+	}
+	parsed, _ := jwt.ParseWithClaims(tokenStr, &escalationTokenClaims{}, func(t *jwt.Token) (any, error) {
+		return []byte(testSigningKey), nil
+	})
+	tc := parsed.Claims.(*escalationTokenClaims)
+	if !strings.Contains(tc.Portcullis.Reason, "bob@corp.com") {
+		t.Errorf("reason should fall back to user ID %q; got: %q", "bob@corp.com", tc.Portcullis.Reason)
 	}
 }
 

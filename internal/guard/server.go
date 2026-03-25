@@ -47,7 +47,9 @@ type escalationRequestClaims struct {
 // scope carries the PDP-issued escalation scope constraints.
 // tools and services record exactly what was approved so the PDP can enforce
 // that the token is only used for the escalated operation.
+// reason is a human-readable audit trail of who approved the escalation.
 type portcullisClaims struct {
+	Reason          string           `json:"reason,omitempty"`
 	ArgRestrictions []map[string]any `json:"arg_restrictions,omitempty"`
 	Tools           []string         `json:"tools,omitempty"`
 	Services        []string         `json:"services,omitempty"`
@@ -214,6 +216,12 @@ func (s *Server) issueEscalationToken(claims *escalationRequestClaims, requestJT
 		jti = uuid.NewString()
 	}
 
+	actor := claims.UserDisplayName
+	if actor == "" {
+		actor = claims.UserID
+	}
+	reason := fmt.Sprintf("User %s has approved a temporary escalation of privileges for the Agent", actor)
+
 	tokenClaims := escalationTokenClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			ID:        jti,
@@ -223,6 +231,7 @@ func (s *Server) issueEscalationToken(claims *escalationRequestClaims, requestJT
 			ExpiresAt: jwt.NewNumericDate(expiry),
 		},
 		Portcullis: portcullisClaims{
+			Reason:          reason,
 			ArgRestrictions: scope,
 			Tools:           []string{claims.Tool},
 			Services:        []string{claims.Server},
