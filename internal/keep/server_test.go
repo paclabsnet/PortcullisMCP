@@ -570,3 +570,25 @@ func TestServer_HandleCall_Workflow_HandlerError_Returns500(t *testing.T) {
 		t.Fatalf("status = %d, want 500", w.Code)
 	}
 }
+
+func TestServer_HandleCall_Workflow_NoSignerNoRef_Returns500(t *testing.T) {
+	// No signer and the workflow handler returns an empty reference — no
+	// approval artifact exists, so Keep must fail rather than return a false-success 202.
+	srv := &Server{
+		pdp:         &mockPDP{decision: "workflow", reason: "requires approval"},
+		router:      &mockRouter{},
+		workflow:    &mockWorkflow{requestID: ""}, // returns empty reference
+		// signer intentionally nil
+		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
+		normalizer:  &passthroughNormalizer{silenced: true},
+	}
+
+	body, _ := json.Marshal(shared.EnrichedMCPRequest{ServerName: "s", ToolName: "delete_customer", TraceID: "t4"})
+	req := httptest.NewRequest(http.MethodPost, "/call", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.handleCall(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 when no pending_jwt and no workflow reference", w.Code)
+	}
+}

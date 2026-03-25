@@ -306,6 +306,16 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "failed to submit workflow request")
 			return
 		}
+		// If neither the signed JWT nor a workflow reference was produced, the
+		// approval cannot be actioned. Failing here is better than returning a
+		// 202 that looks successful but leads nowhere.
+		if pendingJWT == "" && wfRef == "" {
+			span.SetStatus(codes.Error, "workflow misconfigured")
+			slog.ErrorContext(ctx, "workflow required but no approval mechanism available — configure escalation_request_signing.key",
+				"tool", req.ToolName, "user", req.Principal.UserID, "trace_id", traceID)
+			writeError(w, http.StatusInternalServerError, "workflow required but no approval mechanism is available — check server configuration")
+			return
+		}
 		slog.InfoContext(ctx, "workflow pending",
 			"tool", req.ToolName,
 			"server", req.ServerName,
@@ -477,6 +487,16 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 			span.SetStatus(codes.Error, err.Error())
 			slog.ErrorContext(ctx, "workflow submit failed", "error", err, "trace_id", traceID)
 			writeError(w, http.StatusInternalServerError, "failed to submit workflow request")
+			return
+		}
+		// If neither the signed JWT nor a workflow reference was produced, the
+		// approval cannot be actioned. Failing here is better than returning a
+		// 202 that looks successful but leads nowhere.
+		if pendingJWT == "" && wfRef == "" {
+			span.SetStatus(codes.Error, "workflow misconfigured")
+			slog.ErrorContext(ctx, "workflow required but no approval mechanism available — configure escalation_request_signing.key",
+				"tool", req.ToolName, "user", req.Principal.UserID, "trace_id", traceID)
+			writeError(w, http.StatusInternalServerError, "workflow required but no approval mechanism is available — check server configuration")
 			return
 		}
 		slog.InfoContext(ctx, "workflow pending",

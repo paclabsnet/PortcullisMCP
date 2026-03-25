@@ -89,7 +89,7 @@ type EnrichedMCPRequest struct {
 
 // PDPResponse is the decision returned by the Policy Decision Point.
 type PDPResponse struct {
-	Decision        string         `json:"decision"`                   // "allow" | "deny" | "escalate"
+	Decision        string         `json:"decision"`                   // "allow" | "deny" | "escalate" | "workflow"
 	Reason          string         `json:"reason"`
 	EscalationScope []map[string]any `json:"escalation_scope,omitempty"` // claims required for escalation token
 }

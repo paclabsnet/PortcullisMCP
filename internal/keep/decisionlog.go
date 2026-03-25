@@ -35,7 +35,7 @@ type DecisionLogEntry struct {
 	UserID     string         `json:"user_id"`
 	ServerName string         `json:"server_name,omitempty"`
 	ToolName   string         `json:"tool_name"`
-	Decision   string         `json:"decision"` // "allow" | "deny" | "escalate"
+	Decision   string         `json:"decision"` // "allow" | "deny" | "escalate" | "workflow"
 	Reason     string         `json:"reason,omitempty"`
 	Source     string         `json:"source"` // "gate-fastpath" | "pdp"
 	Arguments  map[string]any `json:"arguments,omitempty"`
