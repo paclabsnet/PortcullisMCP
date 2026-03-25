@@ -15,6 +15,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"flag"
 	"log/slog"
@@ -76,7 +77,9 @@ func loadConfig(path string) (gate.Config, error) {
 	// Expand environment variables in the YAML
 	data = shared.ExpandEnvVarsInYAML(data)
 	var cfg gate.Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&cfg); err != nil {
 		return gate.Config{}, err
 	}
 	return cfg, cfg.Validate()

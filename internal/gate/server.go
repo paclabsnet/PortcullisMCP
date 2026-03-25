@@ -614,6 +614,17 @@ func (g *Gate) policyErrToResult(err error, toolName, requestID string) (*mcp.Ca
 	var escalationErr *shared.EscalationPendingError
 	switch {
 	case errors.As(err, &escalationErr):
+		// Without a Guard endpoint Gate cannot poll for or claim escalation tokens,
+		// so escalation can never complete. Treat it as a deny so the agent does
+		// not present the user with an approval flow that will never resolve.
+		if g.cfg.Guard.Endpoint == "" {
+			slog.Warn("escalation required but Guard is not configured — treating as deny",
+				"tool", toolName, "reason", escalationErr.Reason)
+			return &mcp.CallToolResult{
+				IsError: true,
+				Content: []mcp.Content{&mcp.TextContent{Text: "Access denied: " + escalationErr.Reason}},
+			}, nil
+		}
 		return &mcp.CallToolResult{
 			IsError: true,
 			Content: []mcp.Content{&mcp.TextContent{Text: g.buildEscalationMessage(escalationErr)}},

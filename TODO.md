@@ -22,8 +22,57 @@ Currently the reason field for the JWTs is echoing the problem. It should probab
   - `cmd/*/main.go` — switch to `yaml.NewDecoder(r).KnownFields(true).Decode(&cfg)` to catch misspelled configuration keys at parse time.
   - `internal/keep/server.go` — make `EscalationSigner` initialization failure fatal if a signing key is provided but invalid.
   - `internal/guard/server.go` — validate `Keep` public key and `Guard` private key immediately on `NewServer`.
-  - `internal/gate/server.go` — ensure background workers (like `pollGuardWorker`) can signal fatal terminal failures to the main process.
+  - `internal/gate/server.go` — ensure background workers (like `pollGuardWorker`) can intelligently handle network errors. Retry thoughtfully, log appropriately. Communicate to the user appropriately. Never let a worker block main shutdown. auto-recover when the network issues improve.  Don't overlog for network errors, which just causes noise
 - priority: high
+
+
+#### Harden Configuration and Error Handling (Fail Fast) Plan and Analysis
+
+1. Strict Decoding: Update cmd/portcullis-gate/main.go, cmd/portcullis-guard/main.go, and cmd/portcullis-keep/main.go to use
+  yaml.NewDecoder(r).KnownFields(true). This catches typos in configuration keys at startup.
+2. Config Validation: Implement a Validate() error method on the Config structs in:
+    * internal/gate/config.go (Check for missing Keep/Guard endpoints, invalid OIDC settings).
+    * internal/guard/config.go (Check for missing signing keys and listen address).
+    * internal/keep/config.go (Check for PDP endpoint and identity normalization settings).
+3. Fatal on Startup: Update the main.go entry points to call Validate() and os.Exit(1) if validation fails.
+
+Concerns:
+- Suggestion: treat the TODO as delta work, not net-new everywhere
+- The plan line about making background workers signal terminal failures is risky for Gate. 
+- Guard polling currently treats outages as warnings in server.go:568, which is usually correct for transient network/auth blips.
+- Concern: killing Gate on temporary Guard/API failures could reduce availability more than it improves security.
+  - Better split:
+    - Startup config/key/TLS errors: fatal.
+    - Runtime dependency outages: degrade with clear errors/metrics, do not crash loop.
+- If you add Validate methods, avoid duplicating checks in two places with different messages/rules.
+- KnownFields catches unknown struct fields, but not semantic issues inside maps..
+  - You still need explicit Validate rules for value-level correctness (URLs, TTL bounds, required combinations).
+- Portcullis-Keep admin reload reads full config via strict loader in server.go:462, but only applies backends in server.go:458
+  - operators may be surprised that a typo in an unrelated section blocks backend reload
+  - Not a blocker, just document this clearly.
+
+Narrow the task to:
+- Guard strict decode + Validate + startup Validate call.
+- Keep Validate + startup Validate call (decoding already strict).
+- Gate strict decode migration (it still uses unmarshal) in main.go:79.
+- Clear policy for startup-fatal vs runtime-degraded failures.  
+
+
+Good default policy:
+- Startup: strict/fatal on invalid config/keys/TLS.
+- Runtime workers: degrade service mode, keep process running, report health and errors, auto-recover when dependencies return.
+
+
+Other specific items
+- if the guard configuration is not available in the Gate configuration, the Gate cannot perform escalation, so it should treat an escalate response as the equiavelent of a deny response
+- if the source is OIDC, the token file must exist for Gate to perform any MCP work.  If the OIDC token does not exist, every MCP call must return an error indicating that the MCP can't perform any work because the identity of the user is unknown.
+- Configuration-based failures (Auth, Malformed URLs) in background workers should be caught during the New() constructor, before the
+     worker even starts. This keeps the worker logic simple (just retries for transient network issues) and ensures the "Fail-Fast"
+     happens at the very beginning of main().
+- validating the format of HMAC/RSA keys is out of scope.  If they are mal-formed, the system will discover that problem on first use, which is fine.
+- Validate() for YAML files must run after environment variable expansion to ensure the final, expanded values are correct
+
+
 
 ### Task: Implement Health and Liveness Endpoints (Observability)
 - **Problem**: Keep and Guard currently lack standard `/health` and `/ready` endpoints. Orchestrators (Kubernetes, Docker, systemd) cannot distinguish between a service that is starting up, a service that is healthy, and a service that has a "dead" internal component (e.g., failed OPA engine or invalid signing key).
@@ -38,39 +87,6 @@ Currently the reason field for the JWTs is echoing the problem. It should probab
 - perhaps some sort of LogSink interface with multiple destinations?
 - priority: medium
 
-
-### Task: Simplify Escalation URL (Short JTI URL via Gate→Guard JWT Push) — DONE
-- **Problem**: Keep embeds the full escalation request JWT in the approval URL (`?token=<jwt>`). The JWT is ~500 chars and AI clients (e.g. Claude Desktop) occasionally mangle it, producing invalid signatures.
-- **Fix**: Gate pushes the JWT directly to Guard via a new `POST /pending` endpoint; approval URL is shortened to `?jti=<uuid>` only.
-- **Security**: Guard must validate the JWT signature on receipt (using its existing `keepKey`) to prevent a rogue Gate instance from registering arbitrary JWTs and granting itself escalation tokens.
-- **Thoughts**:
-  - Keep continues to send the status, reason, and escalation_jti
-  - Keep sends the escalation_jwt 
-  - We will stop using the workflow_reference field for the time being, in any case
-    - in other words: Keep will not generate the approval URL
-    - we will not get rid of the workflow_reference field, since we might need it for ServiceNow, etc, in the future, but we will leave it empty and not send it if it doesn't have any content (ideally, not a deal-breaker if it is simpler to leave it in the structure with no data)
-  - Gate will be solely responsible for implementing these different strategies, Keep does not need to be in the loop now that we've gotten rid of the URL in either case.
-- priority: high
-- this should be configurable at Gate. some enterprises might prefer not to invoke Guard proactively. Also reasonable to expect that the agents will be better in the future about faithfully copying URLs, which reduces the need for this feature.
-   - perhaps a configuration:  `approval-management-strategy`:  `proactive`  vs `user-driven`
-   - `user-driven` is the default, as the simpler option
-   - `user-driven` is the current strategy, slightly modified:
-      - Gate receives the escalation request from Keep
-      - Gate creates the `/approve` URL , which includes the `token=<JWT>` field. (same as what is delivered today)
-      - Gate delivers this to the Agent in the MCP response, to deliver to the user.  (same as today)
-      - Gate will optionally pull the text instructions for the Agent from the config file - `agent.approval.instructions`, with a default fallback that's hardcoded (the current text)
-     - `proactive` is the strategy of:
-      - Gate receives the escalation request from Keep
-      - Gate immediately pushes the pending JWT to Guard at the `/pending` endpoint and receives confirmation
-      - Gate creates the `/approve` URL, which includes the `jti=<JTI>` field 
-      - Gate delivers this to the Agent in the MCP response, to deliver to the user.  
-      - Gate will optionally pull the text instructions for the Agent from the config file - `agent.approval.instructions`, with a default fallback that's hardcoded (the current text)
-   - it is important that we don't change the data structure that we're sending, we just only send the   
-     fields that we need based on the configuration rules
-   - the new `/pending` endpoint at Guard should require a Bearer token header like the other endpoints that need 
-     some basic security
-   - if Guard is unavailable when Gate attempts to proactively deliver the JWT, we should indicate to the user that there are network issues and escalation can't happen at this time, try again later (or words to that affect)
-   - `agent.approval.instructions` is a new section in the Gate config. It's not related directly to either Keep or Guard, so it should live in its own configuration space.
 
 
 ### Task: System Authority Escalation
@@ -209,6 +225,8 @@ Why this is major:
 
 Suggested direction:
 - Require auth by default for token APIs, return only metadata from list endpoints, and keep raw token retrieval tightly scoped/authenticated.
+
+
 
 
 

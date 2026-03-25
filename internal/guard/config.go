@@ -14,6 +14,22 @@
 
 package guard
 
+import "fmt"
+
+// Validate returns an error if the configuration contains invalid values.
+func (c Config) Validate() error {
+	if c.Listen.Address == "" {
+		return fmt.Errorf("listen.address is required")
+	}
+	if c.Keep.EscalationRequestSigningKey == "" {
+		return fmt.Errorf("keep.escalation_request_signing_key is required")
+	}
+	if c.EscalationTokenSigning.Key == "" {
+		return fmt.Errorf("escalation_token_signing.key is required")
+	}
+	return nil
+}
+
 // Config holds the full portcullis-guard configuration.
 type Config struct {
 	Listen                  ListenConfig    `yaml:"listen"`

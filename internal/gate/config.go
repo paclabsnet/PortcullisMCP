@@ -85,12 +85,31 @@ type GuardConfig struct {
 
 // Validate returns an error if the configuration contains invalid values.
 func (c Config) Validate() error {
+	if c.Keep.Endpoint == "" {
+		return fmt.Errorf("keep.endpoint is required")
+	}
+
+	switch c.Identity.Source {
+	case "", "os":
+		// valid
+	case "oidc":
+		if c.Identity.OIDC.TokenFile == "" {
+			return fmt.Errorf("identity.oidc.token_file is required when identity.source is \"oidc\"")
+		}
+	default:
+		return fmt.Errorf("invalid identity.source %q: must be \"oidc\" or \"os\"", c.Identity.Source)
+	}
+
 	switch c.Guard.ApprovalManagementStrategy {
 	case "", "user-driven", "proactive":
 		// valid
 	default:
 		return fmt.Errorf("invalid approval_management_strategy %q: must be \"user-driven\" or \"proactive\"", c.Guard.ApprovalManagementStrategy)
 	}
+	if c.Guard.ApprovalManagementStrategy == "proactive" && c.Guard.Endpoint == "" {
+		return fmt.Errorf("guard.endpoint is required when approval_management_strategy is \"proactive\"")
+	}
+
 	return nil
 }
 
