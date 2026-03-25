@@ -81,7 +81,19 @@ type DecisionLogBatchConfig struct {
 // Agents' authorization privileges for a short time
 //
 // to make this explicit: if you do not have a Portcullis-Guard configuration, we
-// do not offer escalation as an option for the Agent.
+// do not offer escalation as an option for the Agent. Without access to Guard, an escalation
+// response from Portcullis-Keep will be treated as a deny.
+//
+// using the metaphor of an actual castle:
+//
+// An agent for a nearby lord walks up to the Gate of Castle Evermoor and seeks to enter to deliver
+// a message to Viscount Evermoor .  But it is late, and the policy is not to let anyone in after
+// dark unless the matter is urgent.  So the agent goes back to his lord, and acquires a signed
+// affadivit indicating that this request is, in fact urgent.
+//   - if there is a Guard at the Gate, the Guard can let the user into the Keep so he can visit the Lord
+//     and deliver the message
+//   - if there is no Guard on duty, it doesn't matter that the agent has a signed affadavit - the Portcullis
+//     is closed, and the agent is denied.
 //
 // Note: technically, a very knowledgeable user with access to the necessary secrets
 // can still make escalation work manually, but it requires creating a JWT by hand using
