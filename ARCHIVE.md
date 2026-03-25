@@ -19,3 +19,33 @@ This is where Tasks that are too ambitious go to hibernate, until we discover so
 - When a System workflow approves, it calls Guard's `/token/deposit`; Gate picks up the resulting token on next poll
 - priority: very low
 - notes: this is difficult to do without an actual enterprise deployment to test against, and even then it will be much different from organization to organization
+
+
+
+
+### Acquire Human Credentials
+
+the DAG model isn't implemented inside organizations of meaningful size, so the value as a tool for identity is low
+
+
+#### Option A: Device Authorization Grant (RFC 8628)
+  Gate initiates auth by calling the IdP's device authorization endpoint. The IdP returns a short user code and a URL. Gate prints (or surfaces via the agent) something like:
+
+  "Visit https://login.enterprise.com/activate and enter code: WXYZ-1234"                                                             
+
+  The user visits that URL on any browser, any device. Gate polls the IdP token endpoint until the user completes it. No redirect URI, no localhost web server at all.
+
+  This is how gh auth login, az login, and most CLI tools handle this today. 
+
+#### Option B: Enterprise-injected token file (already in your design)
+  The config already has token file: "~/.portcullis/oidc-token". The enterprise deploys an SSO agent (Okta Device Trust, a custom
+  refresh daemon, etc.) that keeps this file current. Gate reads it. Gate never touches OAuth at all.                              
+  This is the right answer for a mature enterprise deployment where the org already manages endpoint identity.                     
+
+
+#### Recommendation for Portcullis:
+  Why not both?
+  1. Token file — primary, enterprise-managed, zero Gate complexity
+  2. Device flow — fallback when no valid token file exists; works everywhere, no localhost trust issues, fits the CLI/daemon model
+
+

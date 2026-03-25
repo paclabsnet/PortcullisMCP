@@ -11,55 +11,7 @@
 - priority: high , but only after we've gotten all of the core communications done, no need in versioning our API too early
 
 
-### Task: handle the 'workflow' response from the PDP [DONE]
-- when the PDP returns 'workflow' as a response, Keep must mint the PendingJWT as normal, but invoke the
-  escalation.workflow configuration to process the PendingJWT and invoke an external workflow
-- if no workflow handler is configured or resolvable for the request, Keep should treat this as a deny, with a message
-  indicating that this request could be authorized, but there is no workflow configured to do so.
 
-
-### Task: Implement "Mock Workflow" Loopback for System Workflow Simulation [DONE]
-- **Problem**: Testing "System Workflow" (workflow approvals like ServiceNow) is difficult without a real enterprise installation or a mock workflow tool.
-- **Fix**: Create a "Mock Workflow Handler" that uses the existing Webhook flow to simulate an enterprise approval loop.
-- **Implementation scope**:
-  - `examples/mock-workflow-server/main.go` — A tiny HTTP server that:
-    1. Receives a webhook from Keep containing the `pending_jwt`.
-    2. Logs the request and "sleeps" for a configurable delay (e.g., 5-10 seconds).
-    3. Calls Guard's `POST /token/deposit` with the `pending_jwt` and `user_id`.
-  - Documentation/YAML — Provide a `keep-config.mock-workflow.yaml` that uses the `webhook` handler to point at this mock server.
-- **Benefit**: Allows end-to-end verification of an "Out of Band" Workflow Approval flow (Keep -> Webhook -> Guard -> Gate Polling) without real infrastructure.
-- priority: medium-high
-
-
-#### Proposed Implementation Plan:
-
-  Operation:
-   1. Parse GUARD_URL, GUARD_TOKEN, APPROVAL_DELAY, and PORT from environment.
-   2. Listen: POST /webhook (configured in Keep's keep-config.mock-workflow.yaml).
-   3. Process:
-       * collect the pending_jwt and UserID from the POST
-         * no need to verify that it was signed by Keep, since that would require this 
-           workflow server to know Keep's secret, and Guard will validate the pending JWT anyways
-       * Log the incoming trace_id and UserID
-       * Respond 200 OK immediately to Keep (releasing its connection).
-   4. Asynchronous Step (Goroutine):
-       * Sleep for APPROVAL_DELAY (e.g., 5 seconds).
-       * Deposit: POST to Guard's /token/deposit using:
-           * pending_jwt: (the Keep-signed request JWT).
-           * user_id: (the UserID provided in the original POST)
-             * Portcullis-Guard will validate this UserID against the one in the JWT, so we don't have to do that here
-           * Auth: Includes the Authorization: Bearer <GUARD_TOKEN> header.
-   5. Test Configuration (config/keep-config.mock-workflow.yaml):
-       * Set escalation.workflow.type to webhook.
-       * Set webhook.url to http://localhost:<PORT>/webhook.
-
-
-
-
-
-
-### Task: JWT Naming Alignment [DONE]
-  - Renamed `escalation_jwt` → `pending_jwt` (JSON key) and `EscalationJWT` → `PendingJWT` (Go field) everywhere the Keep-signed pending request JWT appears: keep/server.go, keep/workflow_webhook.go, gate/forwarder.go, shared/types.go, and all associated tests. Guard already used `pending_jwt` at /token/deposit. The Guard-issued escalation token (EscalationToken/EscalationTokens) was left untouched.
 
 
 ### Task: Improve Secret Management
@@ -81,7 +33,7 @@
 ### Task: set enterprise logging configuration to redact
 - all keys should be redacted
 - some commonly useful keys should be included in the config, but commented out
-- it makes sense to do this at the same time as Pluggable Logging
+- it makes sense to do this at the same time as the Pluggable Logging Task
 - priority: medium
 
 
@@ -134,11 +86,6 @@ for different service / tool combos
 
 
 
-
-
-
-
-
 ### Task: Optionally create a Gate API to collect the list of DENY responses, along with trace/session information
 - not sure if this is necessary. It might be helpful for troubleshooting
 - very low priority
@@ -148,29 +95,6 @@ for different service / tool combos
 
 
   
-### Acquire Human Credentials
-
-#### Option A: Device Authorization Grant (RFC 8628)
-  Gate initiates auth by calling the IdP's device authorization endpoint. The IdP returns a short user code and a URL. Gate prints (or surfaces via the agent) something like:
-
-  "Visit https://login.enterprise.com/activate and enter code: WXYZ-1234"                                                             
-
-  The user visits that URL on any browser, any device. Gate polls the IdP token endpoint until the user completes it. No redirect URI, no localhost web server at all.
-
-  This is how gh auth login, az login, and most CLI tools handle this today. 
-
-#### Option B: Enterprise-injected token file (already in your design)
-  The config already has token file: "~/.portcullis/oidc-token". The enterprise deploys an SSO agent (Okta Device Trust, a custom
-  refresh daemon, etc.) that keeps this file current. Gate reads it. Gate never touches OAuth at all.                              
-  This is the right answer for a mature enterprise deployment where the org already manages endpoint identity.                     
-
-
-#### Recommendation for Portcullis:
-  Why not both?
-  1. Token file — primary, enterprise-managed, zero Gate complexity
-  2. Device flow — fallback when no valid token file exists; works everywhere, no localhost trust issues, fits the CLI/daemon model
-
-
 
 
 
