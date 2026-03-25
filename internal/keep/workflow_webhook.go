@@ -48,7 +48,7 @@ func (h *webhookHandler) Submit(ctx context.Context, req AuthorizedRequest, esca
 		"server":         req.ServerName,
 		"tool":           req.ToolName,
 		"arguments":      req.Arguments,
-		"escalation_jwt": escalationJWT,
+		"pending_jwt":    escalationJWT,
 		"user": map[string]any{
 			"id":          req.Principal.UserID,
 			"display":     req.Principal.DisplayName,

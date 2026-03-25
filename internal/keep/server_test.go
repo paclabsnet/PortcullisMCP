@@ -282,7 +282,7 @@ func TestServer_HandleCall_Escalate_NoSignerWithWorkflowRef_Returns202(t *testin
 
 func TestServer_HandleCall_Escalate_IncludesJWT(t *testing.T) {
 	// When a signer is configured, the 202 body must include both escalation_jti
-	// and escalation_jwt so Gate can build the approval URL without relying on the
+	// and pending_jwt so Gate can build the approval URL without relying on the
 	// workflow_reference field.
 	pdp := &mockPDP{decision: "escalate", reason: "requires manager approval"}
 	signer, err := NewEscalationSigner(SigningConfig{Key: "test-signing-key-32bytes!!!!!!!!"})
@@ -314,8 +314,8 @@ func TestServer_HandleCall_Escalate_IncludesJWT(t *testing.T) {
 	if result["escalation_jti"] == "" {
 		t.Error("escalation_jti should be non-empty when signer is configured")
 	}
-	if result["escalation_jwt"] == "" {
-		t.Error("escalation_jwt should be non-empty when signer is configured")
+	if result["pending_jwt"] == "" {
+		t.Error("pending_jwt should be non-empty when signer is configured")
 	}
 }
 

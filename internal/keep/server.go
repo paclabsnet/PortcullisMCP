@@ -274,7 +274,7 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 			"reason":             pdpResp.Reason,
 			"workflow_reference": wfRef,
 			"escalation_jti":     escalationJTI,
-			"escalation_jwt":     escalationJWT,
+			"pending_jwt":        escalationJWT,
 		})
 
 	default:
@@ -400,7 +400,7 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 			"reason":             pdpResp.Reason,
 			"workflow_reference": wfRef,
 			"escalation_jti":     escalationJTI,
-			"escalation_jwt":     escalationJWT,
+			"pending_jwt":        escalationJWT,
 		})
 
 	default:

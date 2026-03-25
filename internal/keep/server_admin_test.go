@@ -106,8 +106,8 @@ func TestServer_HandleAuthorize_Escalate_WithSigner(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if result["escalation_jwt"] == "" {
-		t.Error("escalation_jwt should be non-empty when signer is configured")
+	if result["pending_jwt"] == "" {
+		t.Error("pending_jwt should be non-empty when signer is configured")
 	}
 	if result["escalation_jti"] == "" {
 		t.Error("escalation_jti should be non-empty when signer is configured")

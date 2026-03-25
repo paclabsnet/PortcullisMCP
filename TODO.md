@@ -53,9 +53,8 @@
 
 
 
-### Task: JWT Naming Alignment 
-  - Rename escalation_jwt to pending_jwt in internal/keep/workflow_webhook.go and internal/keep/server.go to achieve perfect consistency across the codebase.
-  - priority: medium
+### Task: JWT Naming Alignment [DONE]
+  - Renamed `escalation_jwt` → `pending_jwt` (JSON key) and `EscalationJWT` → `PendingJWT` (Go field) everywhere the Keep-signed pending request JWT appears: keep/server.go, keep/workflow_webhook.go, gate/forwarder.go, shared/types.go, and all associated tests. Guard already used `pending_jwt` at /token/deposit. The Guard-issued escalation token (EscalationToken/EscalationTokens) was left untouched.
 
 
 ### Task: Improve Secret Management

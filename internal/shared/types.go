@@ -98,13 +98,13 @@ type PDPResponse struct {
 // Reference is a workflow-specific identifier — a ticket ID, external URL, etc.
 // EscalationJTI is the JWT ID of the pending escalation request, used by Gate
 // to track and later claim the approved token from Guard.
-// EscalationJWT is the raw Keep-signed escalation request JWT; Gate uses it to
+// PendingJWT is the raw Keep-signed escalation request JWT; Gate uses it to
 // either build the approval URL (user-driven mode) or push it proactively to Guard.
 type EscalationPendingError struct {
 	Reason        string
 	Reference     string
 	EscalationJTI string
-	EscalationJWT string
+	PendingJWT    string
 }
 
 func (e *EscalationPendingError) Error() string {

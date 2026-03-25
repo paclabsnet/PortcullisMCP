@@ -61,7 +61,7 @@ func TestBuildEscalationMessage_UserDrivenMode(t *testing.T) {
 	e := &shared.EscalationPendingError{
 		Reason:        "needs approval",
 		EscalationJTI: "test-jti",
-		EscalationJWT: "header.payload.sig",
+		PendingJWT: "header.payload.sig",
 	}
 	msg := g.buildEscalationMessage(e)
 
@@ -85,7 +85,7 @@ func TestBuildEscalationMessage_ProactiveMode(t *testing.T) {
 	e := &shared.EscalationPendingError{
 		Reason:        "needs approval",
 		EscalationJTI: "test-jti-xyz",
-		EscalationJWT: "header.payload.sig",
+		PendingJWT: "header.payload.sig",
 	}
 	msg := g.buildEscalationMessage(e)
 
@@ -151,7 +151,7 @@ func TestBuildEscalationMessage_NoGuardEndpoint(t *testing.T) {
 	g := newGateForEscalationTests(GuardConfig{}) // no endpoint
 	e := &shared.EscalationPendingError{
 		Reason:        "needs approval",
-		EscalationJWT: "header.payload.sig",
+		PendingJWT: "header.payload.sig",
 	}
 	msg := g.buildEscalationMessage(e)
 
@@ -166,7 +166,7 @@ func TestBuildEscalationMessage_NoURL_MisconfiguredMessage(t *testing.T) {
 	g := newGateForEscalationTests(GuardConfig{Endpoint: "http://guard.example.com"})
 	e := &shared.EscalationPendingError{
 		Reason: "needs approval",
-		// EscalationJTI, EscalationJWT, and Reference all empty
+		// EscalationJTI, PendingJWT, and Reference all empty
 	}
 	msg := g.buildEscalationMessage(e)
 
@@ -186,7 +186,7 @@ func TestBuildEscalationMessage_DefaultInstructions(t *testing.T) {
 	g := newGateForEscalationTests(GuardConfig{Endpoint: "http://guard.example.com"})
 	e := &shared.EscalationPendingError{
 		Reason:        "needs approval",
-		EscalationJWT: "h.p.s",
+		PendingJWT: "h.p.s",
 	}
 	msg := g.buildEscalationMessage(e)
 
