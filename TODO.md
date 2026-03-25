@@ -2,24 +2,15 @@
 
 ## Tasks
 
-### Task: Update 'Reason' when creating escalation tokens
-Currently the reason field for the JWTs is echoing the problem. It should probably be more like reason: "User <X> has approved a temporary escalation of privileges for the Agent" or something like that.
-
-  Proposed Plan: Update Escalation Token Reason
-   1. internal/guard/server.go: Add a Reason field to the portcullisClaims struct.
-   2. internal/guard/server.go: Update the issueEscalationToken function to generate a descriptive reason string, such as:
-      > "User <DisplayName> has approved a temporary escalation of privileges for the Agent"
-      This will replace the technical reason (e.g., "denied by policy") currently embedded in the issued token.
-   3. internal/guard/server_test.go: Update the tests to verify that the issued JWT now contains this descriptive reason.
-
-  This change ensures that when the PDP later evaluates the token, it sees a human-readable audit trail of who approved the
-  escalation and why.
 
 
 
 ### Task: Improve API
 - We need to version Keep's API with Gate, or version the Wrapped MCP Request, or both, so we know what to expect in the contents
 - We need to version the logging API (how Gate sends logs to Keep)
+
+
+
 
 ### Task: Implement Tool Aliasing (Namespace Management)
 - **Problem**: Multiple backend MCP servers may provide tools with identical names (e.g., `query_database`). This causes collisions at the Gate, as the AI Agent cannot distinguish between them.
@@ -30,6 +21,9 @@ Currently the reason field for the JWTs is echoing the problem. It should probab
   - `internal/keep/server.go` — In the `/tools` handler, rename tools using the `ToolMap` before sending the list to Gate.
   - `internal/shared/types.go` — Consider updating `AnnotatedTool` to store both names for debugging/tracing.
 - priority: medium
+
+
+
 
 ### Task: Improve Secret Management
 - We probably need to support a way to gather secrets (Private keys, shared secrets) from a vault, but don't get rid of the config option for the sandbox model
@@ -56,7 +50,10 @@ Currently the reason field for the JWTs is echoing the problem. It should probab
 - When a System workflow approves, it calls Guard's `/token/deposit`; Gate picks up the resulting token on next poll
 - Implementation scope: `shared/types.go` (add `Authority`, `EscalationJWT`, `WorkflowMetadata` to `EscalationPendingError`), `keep/server.go` (add `authority` + `escalation_jwt` to 202 body), `gate/config.go` (add per-authority message templates), `gate/forwarder.go`, `gate/server.go` (split behavior by authority), `gate/guardclient.go` (add `RegisterPending`), `guard/server.go` (add `POST /pending`, change `handleGet` to `?jti=` lookup)
 - priority: medium
-upda
+
+
+
+
 ### Task: Acquire Human Credentials (at Gate)
 - [x] Token file (Option B) — Gate reads `identity.oidc.token_file`; fails hard (no OS fallback) when source is "oidc" and token is missing or invalid; `~` is now expanded correctly on read
 - [ ] Keychain storage — optional future enhancement
