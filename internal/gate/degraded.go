@@ -24,7 +24,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// pingHealth performs a GET to <endpoint>/health with a 3-second timeout.
+// pingHealth performs a GET to <endpoint>/healthz with a 3-second timeout.
 // Returns "available" if any HTTP response is received, "unavailable" otherwise.
 func pingHealth(ctx context.Context, endpoint string) string {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
