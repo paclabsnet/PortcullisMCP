@@ -3,8 +3,6 @@
 ## Tasks
 
 
-
-
 ### Task: Improve API
 - We need to version Keep's API with Gate, or version the Wrapped MCP Request, or both, so we know what to expect in the contents
 - We need to version the logging API (how Gate sends logs to Keep)
@@ -21,25 +19,9 @@
 
 
 
-
-
-
-### Task: Pluggable Logging
-- We need Keep to support multiple decision logging strategies
-- perhaps some sort of LogSink interface with multiple destinations?
-- priority: medium
-
-
-### Task: set enterprise logging configuration to redact
-- all keys should be redacted
-- some commonly useful keys should be included in the config, but commented out
-- it makes sense to do this at the same time as the Pluggable Logging Task
-- priority: medium
-
-
 ### Task: Input sanitizing at Keep and Guard
 - standard good hygiene
-- medium-low priority
+- medium priority
 
 
 
@@ -91,28 +73,11 @@ for different service / tool combos
 - very low priority
 
 
-## Implementation notes
-
-
-  
-
-
 
 ## Security Review
 
-1. High: Escalation request JWT is propagated through URLs and external workflow payloads
-- URL embedding in query string: workflow_url.go:44
-- Agent message explicitly asks to pass the full approval URL: types.go:113
-- Webhook payload includes full escalation JWT: workflow_webhook.go:51
-- ServiceNow description includes full escalation JWT: workflow_servicenow.go:58
-  Why this is major:
-  - Query strings and ticket fields are commonly copied, logged, indexed, and retained.
-  - That increases exposure of signed escalation artifacts across systems and operators.
 
-  Suggested direction:
-  - Move to short reference flow (JTI/state handle), keep signed JWT server-to-server only, and avoid sending JWT in browser-visible URLs and ticket text.
-
-2. High: Guard token-claim surface is capability-based and can be open depending on config
+1. High: Guard token-claim surface is capability-based and can be open depending on config
 - Claim endpoint intentionally unauthenticated: server.go:139
 - Guard can run with no bearer token protection for token APIs: server.go:385
 - Unclaimed-list response includes raw token material: server.go:414
@@ -123,6 +88,36 @@ Why this is major:
 
 Suggested direction:
 - Require auth by default for token APIs, return only metadata from list endpoints, and keep raw token retrieval tightly scoped/authenticated.
+
+
+
+
+
+
+
+
+
+# Phase 3 / Future
+
+### Task: Pluggable Logging and Redaction
+- **Problem**: Enterprises need flexible logging destinations (SIEMs, files, console) and must ensure that sensitive PII or secrets in tool arguments are never leaked to those logs.
+- **Fix**: Implement a `LogSink` interface and a "Fail-Safe" redaction engine.
+- **Fail-Safe Redaction Definition**: If the redaction engine encounters an error (recursion limit, malformed data), it must replace the entire payload with an error message rather than logging raw data.
+- **Implementation scope**:
+  - `internal/keep/logsink.go` — Define the `LogSink` interface (`Write`, `Close`).
+  - `internal/keep/redaction.go` — Implement the redaction engine with support for:
+    - **Global Deny-List**: Keys like `password`, `token`, `secret` are always redacted.
+    - **Tool-Specific Rules**: Specific arguments for specific tools (e.g., `email` in `update_user`).
+    - **Strict Mode**: An optional "safe-by-default" mode where only explicitly allowed keys are logged.
+  - `internal/keep/decisionlog.go` — Refactor to support multiple sinks and apply redaction before sending.
+  - **New Sinks**: Implement `ConsoleSink`, `FileSink`, and refactor the existing `WebhookSink`.
+- priority: medium
+
+
+## Implementation notes
+
+
+  
 
 
 
