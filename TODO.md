@@ -114,6 +114,7 @@ for different service / tool combos
 
 
 
+
 ### Task: Acquire Human Credentials (at Gate)
 - [x] Token file (Option B) — Gate reads `identity.oidc.token_file`; fails hard (no OS fallback) when source is "oidc" and token is missing or invalid; `~` is now expanded correctly on read
 - [ ] Keychain storage — optional future enhancement
@@ -135,18 +136,6 @@ for different service / tool combos
 
 
 
-### Task: When PDP responds with Workflow, it can specify a provider?
-Discuss - right now, the PDP will just respond with 'workflow'.  Which is fine, but what if
-different workflow escalation scenarios demand different workflows? 
-
-We have two options
-- keep configuration defines the workflow per server/tool
-- the PDP defines the workflow per server/tool
-
-The benefit of the PDP doing it is that it's a modification to policy logic and/or data, not to the Keep configuration.  I'm not sure if that's necessarily better or worse, I suppose it can be a configuration
-option
-
-priority: low
 
 
 
