@@ -80,6 +80,11 @@ type Gate struct {
 	logDone       chan struct{}
 	logWg         sync.WaitGroup
 
+	// degradedReason is non-empty when Gate started but could not fully
+	// initialize (e.g. Keep unreachable at startup). portcullis_status reports
+	// this to the agent. Empty means Gate is functioning normally.
+	degradedReason string
+
 	// pendingEscalations tracks escalation requests awaiting user approval.
 	// Key: serverName+"/"+toolName. Protected by pendingMu.
 	pendingMu          sync.Mutex
@@ -155,6 +160,20 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 		Version: "0.1.0",
 	}, nil)
 
+	mcp.AddTool(g.server,
+		&mcp.Tool{
+			Name:        "portcullis_status",
+			Description: "Returns the current operational status of Portcullis Gate, Keep, and Guard.",
+		},
+		func(ctx context.Context, _ *mcp.CallToolRequest, _ any) (*mcp.CallToolResult, any, error) {
+			msg, isErr := g.buildStatusReport(ctx)
+			return &mcp.CallToolResult{
+				IsError: isErr,
+				Content: []mcp.Content{&mcp.TextContent{Text: msg}},
+			}, nil, nil
+		},
+	)
+
 	if localFSSession != nil {
 		localTools, err := localFSSession.ListTools(ctx, &mcp.ListToolsParams{})
 		if err != nil {
@@ -172,6 +191,7 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 		// Non-fatal: gate can still serve local filesystem tools if Keep is
 		// temporarily unavailable at startup.
 		slog.Warn("fetch tool list from keep failed", "error", err)
+		g.degradedReason = "Keep is unreachable — tool list may be incomplete. Error: " + err.Error()
 	}
 	for _, at := range keepTools {
 		g.toolServerMap[at.Tool.Name] = at.ServerName

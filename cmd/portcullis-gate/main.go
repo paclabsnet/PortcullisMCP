@@ -37,30 +37,42 @@ func main() {
 
 	slog.Info("portcullis-gate starting", "version", version.Version)
 
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
 	cfg, err := loadConfig(*cfgPath)
 	if err != nil {
 		slog.Error("load config", "error", err)
-		os.Exit(1)
+		runDegraded(ctx, "configuration error: "+err.Error())
+		return
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 
 	shutdownTelemetry, err := telemetry.Setup(ctx, cfg.Telemetry)
 	if err != nil {
 		slog.Error("init telemetry", "error", err)
-		os.Exit(1)
+		// Telemetry is non-critical infrastructure; log and continue without it.
+		shutdownTelemetry = func(_ context.Context) error { return nil }
 	}
 	defer func() { _ = shutdownTelemetry(context.Background()) }()
 
 	g, err := gate.New(ctx, cfg)
 	if err != nil {
 		slog.Error("init gate", "error", err)
-		os.Exit(1)
+		runDegraded(ctx, err.Error())
+		return
 	}
 
 	if err := g.Run(ctx); err != nil && err != context.Canceled {
 		slog.Error("gate exited", "error", err)
+		os.Exit(1)
+	}
+}
+
+// runDegraded starts Gate in degraded mode and exits when the MCP session ends.
+// Startup errors are surfaced to the MCP agent via a portcullis_status pseudo-tool.
+func runDegraded(ctx context.Context, reason string) {
+	if err := gate.RunDegraded(ctx, reason); err != nil && err != context.Canceled {
+		slog.Error("degraded gate exited with error", "error", err)
 		os.Exit(1)
 	}
 }
