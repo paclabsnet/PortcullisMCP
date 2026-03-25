@@ -16,6 +16,7 @@ package gate
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -39,6 +40,29 @@ func pingHealth(ctx context.Context, endpoint string) string {
 	}
 	resp.Body.Close()
 	return "available"
+}
+
+// buildStatusReport returns the portcullis_status message and whether Gate is
+// in an error state. It performs live /healthz checks against Keep and Guard.
+func (g *Gate) buildStatusReport(ctx context.Context) (msg string, isErr bool) {
+	gateStatus := "operating normally"
+	if g.degradedReason != "" {
+		gateStatus = "degraded — " + g.degradedReason
+		isErr = true
+	}
+
+	keepStatus := pingHealth(ctx, g.cfg.Keep.Endpoint)
+
+	guardStatus := "not configured"
+	if g.cfg.Guard.Endpoint != "" {
+		guardStatus = pingHealth(ctx, g.cfg.Guard.Endpoint)
+	}
+
+	msg = fmt.Sprintf(
+		"Portcullis Gate:  %s\nPortcullis Keep:  %s\nPortcullis Guard: %s",
+		gateStatus, keepStatus, guardStatus,
+	)
+	return msg, isErr
 }
 
 // RunDegraded starts a minimal MCP server that registers a single

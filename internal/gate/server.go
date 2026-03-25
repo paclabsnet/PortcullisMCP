@@ -166,24 +166,7 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 			Description: "Returns the current operational status of Portcullis Gate, Keep, and Guard.",
 		},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ any) (*mcp.CallToolResult, any, error) {
-			gateStatus := "operating normally"
-			isErr := false
-			if g.degradedReason != "" {
-				gateStatus = "degraded — " + g.degradedReason
-				isErr = true
-			}
-
-			keepStatus := pingHealth(ctx, g.cfg.Keep.Endpoint)
-
-			guardStatus := "not configured"
-			if g.cfg.Guard.Endpoint != "" {
-				guardStatus = pingHealth(ctx, g.cfg.Guard.Endpoint)
-			}
-
-			msg := fmt.Sprintf(
-				"Portcullis Gate:  %s\nPortcullis Keep:  %s\nPortcullis Guard: %s",
-				gateStatus, keepStatus, guardStatus,
-			)
+			msg, isErr := g.buildStatusReport(ctx)
 			return &mcp.CallToolResult{
 				IsError: isErr,
 				Content: []mcp.Content{&mcp.TextContent{Text: msg}},
