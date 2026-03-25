@@ -22,7 +22,7 @@
     2. Logs the request and "sleeps" for a configurable delay (e.g., 5-10 seconds).
     3. Calls Guard's `POST /token/deposit` with the `pending_jwt` and `user_id`.
   - Documentation/YAML — Provide a `keep-config.mock-workflow.yaml` that uses the `webhook` handler to point at this mock server.
-- **Benefit**: Allows end-to-end verification of the System Workflow Authority flow (Keep -> Webhook -> Guard -> Gate Polling) without real infrastructure.
+- **Benefit**: Allows end-to-end verification of an "Out of Band" Workflow Approval flow (Keep -> Webhook -> Guard -> Gate Polling) without real infrastructure.
 - priority: medium-high
 
 

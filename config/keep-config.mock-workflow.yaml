@@ -4,10 +4,20 @@ listen:
     bearer_token: "dev-secret-token"
 
 pdp:
-  # Use "noop" to allow all requests so you can focus on testing the workflow path.
-  # Switch to type: "opa" with a policy that returns "escalate" for the tools you
-  # want to test against.
-  type: "noop"
+  #
+  # the demonstration policies that some with this project include a policy
+  #   Note: this policy is found in portcullis/custom/decision, which is called 
+  #         from tabular/decision  when there is no tabular decision that matches
+  #         the [ service / tool / policy ] criteria
+  #
+  # where if one tries to exercise the 'delete_customer' tool of the
+  # mock-enterprise-api server, it will return 'workflow'
+  #
+  # in essence, if you ask your Agent to delete a customer, it will 
+  # simulate going out to a separate workflow system for approval
+  # 
+  type: "opa"
+  endpoint: "http://opa.internal.example.com:8181/v1/data/portcullis/tabular/decision"
 
 identity:
   normalizer: "passthrough"
