@@ -53,7 +53,7 @@
 
 
 
-### Naming Alignment Task 
+### Task: JWT Naming Alignment 
   - Rename escalation_jwt to pending_jwt in internal/keep/workflow_webhook.go and internal/keep/server.go to achieve perfect consistency across the codebase.
   - priority: medium
 
