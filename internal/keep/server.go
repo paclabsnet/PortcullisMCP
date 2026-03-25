@@ -107,13 +107,16 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", s.handleHealthz)
+	mux.HandleFunc("GET /readyz", s.handleReadyz)
 	mux.HandleFunc("POST /call", s.handleCall)
 	mux.HandleFunc("POST /authorize", s.handleAuthorize)
 	mux.HandleFunc("POST /tools", s.handleListTools)
 	mux.HandleFunc("POST /log", s.handleLog)
 	mux.HandleFunc("POST /admin/reload", s.adminAuthMiddleware(s.handleReload))
 
-	// Wrap with authentication middleware if bearer token is configured
+	// Wrap with authentication middleware if bearer token is configured.
+	// Health endpoints are excluded so orchestrators can probe without credentials.
 	var handler http.Handler = mux
 	if s.cfg.Listen.Auth.BearerToken != "" {
 		handler = s.authMiddleware(mux)
@@ -520,9 +523,42 @@ func writeDeny(w http.ResponseWriter, reason, traceID string) {
 	writeJSON(w, http.StatusForbidden, body)
 }
 
+// handleHealthz is the liveness probe. Returns 200 as long as the HTTP server
+// is running and able to handle requests.
+func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleReadyz is the readiness probe. Returns 200 when Keep is fully
+// initialized and able to serve traffic: PDP and router are loaded, and the
+// tool cache has been populated (at least attempted). Signer status is
+// included in the response body as an informational field.
+func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
+	tools, err := s.router.ListAllTools(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"status": "unavailable",
+			"reason": "tool cache unavailable: " + err.Error(),
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":           "ready",
+		"tools":            len(tools),
+		"signer_configured": s.signer != nil,
+	})
+}
+
 // authMiddleware validates the bearer token if configured.
+// Health endpoints (/healthz, /readyz) are exempt so orchestrators can probe
+// without credentials.
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		auth := r.Header.Get("Authorization")
 		expected := "Bearer " + s.cfg.Listen.Auth.BearerToken
 

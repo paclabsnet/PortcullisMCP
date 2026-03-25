@@ -143,6 +143,8 @@ func loadTemplates(dir string) (*template.Template, error) {
 // Run starts the HTTP server and blocks until ctx is cancelled.
 func (s *Server) Run(ctx context.Context) error {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", s.handleHealthz)
+	mux.HandleFunc("GET /readyz", s.handleReadyz)
 	mux.HandleFunc("GET /approve", s.handleGet)
 	mux.HandleFunc("POST /approve", s.handlePost)
 
@@ -480,6 +482,29 @@ func (s *Server) cleanupExpired() {
 		}
 	}
 	s.pendingMu.Unlock()
+}
+
+// handleHealthz is the liveness probe. Returns 200 as long as the HTTP server
+// is running and able to handle requests.
+func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// handleReadyz is the readiness probe. Returns 200 when Guard is fully
+// initialized: signing keys are loaded and templates are parsed.
+func (s *Server) handleReadyz(w http.ResponseWriter, _ *http.Request) {
+	if len(s.keepKey) == 0 || len(s.signingKey) == 0 || s.templates == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"status": "unavailable",
+			"reason": "signing keys or templates not initialized",
+		})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ready"})
 }
 
 // requireTokenAuth is middleware that requires a valid bearer token for the
