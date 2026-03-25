@@ -14,6 +14,25 @@ Currently the reason field for the JWTs is echoing the problem. It should probab
 - We probably need to support a way to gather secrets (Private keys, shared secrets) from a vault, but don't get rid of the config option for the sandbox model
 - priority: medium
 
+### Task: Harden Configuration and Error Handling (Fail Fast)
+- **Problem**: The system is currently too permissive. Typos in YAML (e.g., `signing_key` vs `signing-key`) are silently ignored by the default decoder, and missing critical security components (like signing keys or OIDC providers) often result in a "degraded" startup with logged warnings rather than a fatal exit.
+- **Fix**: Implement strict validation at startup to ensure the system never runs in an insecure or broken state.
+- **Implementation scope**:
+  - `config/*.go` — add `Validate() error` methods to all configuration structs (Check for empty endpoints, missing keys, invalid TTLs).
+  - `cmd/*/main.go` — switch to `yaml.NewDecoder(r).KnownFields(true).Decode(&cfg)` to catch misspelled configuration keys at parse time.
+  - `internal/keep/server.go` — make `EscalationSigner` initialization failure fatal if a signing key is provided but invalid.
+  - `internal/guard/server.go` — validate `Keep` public key and `Guard` private key immediately on `NewServer`.
+  - `internal/gate/server.go` — ensure background workers (like `pollGuardWorker`) can signal fatal terminal failures to the main process.
+- priority: high
+
+### Task: Implement Health and Liveness Endpoints (Observability)
+- **Problem**: Keep and Guard currently lack standard `/health` and `/ready` endpoints. Orchestrators (Kubernetes, Docker, systemd) cannot distinguish between a service that is starting up, a service that is healthy, and a service that has a "dead" internal component (e.g., failed OPA engine or invalid signing key).
+- **Fix**: Add dedicated health check handlers to both Keep and Guard.
+- **Implementation scope**:
+  - `internal/keep/server.go` — Add `GET /healthz` (liveness) and `GET /readyz` (readiness). Readiness should verify the PDP is loaded and the Escalate Signer is initialized.
+  - `internal/guard/server.go` — Add `GET /healthz` and `GET /readyz`. Readiness should verify signing keys are loaded and templates are parsed.
+- priority: medium-high
+
 ### Task: Plugabble Logging
 - We need Keep to support multiple decision logging strategies
 - perhaps some sort of LogSink interface with multiple destinations?
