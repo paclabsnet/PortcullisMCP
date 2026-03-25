@@ -29,13 +29,6 @@ Currently the reason field for the JWTs is echoing the problem. It should probab
 
 
 
-### Task: Implement Health and Liveness Endpoints (Observability)
-- **Problem**: Keep and Guard currently lack standard `/health` and `/ready` endpoints. Orchestrators (Kubernetes, Docker, systemd) cannot distinguish between a service that is starting up, a service that is healthy, and a service that has a "dead" internal component (e.g., failed OPA engine or invalid signing key).
-- **Fix**: Add dedicated health check handlers to both Keep and Guard.
-- **Implementation scope**:
-  - `internal/keep/server.go` — Add `GET /healthz` (liveness) and `GET /readyz` (readiness). Readiness should verify the PDP is loaded and the Escalate Signer is initialized.
-  - `internal/guard/server.go` — Add `GET /healthz` and `GET /readyz`. Readiness should verify signing keys are loaded and templates are parsed.
-- priority: medium-high
 
 ### Task: Plugabble Logging
 - We need Keep to support multiple decision logging strategies
