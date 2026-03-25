@@ -100,11 +100,16 @@ i.e. instead of running as a stdio MCP, it can run as an autonomous local proces
 
 
 
-### Task: Plugin model for System Workflow Initialization
- - if Keep receives a 'Workflow' response from the PDP, it should call some sort of appropriately designed plugin to interface with the actual workflow system
- - this logic needs to be kept out of the core functionality of Portcullis, so it doesn't pollute the open source project
- - Needs a lot more research
- - priority: low
+### Task: Routing model for Workflows
+when the PDP generates a 'workflow' response, the important information should be
+sent to the appropriate workflow system to allow for authorization. But it is quite possible
+that in a large organization, different workflow systems will be used to authorize
+different types of requests - for example, by MCP, or even perhaps by Tool.
+
+We need to modify the Keep config to allow different workflow plugins to be invoked
+for different service / tool combos 
+
+- priority: low
 
 
 
