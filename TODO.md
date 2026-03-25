@@ -12,15 +12,14 @@
 
 
 
-### Task: Implement Tool Aliasing (Namespace Management)
-- **Problem**: Multiple backend MCP servers may provide tools with identical names (e.g., `query_database`). This causes collisions at the Gate, as the AI Agent cannot distinguish between them.
-- **Fix**: Allow Keep to alias tool names in the configuration. Keep presents the unique `alias` to the Agent but "un-aliases" it back to the original name before calling the backend.
-- **Implementation scope**:
-  - `internal/keep/config.go` — Add `ToolMap map[string]string` (Alias -> Internal Name) to `BackendConfig`.
-  - `internal/keep/router.go` — Update routing logic to look up the internal name before making the outbound call.
-  - `internal/keep/server.go` — In the `/tools` handler, rename tools using the `ToolMap` before sending the list to Gate.
-  - `internal/shared/types.go` — Consider updating `AnnotatedTool` to store both names for debugging/tracing.
-- priority: medium
+### Task: Implement Tool Aliasing (Namespace Management) [DONE]
+- `BackendConfig.ToolMap map[string]string` (InternalName -> Alias) added to `config.go`
+- `Router.Reload()` builds `aliasToReal` per backend, validates no duplicate aliases across backends (hard error), applies aliases to tool names in the cache, and updates existing backend configs so ToolMap changes take effect on reload
+- `Router.CallTool()` un-aliases via `resolveToolName()` before dispatch (after PDP evaluation)
+- Tool cache served to Gate already has aliased names; the PDP always sees the alias
+- Connection-param changes (command, url) on existing backends still require a restart (known gap, noted in code)
+
+
 
 
 

@@ -48,9 +48,10 @@ type Router struct {
 }
 
 type backendConn struct {
-	cfg     BackendConfig
-	client  *mcp.Client
-	session *mcp.ClientSession
+	cfg         BackendConfig
+	client      *mcp.Client
+	session     *mcp.ClientSession
+	aliasToReal map[string]string // alias → real backend tool name; nil if no aliases
 }
 
 // NewRouter creates a Router from the backend configs but does not yet connect.
@@ -66,6 +67,8 @@ func NewRouter(backends map[string]BackendConfig) *Router {
 }
 
 // CallTool routes a tool call to the named backend server.
+// toolName is the alias as seen by the agent and PDP; it is un-aliased to the
+// real backend tool name before dispatch so the PDP always evaluates the alias.
 func (r *Router) CallTool(ctx context.Context, serverName, toolName string, args map[string]any) (*mcp.CallToolResult, error) {
 	ctx, span := otel.Tracer("portcullis-keep").Start(ctx, "keep.backend.call_tool")
 	defer span.End()
@@ -74,19 +77,34 @@ func (r *Router) CallTool(ctx context.Context, serverName, toolName string, args
 		attribute.String("tool.name", toolName),
 	)
 
+	backendToolName := r.resolveToolName(serverName, toolName)
+
 	session, err := r.sessionFor(ctx, serverName)
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
 		return nil, err
 	}
 	result, err := session.CallTool(ctx, &mcp.CallToolParams{
-		Name:      toolName,
+		Name:      backendToolName,
 		Arguments: args,
 	})
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
 	}
 	return result, err
+}
+
+// resolveToolName returns the real backend tool name for the given alias, or
+// the original name unchanged if no alias mapping exists for it.
+func (r *Router) resolveToolName(serverName, toolName string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if conn, ok := r.backends[serverName]; ok && conn.aliasToReal != nil {
+		if real, ok := conn.aliasToReal[toolName]; ok {
+			return real
+		}
+	}
+	return toolName
 }
 
 // ListTools returns all tools exposed by the named backend server.
@@ -113,10 +131,13 @@ func (r *Router) ListAllTools(ctx context.Context) ([]shared.AnnotatedTool, erro
 // Reload reconciles the backend map against the new config, re-surveys all
 // backends via MCP ListTools, and updates the tool cache. Backends removed from
 // config have their sessions closed. New backends are registered. Existing
-// sessions are reused. A backend that fails to list tools is logged and skipped
-// so one broken backend does not prevent the rest from being served.
+// sessions are reused (connection params changes require restart — known gap).
+// ToolMap changes take effect immediately on reload. A backend that fails to
+// list tools is logged and skipped so one broken backend does not prevent the
+// rest from being served. Duplicate aliases across backends are a hard error.
 func (r *Router) Reload(ctx context.Context, backends map[string]BackendConfig) error {
 	r.mu.Lock()
+
 	// Close and remove backends no longer in config.
 	for name, conn := range r.backends {
 		if _, exists := backends[name]; !exists {
@@ -126,29 +147,66 @@ func (r *Router) Reload(ctx context.Context, backends map[string]BackendConfig) 
 			delete(r.backends, name)
 		}
 	}
-	// Register new backends (leave existing sessions intact).
+
+	// Register new backends and update configs for existing ones (so ToolMap
+	// and other non-connection settings take effect without a restart).
 	for name, cfg := range backends {
-		if _, exists := r.backends[name]; !exists {
+		if conn, exists := r.backends[name]; exists {
+			conn.cfg = cfg
+		} else {
 			r.backends[name] = &backendConn{cfg: cfg}
 		}
 	}
+
+	// Validate alias uniqueness across all backends, then build aliasToReal
+	// maps. aliasToReal is the inverse of ToolMap (alias → real backend name).
+	seenAliases := make(map[string]string) // alias → backend that claimed it
+	for name, conn := range r.backends {
+		for realName, alias := range conn.cfg.ToolMap {
+			if claimedBy, dup := seenAliases[alias]; dup {
+				r.mu.Unlock()
+				return fmt.Errorf("tool alias %q is claimed by both backend %q and %q — aliases must be unique across all backends (real names: %q)", alias, claimedBy, name, realName)
+			}
+			seenAliases[alias] = name
+		}
+	}
+	for _, conn := range r.backends {
+		if len(conn.cfg.ToolMap) == 0 {
+			conn.aliasToReal = nil
+		} else {
+			m := make(map[string]string, len(conn.cfg.ToolMap))
+			for realName, alias := range conn.cfg.ToolMap {
+				m[alias] = realName
+			}
+			conn.aliasToReal = m
+		}
+	}
+
+	// Snapshot names and ToolMaps before releasing the lock so the survey loop
+	// below does not need to re-acquire mu.
+	type backendMeta struct{ toolMap map[string]string }
+	meta := make(map[string]backendMeta, len(r.backends))
 	names := make([]string, 0, len(r.backends))
-	for name := range r.backends {
+	for name, conn := range r.backends {
+		meta[name] = backendMeta{toolMap: conn.cfg.ToolMap}
 		names = append(names, name)
 	}
 	r.mu.Unlock()
 
 	// Survey all backends (without holding mu to avoid deadlock with sessionFor).
-	var all []shared.AnnotatedTool
+	var surveys []backendSurvey
 	for _, name := range names {
 		tools, err := r.ListTools(ctx, name)
 		if err != nil {
 			slog.Warn("reload: list tools failed for backend", "backend", name, "error", err)
 			continue
 		}
-		for _, t := range tools {
-			all = append(all, shared.AnnotatedTool{ServerName: name, Tool: t})
-		}
+		surveys = append(surveys, backendSurvey{name: name, toolMap: meta[name].toolMap, tools: tools})
+	}
+
+	all, err := buildToolCache(surveys)
+	if err != nil {
+		return err
 	}
 
 	r.cacheMu.Lock()
@@ -157,6 +215,67 @@ func (r *Router) Reload(ctx context.Context, backends map[string]BackendConfig) 
 
 	slog.Info("tool cache refreshed", "tool_count", len(all), "backend_count", len(names))
 	return nil
+}
+
+// backendSurvey holds the result of a single backend's ListTools call together
+// with its alias map, ready to be merged into the global tool cache.
+type backendSurvey struct {
+	name    string
+	toolMap map[string]string // real name → alias (from BackendConfig.ToolMap)
+	tools   []*mcp.Tool
+}
+
+// buildToolCache merges surveyed tools from all backends into a single list,
+// applying any alias mappings and returning an error if any effective name
+// (alias or real) appears more than once across all backends.
+// This catches alias-vs-alias, alias-vs-unaliased, and unaliased-vs-unaliased
+// collisions that would otherwise silently shadow tools in the agent's view.
+func buildToolCache(surveys []backendSurvey) ([]shared.AnnotatedTool, error) {
+	type effectiveEntry struct {
+		backendName string
+		realName    string // non-empty only when the effective name is an alias
+	}
+	seenEffective := make(map[string]effectiveEntry)
+	var all []shared.AnnotatedTool
+
+	for _, s := range surveys {
+		for _, t := range s.tools {
+			effectiveName := t.Name
+			var realName string
+			if alias, ok := s.toolMap[t.Name]; ok {
+				realName = t.Name
+				effectiveName = alias
+			}
+			if prior, dup := seenEffective[effectiveName]; dup {
+				return nil, fmt.Errorf(
+					"effective tool name %q collides: %s and %s — use tool_map to give one a unique alias",
+					effectiveName,
+					describeToolEntry(prior.backendName, effectiveName, prior.realName),
+					describeToolEntry(s.name, effectiveName, realName),
+				)
+			}
+			seenEffective[effectiveName] = effectiveEntry{backendName: s.name, realName: realName}
+
+			entry := shared.AnnotatedTool{ServerName: s.name, Tool: t}
+			if realName != "" {
+				// Shallow-copy the tool so we do not mutate the SDK-owned value.
+				toolCopy := *t
+				toolCopy.Name = effectiveName
+				entry.Tool = &toolCopy
+			}
+			all = append(all, entry)
+		}
+	}
+	return all, nil
+}
+
+// describeToolEntry returns a human-readable description of how a backend
+// exposes a tool, for use in collision error messages.
+func describeToolEntry(backendName, effectiveName, realName string) string {
+	if realName != "" {
+		return fmt.Sprintf("backend %q exposes it as an alias for %q", backendName, realName)
+	}
+	return fmt.Sprintf("backend %q exposes %q as its real name", backendName, effectiveName)
 }
 
 // sessionFor returns an active MCP client session for the named backend,

@@ -53,6 +53,14 @@ backends:
   enterprise-api:
     type: "http"
     url: "https://mcp-api.internal.example.com/mcp"
+    # tool_map renames backend tools before presenting them to the agent and PDP.
+    # Use this when two backends share a tool name, or to apply a namespace prefix
+    # so tool names are self-describing in policies.
+    # Key is the real name on the backend; value is the alias agents and policies see.
+    # Aliases must be unique across all backends — a duplicate is a startup error.
+    tool_map:
+      query_database: "enterprise_query_database"
+      list_orders:    "enterprise_list_orders"
 
 escalation_request_signing:
   key: "${KEEP_SIGNING_KEY}"   # must match guard's keep.escalation_request_signing_key; use ${ENV_VAR} in production
