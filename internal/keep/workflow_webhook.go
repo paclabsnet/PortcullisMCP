@@ -39,16 +39,16 @@ func newWebhookHandler(cfg WebhookConfig) (*webhookHandler, error) {
 }
 
 // Submit POSTs the escalation payload to the configured webhook URL.
-// The escalationJWT is included so the webhook handler can build approval URLs
+// The pendingJWT is included so the webhook handler can build approval URLs
 // or forward the token to the user via the enterprise's own notification system.
-func (h *webhookHandler) Submit(ctx context.Context, req AuthorizedRequest, escalationJWT string) (string, error) {
+func (h *webhookHandler) Submit(ctx context.Context, req AuthorizedRequest, pendingJWT string) (string, error) {
 	payload := map[string]any{
 		"trace_id":       req.TraceID,
 		"session_id":     req.SessionID,
 		"server":         req.ServerName,
 		"tool":           req.ToolName,
 		"arguments":      req.Arguments,
-		"escalation_jwt": escalationJWT,
+		"pending_jwt":    pendingJWT,
 		"user": map[string]any{
 			"id":          req.Principal.UserID,
 			"display":     req.Principal.DisplayName,

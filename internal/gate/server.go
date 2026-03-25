@@ -477,7 +477,7 @@ func (g *Gate) maybeStorePendingEscalation(ctx context.Context, serverName, tool
 	if g.isProactive() {
 		pushCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
-		if regErr := g.guardClient.RegisterPending(pushCtx, escalationErr.EscalationJTI, escalationErr.EscalationJWT); regErr != nil {
+		if regErr := g.guardClient.RegisterPending(pushCtx, escalationErr.EscalationJTI, escalationErr.PendingJWT); regErr != nil {
 			slog.Error("proactive: failed to register pending escalation with Guard",
 				"jti", escalationErr.EscalationJTI, "error", regErr)
 			return fmt.Errorf("escalation required but Guard is currently unreachable — please try again later")
@@ -523,8 +523,8 @@ func (g *Gate) buildEscalationMessage(e *shared.EscalationPendingError) string {
 	if guardEndpoint != "" {
 		if g.isProactive() && e.EscalationJTI != "" {
 			approvalURL = guardEndpoint + "/approve?jti=" + url.QueryEscape(e.EscalationJTI)
-		} else if e.EscalationJWT != "" {
-			approvalURL = guardEndpoint + "/approve?token=" + url.QueryEscape(e.EscalationJWT)
+		} else if e.PendingJWT != "" {
+			approvalURL = guardEndpoint + "/approve?token=" + url.QueryEscape(e.PendingJWT)
 		}
 	}
 	// Fall back to any reference URL Keep provided directly (e.g. ServiceNow ticket URL).

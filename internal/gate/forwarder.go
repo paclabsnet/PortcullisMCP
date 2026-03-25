@@ -126,14 +126,14 @@ func (f *Forwarder) post(ctx context.Context, path string, body, out any) error 
 			Reason        string `json:"reason"`
 			Reference     string `json:"workflow_reference"`
 			EscalationJTI string `json:"escalation_jti"`
-			EscalationJWT string `json:"escalation_jwt"`
+			PendingJWT    string `json:"pending_jwt"`
 		}
 		_ = json.NewDecoder(resp.Body).Decode(&body)
 		return &shared.EscalationPendingError{
 			Reason:        body.Reason,
 			Reference:     body.Reference,
 			EscalationJTI: body.EscalationJTI,
-			EscalationJWT: body.EscalationJWT,
+			PendingJWT:    body.PendingJWT,
 		}
 	case http.StatusServiceUnavailable:
 		return shared.ErrPDPUnavailable

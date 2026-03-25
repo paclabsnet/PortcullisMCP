@@ -1,0 +1,52 @@
+listen:
+  address: "127.0.0.1:8080"
+  auth:
+    bearer_token: "dev-secret-token"
+
+pdp:
+  #
+  # the demonstration policies that some with this project include a policy
+  #   Note: this policy is found in portcullis/custom/decision, which is called 
+  #         from tabular/decision  when there is no tabular decision that matches
+  #         the [ service / tool / policy ] criteria
+  #
+  # where if one tries to exercise the 'delete_customer' tool of the
+  # mock-enterprise-api server, it will return 'workflow'
+  #
+  # in essence, if you ask your Agent to delete a customer, it will 
+  # simulate going out to a separate workflow system for approval
+  # 
+  type: "opa"
+  endpoint: "http://opa.internal.example.com:8181/v1/data/portcullis/tabular/decision"
+
+identity:
+  normalizer: "passthrough"
+  accept_forged_identities: true  # suppress per-request warnings in local dev
+
+backends:
+  mock-enterprise-api:
+    type: "http"
+    url: "http://localhost:3000/mcp"
+    allow_private_addresses: true
+
+escalation_request_signing:
+  key: "dev-keep-signing-secret"   # must match guard's keep.escalation_request_signing_key
+  ttl: 3600
+
+escalation:
+  workflow:
+    # Webhook workflow: Keep POSTs the escalation to mock-workflow-server, which
+    # sleeps for APPROVAL_DELAY and then deposits the pending_jwt into Guard.
+    # Start mock-workflow-server with:
+    #   GUARD_URL=http://localhost:8444 GUARD_TOKEN=dev-guard-token \
+    #   APPROVAL_DELAY=5s go run ./examples/mock-workflow-server
+    type: "webhook"
+    webhook:
+      url: "http://localhost:8090/webhook"
+
+decision_logs:
+  enabled: true
+  console: true
+  buffer_size: 100
+  flush_interval: 5
+  max_batch_size: 50

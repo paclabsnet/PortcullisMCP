@@ -13,7 +13,7 @@ pdp:
   #   opa  - Open Policy Agent REST API (recommended for production)
   #   noop - allow all requests unconditionally (getting started / local dev only)
   type: "opa"
-  endpoint: "http://opa.internal.example.com:8181/v1/data/portcullis/decision"
+  endpoint: "http://opa.internal.example.com:8181/v1/data/portcullis/tabular/decision"
 
 # Identity enforcement controls how Keep handles the UserIdentity claims sent by Gate.
 identity:

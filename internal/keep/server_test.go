@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -282,7 +283,7 @@ func TestServer_HandleCall_Escalate_NoSignerWithWorkflowRef_Returns202(t *testin
 
 func TestServer_HandleCall_Escalate_IncludesJWT(t *testing.T) {
 	// When a signer is configured, the 202 body must include both escalation_jti
-	// and escalation_jwt so Gate can build the approval URL without relying on the
+	// and pending_jwt so Gate can build the approval URL without relying on the
 	// workflow_reference field.
 	pdp := &mockPDP{decision: "escalate", reason: "requires manager approval"}
 	signer, err := NewEscalationSigner(SigningConfig{Key: "test-signing-key-32bytes!!!!!!!!"})
@@ -314,8 +315,8 @@ func TestServer_HandleCall_Escalate_IncludesJWT(t *testing.T) {
 	if result["escalation_jti"] == "" {
 		t.Error("escalation_jti should be non-empty when signer is configured")
 	}
-	if result["escalation_jwt"] == "" {
-		t.Error("escalation_jwt should be non-empty when signer is configured")
+	if result["pending_jwt"] == "" {
+		t.Error("pending_jwt should be non-empty when signer is configured")
 	}
 }
 
@@ -478,5 +479,116 @@ func TestServer_HandleLog_InvalidJSON(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status code = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+// --- workflow decision tests ---
+
+func TestServer_HandleCall_Workflow_WithHandler_Returns202(t *testing.T) {
+	signer, err := NewEscalationSigner(SigningConfig{Key: "test-signing-key-32bytes!!!!!!!!"})
+	if err != nil {
+		t.Fatalf("NewEscalationSigner: %v", err)
+	}
+	srv := &Server{
+		pdp:         &mockPDP{decision: "workflow", reason: "requires ServiceNow approval"},
+		router:      &mockRouter{},
+		workflow:    &mockWorkflow{requestID: "SNOW-12345"},
+		signer:      signer,
+		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
+		normalizer:  &passthroughNormalizer{silenced: true},
+	}
+
+	body, _ := json.Marshal(shared.EnrichedMCPRequest{ServerName: "s", ToolName: "delete_customer", TraceID: "t1"})
+	req := httptest.NewRequest(http.MethodPost, "/call", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.handleCall(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+	var result map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if result["status"] != "workflow_pending" {
+		t.Errorf("status = %q, want \"workflow_pending\"", result["status"])
+	}
+	if result["workflow_reference"] != "SNOW-12345" {
+		t.Errorf("workflow_reference = %q, want \"SNOW-12345\"", result["workflow_reference"])
+	}
+	if result["escalation_jti"] == "" {
+		t.Error("escalation_jti should be non-empty when signer is configured")
+	}
+	if result["pending_jwt"] == "" {
+		t.Error("pending_jwt should be non-empty when signer is configured")
+	}
+}
+
+func TestServer_HandleCall_Workflow_NoHandler_Returns403(t *testing.T) {
+	// noopWorkflow is what NewWorkflowHandler returns when no type is configured.
+	// A "workflow" decision with no real handler must be treated as a deny.
+	srv := &Server{
+		pdp:         &mockPDP{decision: "workflow", reason: "requires external approval"},
+		router:      &mockRouter{},
+		workflow:    &noopWorkflow{},
+		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
+		normalizer:  &passthroughNormalizer{silenced: true},
+	}
+
+	body, _ := json.Marshal(shared.EnrichedMCPRequest{ServerName: "s", ToolName: "delete_customer", TraceID: "t2"})
+	req := httptest.NewRequest(http.MethodPost, "/call", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.handleCall(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", w.Code)
+	}
+	var result map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if result["error"] == "" {
+		t.Errorf("expected non-empty error message in deny response, got %v", result)
+	}
+}
+
+func TestServer_HandleCall_Workflow_HandlerError_Returns500(t *testing.T) {
+	srv := &Server{
+		pdp:         &mockPDP{decision: "workflow", reason: "requires approval"},
+		router:      &mockRouter{},
+		workflow:    &mockWorkflow{err: fmt.Errorf("servicenow unavailable")},
+		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
+		normalizer:  &passthroughNormalizer{silenced: true},
+	}
+
+	body, _ := json.Marshal(shared.EnrichedMCPRequest{ServerName: "s", ToolName: "delete_customer", TraceID: "t3"})
+	req := httptest.NewRequest(http.MethodPost, "/call", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.handleCall(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", w.Code)
+	}
+}
+
+func TestServer_HandleCall_Workflow_NoSignerNoRef_Returns500(t *testing.T) {
+	// No signer and the workflow handler returns an empty reference — no
+	// approval artifact exists, so Keep must fail rather than return a false-success 202.
+	srv := &Server{
+		pdp:         &mockPDP{decision: "workflow", reason: "requires approval"},
+		router:      &mockRouter{},
+		workflow:    &mockWorkflow{requestID: ""}, // returns empty reference
+		// signer intentionally nil
+		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
+		normalizer:  &passthroughNormalizer{silenced: true},
+	}
+
+	body, _ := json.Marshal(shared.EnrichedMCPRequest{ServerName: "s", ToolName: "delete_customer", TraceID: "t4"})
+	req := httptest.NewRequest(http.MethodPost, "/call", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.handleCall(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 when no pending_jwt and no workflow reference", w.Code)
 	}
 }

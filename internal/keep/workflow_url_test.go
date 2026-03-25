@@ -41,7 +41,7 @@ func TestNewURLWorkflowHandler_Valid(t *testing.T) {
 func TestURLWorkflowHandler_Submit_ReturnsEmpty(t *testing.T) {
 	// Submit now always returns an empty reference regardless of JWT content.
 	// Gate is responsible for building the approval URL from escalation_jti or
-	// escalation_jwt depending on its approval_management_strategy config.
+	// pending_jwt depending on its approval_management_strategy config.
 	h, _ := newURLWorkflowHandler(URLWorkflowConfig{GuardURL: "https://guard.example.com"})
 
 	for _, jwt := range []string{"", "my.jwt.token", "token.payload.sig"} {

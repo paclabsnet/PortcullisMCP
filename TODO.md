@@ -8,20 +8,58 @@
 ### Task: Improve API
 - We need to version Keep's API with Gate, or version the Wrapped MCP Request, or both, so we know what to expect in the contents
 - We need to version the logging API (how Gate sends logs to Keep)
+- priority: high , but only after we've gotten all of the core communications done, no need in versioning our API too early
+
+
+### Task: handle the 'workflow' response from the PDP [DONE]
+- when the PDP returns 'workflow' as a response, Keep must mint the PendingJWT as normal, but invoke the
+  escalation.workflow configuration to process the PendingJWT and invoke an external workflow
+- if no workflow handler is configured or resolvable for the request, Keep should treat this as a deny, with a message
+  indicating that this request could be authorized, but there is no workflow configured to do so.
+
+
+### Task: Implement "Mock Workflow" Loopback for System Workflow Simulation [DONE]
+- **Problem**: Testing "System Workflow" (workflow approvals like ServiceNow) is difficult without a real enterprise installation or a mock workflow tool.
+- **Fix**: Create a "Mock Workflow Handler" that uses the existing Webhook flow to simulate an enterprise approval loop.
+- **Implementation scope**:
+  - `examples/mock-workflow-server/main.go` — A tiny HTTP server that:
+    1. Receives a webhook from Keep containing the `pending_jwt`.
+    2. Logs the request and "sleeps" for a configurable delay (e.g., 5-10 seconds).
+    3. Calls Guard's `POST /token/deposit` with the `pending_jwt` and `user_id`.
+  - Documentation/YAML — Provide a `keep-config.mock-workflow.yaml` that uses the `webhook` handler to point at this mock server.
+- **Benefit**: Allows end-to-end verification of an "Out of Band" Workflow Approval flow (Keep -> Webhook -> Guard -> Gate Polling) without real infrastructure.
+- priority: medium-high
+
+
+#### Proposed Implementation Plan:
+
+  Operation:
+   1. Parse GUARD_URL, GUARD_TOKEN, APPROVAL_DELAY, and PORT from environment.
+   2. Listen: POST /webhook (configured in Keep's keep-config.mock-workflow.yaml).
+   3. Process:
+       * collect the pending_jwt and UserID from the POST
+         * no need to verify that it was signed by Keep, since that would require this 
+           workflow server to know Keep's secret, and Guard will validate the pending JWT anyways
+       * Log the incoming trace_id and UserID
+       * Respond 200 OK immediately to Keep (releasing its connection).
+   4. Asynchronous Step (Goroutine):
+       * Sleep for APPROVAL_DELAY (e.g., 5 seconds).
+       * Deposit: POST to Guard's /token/deposit using:
+           * pending_jwt: (the Keep-signed request JWT).
+           * user_id: (the UserID provided in the original POST)
+             * Portcullis-Guard will validate this UserID against the one in the JWT, so we don't have to do that here
+           * Auth: Includes the Authorization: Bearer <GUARD_TOKEN> header.
+   5. Test Configuration (config/keep-config.mock-workflow.yaml):
+       * Set escalation.workflow.type to webhook.
+       * Set webhook.url to http://localhost:<PORT>/webhook.
 
 
 
 
-### Task: Implement Tool Aliasing (Namespace Management) [DONE]
-- `BackendConfig.ToolMap map[string]string` (InternalName -> Alias) added to `config.go`
-- `Router.Reload()` builds `aliasToReal` per backend, validates no duplicate aliases across backends (hard error), applies aliases to tool names in the cache, and updates existing backend configs so ToolMap changes take effect on reload
-- `Router.CallTool()` un-aliases via `resolveToolName()` before dispatch (after PDP evaluation)
-- Tool cache served to Gate already has aliased names; the PDP always sees the alias
-- Connection-param changes (command, url) on existing backends still require a restart (known gap, noted in code)
 
 
-
-
+### Task: JWT Naming Alignment [DONE]
+  - Renamed `escalation_jwt` → `pending_jwt` (JSON key) and `EscalationJWT` → `PendingJWT` (Go field) everywhere the Keep-signed pending request JWT appears: keep/server.go, keep/workflow_webhook.go, gate/forwarder.go, shared/types.go, and all associated tests. Guard already used `pending_jwt` at /token/deposit. The Guard-issued escalation token (EscalationToken/EscalationTokens) was left untouched.
 
 
 ### Task: Improve Secret Management
@@ -34,21 +72,45 @@
 
 
 
-### Task: Plugabble Logging
+### Task: Pluggable Logging
 - We need Keep to support multiple decision logging strategies
 - perhaps some sort of LogSink interface with multiple destinations?
 - priority: medium
 
 
-
-### Task: System Authority Escalation
-- Enterprises will need both User-authority escalations (user approves in seconds via Guard) and System-authority escalations (ServiceNow/Jira/etc. approves over hours/days)
-- The PDP determines the authority based on risk level, user role, and tool
-- **User authority**: Gate gets `escalation_jti` + `escalation_jwt`, pushes JWT to Guard, stores pending entry by JTI; retry path and 60s poll both apply
-- **System authority**: Gate gets workflow metadata only (reference URL, ticket ID, SLA, etc.), no JTI; presents metadata to agent via configurable message template; no pending entry stored; 60s poll is the only collection path (acceptable given approval latency)
-- When a System workflow approves, it calls Guard's `/token/deposit`; Gate picks up the resulting token on next poll
-- Implementation scope: `shared/types.go` (add `Authority`, `EscalationJWT`, `WorkflowMetadata` to `EscalationPendingError`), `keep/server.go` (add `authority` + `escalation_jwt` to 202 body), `gate/config.go` (add per-authority message templates), `gate/forwarder.go`, `gate/server.go` (split behavior by authority), `gate/guardclient.go` (add `RegisterPending`), `guard/server.go` (add `POST /pending`, change `handleGet` to `?jti=` lookup)
+### Task: set enterprise logging configuration to redact
+- all keys should be redacted
+- some commonly useful keys should be included in the config, but commented out
+- it makes sense to do this at the same time as Pluggable Logging
 - priority: medium
+
+
+### Task: Input sanitizing at Keep and Guard
+- standard good hygiene
+- medium-low priority
+
+
+
+### Task: add http for gate, so it can support multiple agents in parallel
+i.e. instead of running as a stdio MCP, it can run as an autonomous local process.
+- Portcullis-Gate needs to be concurrency-safe
+- priority: medium-low
+
+
+
+
+
+### Task: Routing model for Workflows
+when the PDP generates a 'workflow' response, the important information should be
+sent to the appropriate workflow system to allow for authorization. But it is quite possible
+that in a large organization, different workflow systems will be used to authorize
+different types of requests - for example, by MCP, or even perhaps by Tool.
+
+We need to modify the Keep config to allow different workflow plugins to be invoked
+for different service / tool combos 
+
+- priority: low
+
 
 
 
@@ -57,7 +119,7 @@
 - [x] Token file (Option B) — Gate reads `identity.oidc.token_file`; fails hard (no OS fallback) when source is "oidc" and token is missing or invalid; `~` is now expanded correctly on read
 - [ ] Keychain storage — optional future enhancement
 - [ ] Device authorization grant (RFC 8628) — fallback for when no token file exists; deferred until enterprise adoption confirmed (see Implementation Details below)
-- priority: medium-high
+- priority: low
 
 
 ### Task: Fail closed for Gate if Keep is unavailable
@@ -70,59 +132,16 @@
 - purpose: allows a user to escalate to the enterprise security team if they aren't allowed to do something they think they should be able to
 - low priority
 
+
+
+
+
+
+
+
 ### Task: Optionally create a Gate API to collect the list of DENY responses, along with trace/session information
 - not sure if this is necessary. It might be helpful for troubleshooting
 - very low priority
-
-
-
-
-### Task: When PDP responds with Workflow, it can specify a provider?
-Discuss - right now, the PDP will just respond with 'workflow'.  Which is fine, but what if
-different workflow escalation scenarios demand different workflows? 
-
-We have two options
-- keep configuration defines the workflow per server/tool
-- the PDP defines the workflow per server/tool
-
-The benefit of the PDP doing it is that it's a modification to policy logic and/or data, not to the Keep configuration.  I'm not sure if that's necessarily better or worse, I suppose it can be a configuration
-option
-
-priority: low
-
-
-
-### Task: Input sanitizing at Keep and Guard
-- standard good hygiene
-
-- medium-low priority
-
-
-### Task: set enterprise logging configuration to redact
-- all keys should be redacted
-- some commonly useful keys should be commented out
-
-### Task: add http for gate, so it can support multiple agents in parallel
-i.e. instead of running as a stdio MCP, it can run as an autonomous local process.
-- Portcullis-Gate needs to be concurrency-safe
-
-
-### Task: 'Workflow' response from PDP
-In addition to 'allow', 'deny' and 'escalate', we will add 'workflow' as a viable response from the PDP.
-
-When the PDP responds with 'workflow', this should tell Keep to invoke ServiceNow or some other tool to make the necessary approvals.
-
-Need more research:
-- does Keep send the same JWT to the workflow tool?  Or does it send the key elements of
-  the JSON, and let the workflow tool handle the details? Or is this something that is an 
-  implementation detail of the appropriate workflow provider (YES)
-- it seems more secure to send a JWT, because that way there's evidence that the request
-  was created properly by the system flow.  But on the other hand, this requires the workflow 
-  tool to be able to process and  validate JWTs
-- perhaps this should be configurable?
-
-
-
 
 
 ## Implementation notes
@@ -180,7 +199,6 @@ Why this is major:
 
 Suggested direction:
 - Require auth by default for token APIs, return only metadata from list endpoints, and keep raw token retrieval tightly scoped/authenticated.
-
 
 
 

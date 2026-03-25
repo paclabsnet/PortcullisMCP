@@ -226,14 +226,14 @@ func TestCallTool_EscalationPending(t *testing.T) {
 }
 
 func TestCallTool_EscalationPending_WithJWT(t *testing.T) {
-	// Verify that escalation_jwt is decoded from the 202 body and propagated
+	// Verify that pending_jwt is decoded from the 202 body and propagated
 	// in EscalationPendingError so Gate can build the approval URL.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
 		json.NewEncoder(w).Encode(map[string]string{
 			"reason":         "manager approval required",
 			"escalation_jti": "test-jti-abc",
-			"escalation_jwt": "header.payload.signature",
+			"pending_jwt":    "header.payload.signature",
 		})
 	}))
 	defer srv.Close()
@@ -250,8 +250,8 @@ func TestCallTool_EscalationPending_WithJWT(t *testing.T) {
 	if escErr.EscalationJTI != "test-jti-abc" {
 		t.Errorf("EscalationJTI = %q, want test-jti-abc", escErr.EscalationJTI)
 	}
-	if escErr.EscalationJWT != "header.payload.signature" {
-		t.Errorf("EscalationJWT = %q, want header.payload.signature", escErr.EscalationJWT)
+	if escErr.PendingJWT != "header.payload.signature" {
+		t.Errorf("PendingJWT = %q, want header.payload.signature", escErr.PendingJWT)
 	}
 }
 

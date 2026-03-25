@@ -19,11 +19,11 @@ import (
 )
 
 // WorkflowHandler submits an escalation request to an enterprise workflow system.
-// escalationJWT is a Keep-signed JWT encoding the full escalation context; plugins
+// pendingJWT is a Keep-signed JWT encoding the full escalation context; plugins
 // may embed it in approval URLs, ticket descriptions, or webhook payloads.
 // The returned reference is workflow-specific: an approval URL, ticket ID, etc.
 type WorkflowHandler interface {
-	Submit(ctx context.Context, req AuthorizedRequest, escalationJWT string) (reference string, err error)
+	Submit(ctx context.Context, req AuthorizedRequest, pendingJWT string) (reference string, err error)
 }
 
 // NewWorkflowHandler creates the appropriate WorkflowHandler from config.

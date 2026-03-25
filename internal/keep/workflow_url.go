@@ -35,7 +35,7 @@ func newURLWorkflowHandler(cfg URLWorkflowConfig) (*urlWorkflowHandler, error) {
 }
 
 // Submit returns an empty workflow reference. Gate is now responsible for
-// building the approval URL using the escalation_jti or escalation_jwt fields
+// building the approval URL using the escalation_jti or pending_jwt fields
 // from the 202 response, depending on its approval_management_strategy config.
 // The guard_url is retained in the config for future use (e.g. ServiceNow
 // redirect or display purposes) but is no longer embedded in a query string.

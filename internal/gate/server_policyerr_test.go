@@ -65,7 +65,7 @@ func TestPolicyErrToResult_Escalation_WithGuard(t *testing.T) {
 	e := &shared.EscalationPendingError{
 		Reason:        "needs approval",
 		EscalationJTI: "test-jti",
-		EscalationJWT: "header.payload.sig",
+		PendingJWT: "header.payload.sig",
 	}
 	result, retErr := g.policyErrToResult(e, "test-tool", "req-2")
 	if retErr != nil {
@@ -89,7 +89,7 @@ func TestPolicyErrToResult_Escalation_NoGuard_TreatedAsDeny(t *testing.T) {
 	e := &shared.EscalationPendingError{
 		Reason:        "needs manager approval",
 		EscalationJTI: "test-jti",
-		EscalationJWT: "header.payload.sig",
+		PendingJWT: "header.payload.sig",
 	}
 	result, retErr := g.policyErrToResult(e, "test-tool", "req-3")
 	if retErr != nil {
