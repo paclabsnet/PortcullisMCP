@@ -79,6 +79,14 @@ type DecisionLogBatchConfig struct {
 // without a Guard can still handle accept / deny (and possibly workflow) responses
 // from the PDP. In essence, Guard is what gives a human the ability to escalate the
 // Agents' authorization privileges for a short time
+//
+// to make this explicit: if you do not have a Portcullis-Guard configuration, we
+// do not offer escalation as an option for the Agent.
+//
+// Note: technically, a very knowledgeable user with access to the necessary secrets
+// can still make escalation work manually, but it requires creating a JWT by hand using
+// deep knowledge of the Rego structures and policies, and the capabilities
+// of PortcullisGate's web interface
 type GuardConfig struct {
 	Endpoint                   string `yaml:"endpoint"`                     // e.g. "https://guard.internal.example.com"
 	BearerToken                string `yaml:"bearer_token"`                 // for /token/unclaimed/list, /token/deposit, and /pending
