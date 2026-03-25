@@ -167,8 +167,8 @@ func (c Config) Validate() error {
 	if c.Listen.Address == "" {
 		return fmt.Errorf("listen.address is required")
 	}
-	if c.PDP.Endpoint == "" {
-		return fmt.Errorf("pdp.endpoint is required")
+	if c.PDP.Type != "noop" && c.PDP.Endpoint == "" {
+		return fmt.Errorf("pdp.endpoint is required when pdp.type is not \"noop\"")
 	}
 
 	switch c.Identity.Normalizer {

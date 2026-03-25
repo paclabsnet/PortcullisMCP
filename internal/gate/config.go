@@ -35,8 +35,8 @@ type Config struct {
 }
 
 type KeepConfig struct {
-	Endpoint string     `yaml:"endpoint"`
-	Auth     KeepAuth   `yaml:"auth"`
+	Endpoint string   `yaml:"endpoint"`
+	Auth     KeepAuth `yaml:"auth"`
 }
 
 type KeepAuth struct {
@@ -48,7 +48,7 @@ type KeepAuth struct {
 }
 
 type IdentityConfig struct {
-	Source      string     `yaml:"source"`       // "oidc" | "os"
+	Source      string     `yaml:"source"` // "oidc" | "os"
 	OIDC        OIDCConfig `yaml:"oidc"`
 	UserID      string     `yaml:"user_id"`      // optional: override user ID when source is "os" (for testing)
 	DisplayName string     `yaml:"display_name"` // optional: override display name when source is "os" (for testing)
@@ -74,8 +74,11 @@ type DecisionLogBatchConfig struct {
 }
 
 // GuardConfig holds connection settings for the portcullis-guard token claim API.
-// If Endpoint is empty, the automatic token-claim flow is disabled and users must
-// add escalation tokens manually via the management API.
+// Guard is required to be able to create escalation tokens that can be trusted by
+// the PDP, which is the core of the system. Having said that, a Portcullis system
+// without a Guard can still handle accept / deny (and possibly workflow) responses
+// from the PDP. In essence, Guard is what gives a human the ability to escalate the
+// Agents' authorization privileges for a short time
 type GuardConfig struct {
 	Endpoint                   string `yaml:"endpoint"`                     // e.g. "https://guard.internal.example.com"
 	BearerToken                string `yaml:"bearer_token"`                 // for /token/unclaimed/list, /token/deposit, and /pending

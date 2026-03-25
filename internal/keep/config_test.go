@@ -25,7 +25,7 @@ import (
 func validBaseConfig() Config {
 	return Config{
 		Listen: ListenConfig{Address: "localhost:8080"},
-		PDP:    PDPConfig{Endpoint: "http://opa:8181"},
+		PDP:    PDPConfig{Type: "opa", Endpoint: "http://opa:8181"},
 	}
 }
 
@@ -51,10 +51,18 @@ func TestConfigValidate(t *testing.T) {
 			errContains: "listen.address is required",
 		},
 		{
-			name:        "missing pdp.endpoint",
+			name:        "missing pdp.endpoint when type is opa",
 			mutate:      func(c *Config) { c.PDP.Endpoint = "" },
 			wantErr:     true,
 			errContains: "pdp.endpoint is required",
+		},
+		{
+			name: "noop pdp does not require endpoint",
+			mutate: func(c *Config) {
+				c.PDP.Type = "noop"
+				c.PDP.Endpoint = ""
+			},
+			wantErr: false,
 		},
 
 		// --- identity.normalizer ---
