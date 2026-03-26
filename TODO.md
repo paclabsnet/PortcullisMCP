@@ -3,7 +3,7 @@
 ## Tasks
 
 
-### Task: Improve API
+### Task: Improve Wrapped MCP Request API
 We need to version Keep's API with Gate, or version the Wrapped MCP Request, or both, so we know what to expect in the contents
   -  add a version field to the wrapped MCP request Gate sends to Keep
   -  teach Keep to validate it
