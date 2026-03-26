@@ -5,6 +5,10 @@
 
 ### Task: Improve API
 - We need to version Keep's API with Gate, or version the Wrapped MCP Request, or both, so we know what to expect in the contents
+- priority: high , but only after we've gotten all of the core communications done, no need in versioning our API too early
+
+
+### Task: Add API versioning to the logging API
 - We need to version the logging API (how Gate sends logs to Keep)
 - priority: high , but only after we've gotten all of the core communications done, no need in versioning our API too early
 
