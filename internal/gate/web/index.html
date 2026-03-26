@@ -323,6 +323,7 @@
     if (btn) deleteToken(btn.dataset.id);
   });
 
+  {{if .AllowManualTokens}}
   async function addToken() {
     const btn = document.getElementById('add-btn');
     const msg = document.getElementById('add-msg');
@@ -349,6 +350,7 @@
       btn.disabled = false;
     }
   }
+  {{end}}
 
   async function deleteToken(id) {
     try {
