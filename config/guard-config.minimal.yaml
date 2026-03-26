@@ -2,7 +2,7 @@ listen:
   address: "127.0.0.1:8444"
 
 keep:
-  escalation_request_signing_key: "dev-keep-signing-secret"   # must match keep.signing.key; use ${ENV_VAR} in production
+  pending_escalation_request_signing_key: "dev-keep-signing-secret"   # must match keep.signing.key; use ${ENV_VAR} in production
 
 escalation_token_signing:
   key: "dev-guard-signing-secret"   # PDP must be configured to trust tokens signed with this key; use ${ENV_VAR} in production

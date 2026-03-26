@@ -32,6 +32,7 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
+	"github.com/paclabsnet/PortcullisMCP/internal/shared/secrets"
 	"github.com/paclabsnet/PortcullisMCP/internal/telemetry"
 )
 
@@ -57,9 +58,22 @@ type Server struct {
 	normalizer  IdentityNormalizer
 }
 
+// keepSecretAllowlist lists the config fields eligible for vault:// and other
+// restricted secret URI schemes. envvar:// and filevar:// may be used on any field.
+var keepSecretAllowlist = []string{
+	"listen.auth.bearer_token",
+	"admin.token",
+	"escalation_request_signing.key",
+}
+
 // NewServer creates a Keep server. configPath is retained so the admin reload
 // handler can re-read the file on demand.
-func NewServer(cfg Config, configPath string) (*Server, error) {
+func NewServer(ctx context.Context, cfg Config, configPath string) (*Server, error) {
+	// Resolve secret URIs in one pass over the config struct.
+	if err := secrets.ResolveConfig(ctx, &cfg, keepSecretAllowlist); err != nil {
+		return nil, err
+	}
+
 	var pdp PolicyDecisionPoint
 	switch cfg.PDP.Type {
 	case "noop":

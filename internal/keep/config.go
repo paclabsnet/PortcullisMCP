@@ -21,7 +21,6 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 	telemetrycfg "github.com/paclabsnet/PortcullisMCP/internal/telemetry"
 )
 
@@ -208,7 +207,7 @@ func (c Config) Validate() error {
 	return nil
 }
 
-// LoadConfig reads and parses a keep config file, expanding environment variables.
+// LoadConfig reads and parses a keep config file.
 // It uses strict unmarshaling to ensure that unknown or deprecated fields
 // cause a configuration error at startup.
 func LoadConfig(path string) (Config, error) {
@@ -216,7 +215,6 @@ func LoadConfig(path string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	data = shared.ExpandEnvVarsInYAML(data)
 	var cfg Config
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)

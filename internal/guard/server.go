@@ -29,6 +29,8 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+
+	"github.com/paclabsnet/PortcullisMCP/internal/shared/secrets"
 )
 
 // escalationRequestClaims are the JWT claims Keep embeds in approval URL tokens.
@@ -98,8 +100,21 @@ type Server struct {
 	pendingRequests map[string]pendingRequest
 }
 
+// guardSecretAllowlist lists the config fields eligible for vault:// and other
+// restricted secret URI schemes.
+var guardSecretAllowlist = []string{
+	"auth.bearer_token",
+	"keep.pending_escalation_request_signing_key",
+	"escalation_token_signing.key",
+}
+
 // NewServer creates a Guard server from config.
-func NewServer(cfg Config) (*Server, error) {
+func NewServer(ctx context.Context, cfg Config) (*Server, error) {
+	// Resolve secret URIs in one pass over the config struct.
+	if err := secrets.ResolveConfig(ctx, &cfg, guardSecretAllowlist); err != nil {
+		return nil, err
+	}
+
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -115,7 +130,7 @@ func NewServer(cfg Config) (*Server, error) {
 
 	return &Server{
 		cfg:             cfg,
-		keepKey:         []byte(cfg.Keep.EscalationRequestSigningKey),
+		keepKey:         []byte(cfg.Keep.PendingEscalationRequestSigningKey),
 		signingKey:      []byte(cfg.EscalationTokenSigning.Key),
 		ttl:             ttl,
 		templates:       tmpl,

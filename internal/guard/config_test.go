@@ -19,7 +19,7 @@ import "testing"
 func validGuardConfig() Config {
 	return Config{
 		Listen:                 ListenConfig{Address: ":8444"},
-		Keep:                   KeepConfig{EscalationRequestSigningKey: "keep-key-32bytes!!!!!!!!!!!!!!!"},
+		Keep:                   KeepConfig{PendingEscalationRequestSigningKey: "keep-key-32bytes!!!!!!!!!!!!!!!"},
 		EscalationTokenSigning: SigningConfig{Key: "signing-key-32bytes!!!!!!!!!!!!!"},
 	}
 }
@@ -40,7 +40,7 @@ func TestGuardConfig_Validate_ListenAddressRequired(t *testing.T) {
 
 func TestGuardConfig_Validate_KeepKeyRequired(t *testing.T) {
 	cfg := validGuardConfig()
-	cfg.Keep.EscalationRequestSigningKey = ""
+	cfg.Keep.PendingEscalationRequestSigningKey = ""
 	if err := cfg.Validate(); err == nil {
 		t.Error("expected error when keep.escalation_request_signing_key is empty")
 	}

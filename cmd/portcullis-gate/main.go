@@ -26,7 +26,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/paclabsnet/PortcullisMCP/internal/gate"
-	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 	"github.com/paclabsnet/PortcullisMCP/internal/telemetry"
 	"github.com/paclabsnet/PortcullisMCP/internal/version"
 )
@@ -86,8 +85,6 @@ func loadConfig(path string) (gate.Config, error) {
 	if err != nil {
 		return gate.Config{}, err
 	}
-	// Expand environment variables in the YAML
-	data = shared.ExpandEnvVarsInYAML(data)
 	var cfg gate.Config
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)

@@ -30,7 +30,7 @@ backends:
     allow_private_addresses: true
 
 escalation_request_signing:
-  key: "dev-keep-signing-secret"   # must match guard's keep.escalation_request_signing_key
+  key: "dev-keep-signing-secret"   # must match guard's keep.pending_escalation_request_signing_key
   ttl: 3600
 
 escalation:

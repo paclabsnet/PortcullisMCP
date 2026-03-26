@@ -40,7 +40,7 @@ decision_logs:
 # needing to paste tokens manually via the management API.
 guard:
   endpoint: "https://guard.internal.example.com"
-  bearer_token: "${GUARD_BEARER_TOKEN}"  # must match guard.auth.bearer_token
+  bearer_token: "envvar://GUARD_BEARER_TOKEN"  # must match guard.auth.bearer_token
   poll_interval: 60  # seconds between polls of /token/unclaimed/list (default: 60)
 
   # approval_management_strategy controls how Gate presents the escalation

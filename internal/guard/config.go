@@ -21,8 +21,8 @@ func (c Config) Validate() error {
 	if c.Listen.Address == "" {
 		return fmt.Errorf("listen.address is required")
 	}
-	if c.Keep.EscalationRequestSigningKey == "" {
-		return fmt.Errorf("keep.escalation_request_signing_key is required")
+	if c.Keep.PendingEscalationRequestSigningKey == "" {
+		return fmt.Errorf("keep.pending_escalation_request_signing_key is required")
 	}
 	if c.EscalationTokenSigning.Key == "" {
 		return fmt.Errorf("escalation_token_signing.key is required")
@@ -64,7 +64,7 @@ type ListenConfig struct {
 
 // KeepConfig holds the key Guard uses to verify Keep-signed escalation request JWTs.
 type KeepConfig struct {
-	EscalationRequestSigningKey string `yaml:"escalation_request_signing_key"` // must match keep.signing.key
+	PendingEscalationRequestSigningKey string `yaml:"pending_escalation_request_signing_key"` // must match keep.escalation_request_signing.key
 }
 
 // SigningConfig holds the key Guard uses to sign escalation token JWTs.

@@ -206,6 +206,45 @@ See `docs/policy/opa-examples.md` for detailed policy examples and testing guida
 go test ./...
 ```
 
+## Vault Secret URI Configuration
+
+      The Portcullis Secret URI Specification
+
+      1. General Format
+      vault://[mount]/[path]#[key]
+
+      * vault://: The mandatory scheme identifying the resolver.
+      * [mount]: The name of the Secret Engine (e.g., secret, kv, production).
+      * [path]: The logical path to the secret.
+      * #[key]: The specific field name inside the secret's JSON payload.
+
+      ---
+
+      2. Examples for Vault KV v2 (Standard)
+      If your secret is at path portcullis/signing in the default secret/ mount:
+      * YAML: key: "vault://secret/portcullis/signing#key_value"
+      * Resolution:
+          1. Fetch from Vault: secret/data/portcullis/signing (the data/ is automatically handled by the SDK for KV v2).
+          2. Extract field: key_value.
+
+      3. Handling Special Cases
+      * Multiple Keys: If a secret has multiple keys (e.g., username and password), you use the same path with different anchors:
+
+      1     user: "vault://secret/db#username"
+      2     pass: "vault://secret/db#password"
+      * No Anchor: If the anchor is missing (vault://secret/my-secret), Portcullis will look for a default key named value. If that
+        doesn't exist, it returns an error.
+      * URL Encoding: If your path contains characters like # or ?, they must be URL-encoded (e.g., %23).
+
+      ---
+
+      4. Administrative Prerequisites
+      We must also document that the resolver expects the standard Vault environment variables to be set on the host:
+      * VAULT_ADDR: The URL of the Vault server.
+      * VAULT_TOKEN: The token used for authentication (or handled via Vault Agent).
+      * VAULT_NAMESPACE: (Optional) For Vault Enterprise users.
+
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
