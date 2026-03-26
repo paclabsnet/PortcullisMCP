@@ -15,10 +15,29 @@
 package gate
 
 import (
+	"context"
 	"fmt"
 
+	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
 	telemetrycfg "github.com/paclabsnet/PortcullisMCP/internal/telemetry"
 )
+
+// SecretAllowlist lists the config fields eligible for vault:// and other
+// restricted secret URI schemes. envvar:// and filevar:// may be used on any field.
+var SecretAllowlist = []string{
+	"keep.auth.token",
+	"keep.auth.key",
+	"guard.bearer_token",
+	"management_api.shared_secret",
+}
+
+// LoadConfig reads, parses, resolves secrets in, and validates a gate config file.
+// It uses strict unmarshaling to ensure that unknown or deprecated fields
+// cause a configuration error at startup. ~ in path is expanded to the
+// user home directory.
+func LoadConfig(ctx context.Context, path string) (Config, error) {
+	return cfgloader.Load[Config](ctx, path, SecretAllowlist)
+}
 
 // Config holds the full portcullis-gate configuration loaded from gate.yaml.
 type Config struct {
@@ -53,6 +72,21 @@ type IdentityConfig struct {
 	UserID      string     `yaml:"user_id"`      // optional: override user ID when source is "os" (for testing)
 	DisplayName string     `yaml:"display_name"` // optional: override display name when source is "os" (for testing)
 	Groups      []string   `yaml:"groups"`       // optional: groups to assign when source is "os" (for testing)
+}
+
+// Validate returns an error if the identity config contains invalid values.
+func (c IdentityConfig) Validate() error {
+	switch c.Source {
+	case "", "os":
+		// valid
+	case "oidc":
+		if c.OIDC.TokenFile == "" {
+			return fmt.Errorf("identity.oidc.token_file is required when identity.source is \"oidc\"")
+		}
+	default:
+		return fmt.Errorf("invalid identity.source %q: must be \"oidc\" or \"os\"", c.Source)
+	}
+	return nil
 }
 
 type OIDCConfig struct {
@@ -106,34 +140,29 @@ type GuardConfig struct {
 	ApprovalManagementStrategy string `yaml:"approval_management_strategy"` // "proactive" | "user-driven" (default: "user-driven")
 }
 
+// Validate returns an error if the guard connection config contains invalid values.
+func (c GuardConfig) Validate() error {
+	switch c.ApprovalManagementStrategy {
+	case "", "user-driven", "proactive":
+		// valid
+	default:
+		return fmt.Errorf("invalid approval_management_strategy %q: must be \"user-driven\" or \"proactive\"", c.ApprovalManagementStrategy)
+	}
+	if c.ApprovalManagementStrategy == "proactive" && c.Endpoint == "" {
+		return fmt.Errorf("guard.endpoint is required when approval_management_strategy is \"proactive\"")
+	}
+	return nil
+}
+
 // Validate returns an error if the configuration contains invalid values.
 func (c Config) Validate() error {
 	if c.Keep.Endpoint == "" {
 		return fmt.Errorf("keep.endpoint is required")
 	}
-
-	switch c.Identity.Source {
-	case "", "os":
-		// valid
-	case "oidc":
-		if c.Identity.OIDC.TokenFile == "" {
-			return fmt.Errorf("identity.oidc.token_file is required when identity.source is \"oidc\"")
-		}
-	default:
-		return fmt.Errorf("invalid identity.source %q: must be \"oidc\" or \"os\"", c.Identity.Source)
+	if err := c.Identity.Validate(); err != nil {
+		return err
 	}
-
-	switch c.Guard.ApprovalManagementStrategy {
-	case "", "user-driven", "proactive":
-		// valid
-	default:
-		return fmt.Errorf("invalid approval_management_strategy %q: must be \"user-driven\" or \"proactive\"", c.Guard.ApprovalManagementStrategy)
-	}
-	if c.Guard.ApprovalManagementStrategy == "proactive" && c.Guard.Endpoint == "" {
-		return fmt.Errorf("guard.endpoint is required when approval_management_strategy is \"proactive\"")
-	}
-
-	return nil
+	return c.Guard.Validate()
 }
 
 // AgentConfig holds settings that control how Gate communicates with the MCP agent.

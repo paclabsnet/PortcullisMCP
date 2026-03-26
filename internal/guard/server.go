@@ -30,7 +30,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
-	"github.com/paclabsnet/PortcullisMCP/internal/shared/secrets"
+	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 )
 
 // escalationRequestClaims are the JWT claims Keep embeds in approval URL tokens.
@@ -100,46 +100,11 @@ type Server struct {
 	pendingRequests map[string]pendingRequest
 }
 
-// guardSecretAllowlist lists the config fields eligible for vault:// and other
-// restricted secret URI schemes.
-var guardSecretAllowlist = []string{
-	"auth.bearer_token",
-	"keep.pending_escalation_request_signing_key",
-	"escalation_token_signing.key",
-}
-
 // NewServer creates a Guard server from config.
+// cfg must already have secrets resolved (use LoadConfig, which calls the
+// shared config loader, for file-based startup).
 func NewServer(ctx context.Context, cfg Config) (*Server, error) {
-	// Resolve secret URIs in one pass over the config struct.
-	if err := secrets.ResolveConfig(ctx, &cfg, guardSecretAllowlist); err != nil {
-		return nil, err
-	}
-
-	// Apply defaults for any unset limits.
-	if cfg.Limits.MaxRequestBodyBytes == 0 {
-		cfg.Limits.MaxRequestBodyBytes = 512 << 10
-	}
-	if cfg.Limits.MaxUserIDBytes == 0 {
-		cfg.Limits.MaxUserIDBytes = 512
-	}
-	if cfg.Limits.MaxJTIBytes == 0 {
-		cfg.Limits.MaxJTIBytes = 128
-	}
-	if cfg.Limits.MaxPendingJWTBytes == 0 {
-		cfg.Limits.MaxPendingJWTBytes = 8192
-	}
-	if cfg.Limits.MaxScopeOverrideBytes == 0 {
-		cfg.Limits.MaxScopeOverrideBytes = 16384
-	}
-	if cfg.Limits.MaxPendingRequests == 0 {
-		cfg.Limits.MaxPendingRequests = 10_000
-	}
-	if cfg.Limits.MaxUnclaimedPerUser == 0 {
-		cfg.Limits.MaxUnclaimedPerUser = 10_000
-	}
-	if cfg.Limits.MaxUnclaimedTotal == 0 {
-		cfg.Limits.MaxUnclaimedTotal = 100_000
-	}
+	cfg.Limits.ApplyDefaults()
 
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -359,7 +324,7 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request) {
 
 	scope := claims.EscalationScope
 	if overrideStr := r.FormValue("scope_override"); overrideStr != "" {
-		if err := checkLen(overrideStr, "scope_override", s.cfg.Limits.MaxScopeOverrideBytes); err != nil {
+		if err := shared.CheckLen(overrideStr, "scope_override", s.cfg.Limits.MaxScopeOverrideBytes); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -446,17 +411,12 @@ func (s *Server) handlePending(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for _, chk := range []struct {
-		v, name string
-		max     int
-	}{
+	if err := shared.CheckFields([]shared.FieldCheck{
 		{body.JTI, "jti", s.cfg.Limits.MaxJTIBytes},
 		{body.JWT, "jwt", s.cfg.Limits.MaxPendingJWTBytes},
-	} {
-		if err := checkLen(chk.v, chk.name, chk.max); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
+	}); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	// Validate the JWT signature to prevent rogue Gate instances from
@@ -671,17 +631,12 @@ func (s *Server) handleTokenDeposit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for _, chk := range []struct {
-		v, name string
-		max     int
-	}{
+	if err := shared.CheckFields([]shared.FieldCheck{
 		{body.UserID, "user_id", s.cfg.Limits.MaxUserIDBytes},
 		{body.PendingJWT, "pending_jwt", s.cfg.Limits.MaxPendingJWTBytes},
-	} {
-		if err := checkLen(chk.v, chk.name, chk.max); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
+	}); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	claims, err := s.verifyRequest(body.PendingJWT)
@@ -776,7 +731,7 @@ func (s *Server) handleTokenClaim(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := checkLen(body.JTI, "jti", s.cfg.Limits.MaxJTIBytes); err != nil {
+	if err := shared.CheckLen(body.JTI, "jti", s.cfg.Limits.MaxJTIBytes); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -812,14 +767,6 @@ func (s *Server) handleTokenClaim(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// checkLen returns an error if value exceeds max bytes, or nil if ok.
-// When max is 0 the check is skipped (no limit configured).
-func checkLen(value, fieldName string, max int) error {
-	if max > 0 && len(value) > max {
-		return fmt.Errorf("%s exceeds maximum length of %d bytes", fieldName, max)
-	}
-	return nil
-}
 
 // ---- template data types ---------------------------------------------------
 
