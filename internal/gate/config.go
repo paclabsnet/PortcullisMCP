@@ -98,8 +98,9 @@ type SandboxConfig struct {
 }
 
 type MgmtAPIConfig struct {
-	Port         int    `yaml:"port"`
-	SharedSecret string `yaml:"shared_secret"` // optional; empty = no auth
+	Port              int    `yaml:"port"`
+	SharedSecret      string `yaml:"shared_secret"`       // optional; empty = no auth
+	AllowManualTokens bool   `yaml:"allow_manual_tokens"` // default false; set true to allow POST /tokens from the UI
 }
 
 type DecisionLogBatchConfig struct {

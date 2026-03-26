@@ -22,6 +22,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -64,7 +65,7 @@ func TestManagementServer_ListTokens_Empty(t *testing.T) {
 }
 
 func TestManagementServer_AddAndListToken(t *testing.T) {
-	ms := newTestManagementServer(t, MgmtAPIConfig{})
+	ms := newTestManagementServer(t, MgmtAPIConfig{AllowManualTokens: true})
 
 	raw := makeTestJWT(map[string]any{"jti": "api-tok", "exp": futureExp(), "granted_by": "boss@corp.com"})
 	body, _ := json.Marshal(map[string]string{"token": raw})
@@ -103,7 +104,7 @@ func TestManagementServer_AddAndListToken(t *testing.T) {
 }
 
 func TestManagementServer_AddToken_InvalidBody(t *testing.T) {
-	ms := newTestManagementServer(t, MgmtAPIConfig{})
+	ms := newTestManagementServer(t, MgmtAPIConfig{AllowManualTokens: true})
 
 	req := httptest.NewRequest(http.MethodPost, "/tokens", bytes.NewReader([]byte("not-json")))
 	w := httptest.NewRecorder()
@@ -115,7 +116,7 @@ func TestManagementServer_AddToken_InvalidBody(t *testing.T) {
 }
 
 func TestManagementServer_AddToken_InvalidToken(t *testing.T) {
-	ms := newTestManagementServer(t, MgmtAPIConfig{})
+	ms := newTestManagementServer(t, MgmtAPIConfig{AllowManualTokens: true})
 
 	body, _ := json.Marshal(map[string]string{"token": "not.a.jwt"})
 	req := httptest.NewRequest(http.MethodPost, "/tokens", bytes.NewReader(body))
@@ -129,7 +130,7 @@ func TestManagementServer_AddToken_InvalidToken(t *testing.T) {
 }
 
 func TestManagementServer_DeleteToken(t *testing.T) {
-	ms := newTestManagementServer(t, MgmtAPIConfig{})
+	ms := newTestManagementServer(t, MgmtAPIConfig{AllowManualTokens: true})
 
 	// Add a token first.
 	raw := makeTestJWT(map[string]any{"jti": "del-api", "exp": futureExp()})
@@ -309,5 +310,55 @@ func TestManagementServer_UIAlwaysAccessible(t *testing.T) {
 	}
 	if w.Code != http.StatusOK {
 		t.Errorf("UI status = %d, want %d", w.Code, http.StatusOK)
+	}
+}
+
+func TestManagementServer_AddToken_ManualPostingDisabled(t *testing.T) {
+	ms := newTestManagementServer(t, MgmtAPIConfig{}) // AllowManualTokens defaults to false
+
+	raw := makeTestJWT(map[string]any{"jti": "tok-1", "exp": futureExp()})
+	body, _ := json.Marshal(map[string]string{"token": raw})
+	req := httptest.NewRequest(http.MethodPost, "/tokens", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	ms.server.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want %d (manual posting disabled)", w.Code, http.StatusForbidden)
+	}
+}
+
+func TestManagementServer_UI_HidesManualTokenSection(t *testing.T) {
+	ms := newTestManagementServer(t, MgmtAPIConfig{}) // AllowManualTokens: false
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	w := httptest.NewRecorder()
+	ms.server.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("UI status = %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	if strings.Contains(body, "Add Escalation Token") {
+		t.Error("UI should not show 'Add Escalation Token' section when AllowManualTokens is false")
+	}
+}
+
+func TestManagementServer_UI_ShowsManualTokenSection(t *testing.T) {
+	ms := newTestManagementServer(t, MgmtAPIConfig{AllowManualTokens: true})
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	w := httptest.NewRecorder()
+	ms.server.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("UI status = %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "Add Escalation Token") {
+		t.Error("UI should show 'Add Escalation Token' section when AllowManualTokens is true")
+	}
+	if !strings.Contains(body, "jwt-input") {
+		t.Error("UI should include the jwt-input textarea when AllowManualTokens is true")
 	}
 }
