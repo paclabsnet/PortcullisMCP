@@ -14,11 +14,22 @@ templates:
 portcullis_gate_management_port: 7777   # gate management API port, shown in post-approval instructions
 
 # Authentication for the /token/unclaimed/list and /token/deposit endpoints.
-# If bearer_token is empty, these endpoints are open (development only).
+# bearer_token is required unless allow_unauthenticated_token_apis is explicitly set to true (development only).
 auth:
   bearer_token: "envvar://GUARD_BEARER_TOKEN"
+  allow_unauthenticated_token_apis: false
 
 # Unclaimed token store settings.
 token_store:
   ttl: 3600              # default token lifetime in seconds when expiry cannot be parsed (default: 3600)
   cleanup_interval: 300  # how often to prune expired tokens in seconds (default: 300)
+
+# limits:
+#   max_request_body_bytes: 524288
+#   max_user_id_bytes: 512
+#   max_jti_bytes: 128
+#   max_pending_jwt_bytes: 8192
+#   max_scope_override_bytes: 16384
+#   max_pending_requests: 10000
+#   max_unclaimed_per_user: 10000
+#   max_unclaimed_total: 100000

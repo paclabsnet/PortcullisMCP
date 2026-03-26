@@ -14,13 +14,17 @@
 
 package guard
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func validGuardConfig() Config {
 	return Config{
 		Listen:                 ListenConfig{Address: ":8444"},
 		Keep:                   KeepConfig{PendingEscalationRequestSigningKey: "keep-key-32bytes!!!!!!!!!!!!!!!"},
 		EscalationTokenSigning: SigningConfig{Key: "signing-key-32bytes!!!!!!!!!!!!!"},
+		Auth:                   AuthConfig{BearerToken: "test-token"},
 	}
 }
 
@@ -51,5 +55,25 @@ func TestGuardConfig_Validate_SigningKeyRequired(t *testing.T) {
 	cfg.EscalationTokenSigning.Key = ""
 	if err := cfg.Validate(); err == nil {
 		t.Error("expected error when escalation_token_signing.key is empty")
+	}
+}
+
+func TestGuardConfig_Validate_NoAuthToken_NoFlag_Error(t *testing.T) {
+	cfg := validGuardConfig()
+	cfg.Auth = AuthConfig{} // no bearer token, no flag
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error when bearer_token is empty and allow_unauthenticated_token_apis is false")
+	}
+	if !strings.Contains(err.Error(), "bearer_token") {
+		t.Errorf("error should mention bearer_token; got: %v", err)
+	}
+}
+
+func TestGuardConfig_Validate_NoAuthToken_WithFlag_OK(t *testing.T) {
+	cfg := validGuardConfig()
+	cfg.Auth = AuthConfig{AllowUnauthenticatedTokenAPIs: true}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("expected no error when allow_unauthenticated_token_apis is true; got: %v", err)
 	}
 }

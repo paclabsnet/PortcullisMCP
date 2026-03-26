@@ -24,6 +24,19 @@ import (
 	telemetrycfg "github.com/paclabsnet/PortcullisMCP/internal/telemetry"
 )
 
+// LimitsConfig controls request body and field length limits for Keep.
+// Zero values are replaced with defaults at server startup.
+type LimitsConfig struct {
+	MaxRequestBodyBytes int `yaml:"max_request_body_bytes"` // default: 1048576 (1 MB)
+	MaxServerNameBytes  int `yaml:"max_server_name_bytes"`  // default: 256
+	MaxToolNameBytes    int `yaml:"max_tool_name_bytes"`    // default: 256
+	MaxUserIDBytes      int `yaml:"max_user_id_bytes"`      // default: 512
+	MaxTraceIDBytes     int `yaml:"max_trace_id_bytes"`     // default: 128
+	MaxSessionIDBytes   int `yaml:"max_session_id_bytes"`   // default: 128
+	MaxReasonBytes      int `yaml:"max_reason_bytes"`       // default: 4096
+	MaxLogBatchSize     int `yaml:"max_log_batch_size"`     // default: 1000
+}
+
 // Config holds the full portcullis-keep configuration loaded from keep.yaml.
 type Config struct {
 	Listen                   ListenConfig             `yaml:"listen"`
@@ -35,6 +48,7 @@ type Config struct {
 	Admin                    AdminConfig              `yaml:"admin"`
 	Identity                 IdentityConfig           `yaml:"identity"`
 	Telemetry                telemetrycfg.Config      `yaml:"telemetry"`
+	Limits                   LimitsConfig             `yaml:"limits"`
 }
 
 // IdentityConfig controls how Keep normalizes UserIdentity claims received from Gate.

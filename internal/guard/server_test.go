@@ -43,6 +43,7 @@ func makeServer(t *testing.T) *Server {
 		Keep:                   KeepConfig{PendingEscalationRequestSigningKey: testKeepKey},
 		EscalationTokenSigning: SigningConfig{Key: testSigningKey, TTL: 3600},
 		Templates:              TemplatesConfig{Dir: "templates"},
+		Auth:                   AuthConfig{AllowUnauthenticatedTokenAPIs: true},
 	})
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
@@ -139,6 +140,7 @@ func TestNewServer_DefaultTTL(t *testing.T) {
 		Keep:                   KeepConfig{PendingEscalationRequestSigningKey: testKeepKey},
 		EscalationTokenSigning: SigningConfig{Key: testSigningKey, TTL: 0},
 		Templates:              TemplatesConfig{Dir: dir},
+		Auth:                   AuthConfig{AllowUnauthenticatedTokenAPIs: true},
 	})
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
@@ -157,6 +159,7 @@ func TestNewServer_CustomTTL(t *testing.T) {
 		Keep:                   KeepConfig{PendingEscalationRequestSigningKey: testKeepKey},
 		EscalationTokenSigning: SigningConfig{Key: testSigningKey, TTL: 7200},
 		Templates:              TemplatesConfig{Dir: dir},
+		Auth:                   AuthConfig{AllowUnauthenticatedTokenAPIs: true},
 	})
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
@@ -360,6 +363,7 @@ func TestIssueEscalationToken_TTL(t *testing.T) {
 		Keep:                   KeepConfig{PendingEscalationRequestSigningKey: testKeepKey},
 		EscalationTokenSigning: SigningConfig{Key: testSigningKey, TTL: 7200},
 		Templates:              TemplatesConfig{Dir: dir},
+		Auth:                   AuthConfig{AllowUnauthenticatedTokenAPIs: true},
 	})
 
 	_, expiry, err := s.issueEscalationToken(&escalationRequestClaims{UserID: "u"}, "", nil)
@@ -575,6 +579,7 @@ func TestHandlePost_GatePortDefault(t *testing.T) {
 		EscalationTokenSigning:       SigningConfig{Key: testSigningKey, TTL: 60},
 		Templates:                    TemplatesConfig{Dir: dir},
 		PortcullisGateManagementPort: 0,
+		Auth:                         AuthConfig{AllowUnauthenticatedTokenAPIs: true},
 	})
 
 	tokenStr := signKeepJWT(t, escalationRequestClaims{
@@ -606,6 +611,7 @@ func TestHandlePost_GatePortCustom(t *testing.T) {
 		EscalationTokenSigning:       SigningConfig{Key: testSigningKey, TTL: 60},
 		Templates:                    TemplatesConfig{Dir: dir},
 		PortcullisGateManagementPort: 9999,
+		Auth:                         AuthConfig{AllowUnauthenticatedTokenAPIs: true},
 	})
 
 	tokenStr := signKeepJWT(t, escalationRequestClaims{

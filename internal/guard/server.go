@@ -37,11 +37,11 @@ import (
 // These must match the claims Keep writes in internal/keep/escalation.go.
 type escalationRequestClaims struct {
 	jwt.RegisteredClaims
-	UserID          string         `json:"uid"`
-	UserDisplayName string         `json:"uname,omitempty"`
-	Server          string         `json:"srv"`
-	Tool            string         `json:"tool"`
-	Reason          string         `json:"reason"`
+	UserID          string           `json:"uid"`
+	UserDisplayName string           `json:"uname,omitempty"`
+	Server          string           `json:"srv"`
+	Tool            string           `json:"tool"`
+	Reason          string           `json:"reason"`
 	EscalationScope []map[string]any `json:"scope,omitempty"`
 }
 
@@ -115,9 +115,42 @@ func NewServer(ctx context.Context, cfg Config) (*Server, error) {
 		return nil, err
 	}
 
+	// Apply defaults for any unset limits.
+	if cfg.Limits.MaxRequestBodyBytes == 0 {
+		cfg.Limits.MaxRequestBodyBytes = 512 << 10
+	}
+	if cfg.Limits.MaxUserIDBytes == 0 {
+		cfg.Limits.MaxUserIDBytes = 512
+	}
+	if cfg.Limits.MaxJTIBytes == 0 {
+		cfg.Limits.MaxJTIBytes = 128
+	}
+	if cfg.Limits.MaxPendingJWTBytes == 0 {
+		cfg.Limits.MaxPendingJWTBytes = 8192
+	}
+	if cfg.Limits.MaxScopeOverrideBytes == 0 {
+		cfg.Limits.MaxScopeOverrideBytes = 16384
+	}
+	if cfg.Limits.MaxPendingRequests == 0 {
+		cfg.Limits.MaxPendingRequests = 10_000
+	}
+	if cfg.Limits.MaxUnclaimedPerUser == 0 {
+		cfg.Limits.MaxUnclaimedPerUser = 10_000
+	}
+	if cfg.Limits.MaxUnclaimedTotal == 0 {
+		cfg.Limits.MaxUnclaimedTotal = 100_000
+	}
+
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+
+	// Emit a startup warning when token APIs are explicitly left open for development.
+	if cfg.Auth.BearerToken == "" && cfg.Auth.AllowUnauthenticatedTokenAPIs {
+		slog.Warn("Guard token APIs are running without authentication — do not use in production",
+			"affected_endpoints", []string{"/token/unclaimed/list", "/token/deposit", "/pending"})
+	}
+
 	ttl := time.Duration(cfg.EscalationTokenSigning.TTL) * time.Second
 	if ttl == 0 {
 		ttl = 24 * time.Hour
@@ -304,6 +337,10 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 
 // handlePost processes the user's approval and issues an escalation token.
 func (s *Server) handlePost(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Limits.MaxRequestBodyBytes > 0 {
+		r.Body = http.MaxBytesReader(w, r.Body, int64(s.cfg.Limits.MaxRequestBodyBytes))
+	}
+
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "invalid form", http.StatusBadRequest)
 		return
@@ -322,6 +359,10 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request) {
 
 	scope := claims.EscalationScope
 	if overrideStr := r.FormValue("scope_override"); overrideStr != "" {
+		if err := checkLen(overrideStr, "scope_override", s.cfg.Limits.MaxScopeOverrideBytes); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		var overrideScope []map[string]any
 		if err := json.Unmarshal([]byte(overrideStr), &overrideScope); err != nil {
 			http.Error(w, "invalid scope JSON in override", http.StatusBadRequest)
@@ -388,6 +429,10 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request) {
 // POST /pending  body: {"jti": "...", "jwt": "..."}
 // Requires bearer auth.
 func (s *Server) handlePending(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Limits.MaxRequestBodyBytes > 0 {
+		r.Body = http.MaxBytesReader(w, r.Body, int64(s.cfg.Limits.MaxRequestBodyBytes))
+	}
+
 	var body struct {
 		JTI string `json:"jti"`
 		JWT string `json:"jwt"`
@@ -399,6 +444,19 @@ func (s *Server) handlePending(w http.ResponseWriter, r *http.Request) {
 	if body.JTI == "" || body.JWT == "" {
 		http.Error(w, "jti and jwt are required", http.StatusBadRequest)
 		return
+	}
+
+	for _, chk := range []struct {
+		v, name string
+		max     int
+	}{
+		{body.JTI, "jti", s.cfg.Limits.MaxJTIBytes},
+		{body.JWT, "jwt", s.cfg.Limits.MaxPendingJWTBytes},
+	} {
+		if err := checkLen(chk.v, chk.name, chk.max); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 	}
 
 	// Validate the JWT signature to prevent rogue Gate instances from
@@ -424,7 +482,14 @@ func (s *Server) handlePending(w http.ResponseWriter, r *http.Request) {
 		expiry = claims.ExpiresAt.Time
 	}
 
+	// Cap applies to in-memory storage only; replace with cache-side enforcement when switching to distributed token store.
 	s.pendingMu.Lock()
+	if s.cfg.Limits.MaxPendingRequests > 0 && len(s.pendingRequests) >= s.cfg.Limits.MaxPendingRequests {
+		s.pendingMu.Unlock()
+		slog.ErrorContext(r.Context(), "pending requests at capacity", "limit", s.cfg.Limits.MaxPendingRequests)
+		http.Error(w, "server at capacity", http.StatusServiceUnavailable)
+		return
+	}
 	s.pendingRequests[body.JTI] = pendingRequest{
 		JTI:       body.JTI,
 		JWT:       body.JWT,
@@ -532,12 +597,15 @@ func (s *Server) handleReadyz(w http.ResponseWriter, _ *http.Request) {
 }
 
 // requireTokenAuth is middleware that requires a valid bearer token for the
-// /token/unclaimed/list and /token/deposit endpoints.
+// /token/unclaimed/list, /token/deposit, and /pending endpoints.
 func (s *Server) requireTokenAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.cfg.Auth.BearerToken == "" {
-			// No token configured — allow all (development / open deployments).
-			next(w, r)
+			if s.cfg.Auth.AllowUnauthenticatedTokenAPIs {
+				next(w, r)
+				return
+			}
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 		auth := r.Header.Get("Authorization")
@@ -564,14 +632,16 @@ func (s *Server) handleTokenUnclaimedList(w http.ResponseWriter, r *http.Request
 	s.unclaimedMu.Lock()
 	userTokens := s.unclaimedTokens[userID]
 	result := make([]struct {
-		JTI string `json:"jti"`
-		Raw string `json:"raw"`
+		JTI       string    `json:"jti"`
+		Raw       string    `json:"raw"`
+		ExpiresAt time.Time `json:"expires_at"`
 	}, 0, len(userTokens))
 	for _, tok := range userTokens {
 		result = append(result, struct {
-			JTI string `json:"jti"`
-			Raw string `json:"raw"`
-		}{JTI: tok.JTI, Raw: tok.Raw})
+			JTI       string    `json:"jti"`
+			Raw       string    `json:"raw"`
+			ExpiresAt time.Time `json:"expires_at"`
+		}{JTI: tok.JTI, Raw: tok.Raw, ExpiresAt: tok.ExpiresAt})
 	}
 	s.unclaimedMu.Unlock()
 
@@ -584,6 +654,10 @@ func (s *Server) handleTokenUnclaimedList(w http.ResponseWriter, r *http.Request
 // token, and adds it to the unclaimed list for Gate to collect via polling.
 // POST /token/deposit  body: {"pending_jwt": "...", "user_id": "..."}
 func (s *Server) handleTokenDeposit(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Limits.MaxRequestBodyBytes > 0 {
+		r.Body = http.MaxBytesReader(w, r.Body, int64(s.cfg.Limits.MaxRequestBodyBytes))
+	}
+
 	var body struct {
 		PendingJWT string `json:"pending_jwt"`
 		UserID     string `json:"user_id"`
@@ -595,6 +669,19 @@ func (s *Server) handleTokenDeposit(w http.ResponseWriter, r *http.Request) {
 	if body.PendingJWT == "" || body.UserID == "" {
 		http.Error(w, "pending_jwt and user_id are required", http.StatusBadRequest)
 		return
+	}
+
+	for _, chk := range []struct {
+		v, name string
+		max     int
+	}{
+		{body.UserID, "user_id", s.cfg.Limits.MaxUserIDBytes},
+		{body.PendingJWT, "pending_jwt", s.cfg.Limits.MaxPendingJWTBytes},
+	} {
+		if err := checkLen(chk.v, chk.name, chk.max); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 	}
 
 	claims, err := s.verifyRequest(body.PendingJWT)
@@ -618,7 +705,38 @@ func (s *Server) handleTokenDeposit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.addUnclaimed(claims.UserID, claims.ID, escalationToken, expiry)
+	userID := claims.UserID
+
+	// Cap applies to in-memory storage only; replace with cache-side enforcement when switching to distributed token store.
+	s.unclaimedMu.Lock()
+	if s.cfg.Limits.MaxUnclaimedPerUser > 0 && len(s.unclaimedTokens[userID]) >= s.cfg.Limits.MaxUnclaimedPerUser {
+		s.unclaimedMu.Unlock()
+		slog.ErrorContext(r.Context(), "unclaimed tokens at per-user capacity", "user_id", userID, "limit", s.cfg.Limits.MaxUnclaimedPerUser)
+		http.Error(w, "server at capacity", http.StatusServiceUnavailable)
+		return
+	}
+	if s.cfg.Limits.MaxUnclaimedTotal > 0 {
+		total := 0
+		for _, m := range s.unclaimedTokens {
+			total += len(m)
+		}
+		if total >= s.cfg.Limits.MaxUnclaimedTotal {
+			s.unclaimedMu.Unlock()
+			slog.ErrorContext(r.Context(), "unclaimed tokens at total capacity", "limit", s.cfg.Limits.MaxUnclaimedTotal)
+			http.Error(w, "server at capacity", http.StatusServiceUnavailable)
+			return
+		}
+	}
+	if s.unclaimedTokens[userID] == nil {
+		s.unclaimedTokens[userID] = make(map[string]unclaimedToken)
+	}
+	s.unclaimedTokens[userID][claims.ID] = unclaimedToken{
+		UserID:    userID,
+		JTI:       claims.ID,
+		Raw:       escalationToken,
+		ExpiresAt: expiry,
+	}
+	s.unclaimedMu.Unlock()
 
 	slog.Info("escalation token deposited via workflow",
 		"user_id", claims.UserID,
@@ -642,6 +760,10 @@ func (s *Server) handleTokenDeposit(w http.ResponseWriter, r *http.Request) {
 // approved, already claimed, or expired). Each token may only be claimed once.
 // POST /token/claim  body: {"jti": "..."}
 func (s *Server) handleTokenClaim(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Limits.MaxRequestBodyBytes > 0 {
+		r.Body = http.MaxBytesReader(w, r.Body, int64(s.cfg.Limits.MaxRequestBodyBytes))
+	}
+
 	var body struct {
 		JTI string `json:"jti"`
 	}
@@ -651,6 +773,11 @@ func (s *Server) handleTokenClaim(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.JTI == "" {
 		http.Error(w, "jti is required", http.StatusBadRequest)
+		return
+	}
+
+	if err := checkLen(body.JTI, "jti", s.cfg.Limits.MaxJTIBytes); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -674,12 +801,24 @@ func (s *Server) handleTokenClaim(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("escalation token claimed",
-		"jti", body.JTI, "user_id", found.UserID)
+		"jti", body.JTI,
+		"user_id", found.UserID,
+		"remote_addr", r.RemoteAddr,
+	)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{
 		"raw": found.Raw,
 	})
+}
+
+// checkLen returns an error if value exceeds max bytes, or nil if ok.
+// When max is 0 the check is skipped (no limit configured).
+func checkLen(value, fieldName string, max int) error {
+	if max > 0 && len(value) > max {
+		return fmt.Errorf("%s exceeds maximum length of %d bytes", fieldName, max)
+	}
+	return nil
 }
 
 // ---- template data types ---------------------------------------------------

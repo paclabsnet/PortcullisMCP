@@ -74,6 +74,32 @@ func NewServer(ctx context.Context, cfg Config, configPath string) (*Server, err
 		return nil, err
 	}
 
+	// Apply defaults for any unset limits.
+	if cfg.Limits.MaxRequestBodyBytes == 0 {
+		cfg.Limits.MaxRequestBodyBytes = 1 << 20
+	}
+	if cfg.Limits.MaxServerNameBytes == 0 {
+		cfg.Limits.MaxServerNameBytes = 256
+	}
+	if cfg.Limits.MaxToolNameBytes == 0 {
+		cfg.Limits.MaxToolNameBytes = 256
+	}
+	if cfg.Limits.MaxUserIDBytes == 0 {
+		cfg.Limits.MaxUserIDBytes = 512
+	}
+	if cfg.Limits.MaxTraceIDBytes == 0 {
+		cfg.Limits.MaxTraceIDBytes = 128
+	}
+	if cfg.Limits.MaxSessionIDBytes == 0 {
+		cfg.Limits.MaxSessionIDBytes = 128
+	}
+	if cfg.Limits.MaxReasonBytes == 0 {
+		cfg.Limits.MaxReasonBytes = 4096
+	}
+	if cfg.Limits.MaxLogBatchSize == 0 {
+		cfg.Limits.MaxLogBatchSize = 1000
+	}
+
 	var pdp PolicyDecisionPoint
 	switch cfg.PDP.Type {
 	case "noop":
@@ -166,6 +192,10 @@ func (s *Server) Run(ctx context.Context) error {
 
 // handleCall processes an enriched MCP tool call request from gate.
 func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Limits.MaxRequestBodyBytes > 0 {
+		r.Body = http.MaxBytesReader(w, r.Body, int64(s.cfg.Limits.MaxRequestBodyBytes))
+	}
+
 	// Extract trace context propagated by Gate and create a child span.
 	ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
 	ctx, span := otel.Tracer("portcullis-keep").Start(ctx, "keep.evaluate")
@@ -175,6 +205,21 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&rawReq); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
+	}
+
+	for _, chk := range []struct {
+		v, name string
+		max     int
+	}{
+		{rawReq.ServerName, "server_name", s.cfg.Limits.MaxServerNameBytes},
+		{rawReq.ToolName, "tool_name", s.cfg.Limits.MaxToolNameBytes},
+		{rawReq.TraceID, "trace_id", s.cfg.Limits.MaxTraceIDBytes},
+		{rawReq.SessionID, "session_id", s.cfg.Limits.MaxSessionIDBytes},
+	} {
+		if err := checkLen(chk.v, chk.name, chk.max); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 
 	traceID := telemetry.TraceIDFromContext(ctx)
@@ -359,6 +404,10 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 // decision without executing the tool. Gate uses this for local filesystem ops:
 // it asks Keep "is this allowed?" and, if so, executes the tool locally itself.
 func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Limits.MaxRequestBodyBytes > 0 {
+		r.Body = http.MaxBytesReader(w, r.Body, int64(s.cfg.Limits.MaxRequestBodyBytes))
+	}
+
 	ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
 	ctx, span := otel.Tracer("portcullis-keep").Start(ctx, "keep.authorize")
 	defer span.End()
@@ -367,6 +416,21 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&rawReq); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
+	}
+
+	for _, chk := range []struct {
+		v, name string
+		max     int
+	}{
+		{rawReq.ServerName, "server_name", s.cfg.Limits.MaxServerNameBytes},
+		{rawReq.ToolName, "tool_name", s.cfg.Limits.MaxToolNameBytes},
+		{rawReq.TraceID, "trace_id", s.cfg.Limits.MaxTraceIDBytes},
+		{rawReq.SessionID, "session_id", s.cfg.Limits.MaxSessionIDBytes},
+	} {
+		if err := checkLen(chk.v, chk.name, chk.max); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 
 	traceID := telemetry.TraceIDFromContext(ctx)
@@ -552,13 +616,57 @@ func (s *Server) handleListTools(w http.ResponseWriter, r *http.Request) {
 // handleLog receives decision log entries from portcullis-gate instances
 // for fast-path decisions and queues them for batched forwarding.
 func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Limits.MaxRequestBodyBytes > 0 {
+		r.Body = http.MaxBytesReader(w, r.Body, int64(s.cfg.Limits.MaxRequestBodyBytes))
+	}
+
 	var entries []DecisionLogEntry
 	if err := json.NewDecoder(r.Body).Decode(&entries); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
-	// Queue all entries to the decision logger
+	if s.cfg.Limits.MaxLogBatchSize > 0 && len(entries) > s.cfg.Limits.MaxLogBatchSize {
+		writeError(w, http.StatusBadRequest,
+			fmt.Sprintf("log batch exceeds maximum of %d entries", s.cfg.Limits.MaxLogBatchSize))
+		return
+	}
+
+	// Validate each entry; reject individual records that are invalid and process the rest.
+	validDecisions := map[string]bool{
+		"allow": true, "deny": true, "escalate": true, "workflow": true, "": true,
+	}
+	filtered := entries[:0]
+	for _, e := range entries {
+		invalid := false
+		for _, chk := range []struct {
+			v, name string
+			max     int
+		}{
+			{e.UserID, "user_id", s.cfg.Limits.MaxUserIDBytes},
+			{e.ToolName, "tool_name", s.cfg.Limits.MaxToolNameBytes},
+			{e.ServerName, "server_name", s.cfg.Limits.MaxServerNameBytes},
+			{e.TraceID, "trace_id", s.cfg.Limits.MaxTraceIDBytes},
+			{e.SessionID, "session_id", s.cfg.Limits.MaxSessionIDBytes},
+			{e.Reason, "reason", s.cfg.Limits.MaxReasonBytes},
+		} {
+			if err := checkLen(chk.v, chk.name, chk.max); err != nil {
+				slog.Warn("dropping oversized log entry", "field", chk.name, "tool", e.ToolName)
+				invalid = true
+				break
+			}
+		}
+		if !invalid && !validDecisions[e.Decision] {
+			slog.Warn("dropping log entry with unknown decision", "decision", e.Decision, "tool", e.ToolName)
+			invalid = true
+		}
+		if !invalid {
+			filtered = append(filtered, e)
+		}
+	}
+	entries = filtered
+
+	// Queue all valid entries to the decision logger.
 	for i := range entries {
 		s.decisionLog.Log(&entries[i])
 	}
@@ -639,6 +747,15 @@ func (s *Server) hasWorkflow() bool {
 	return !isNoop
 }
 
+// checkLen returns an error if value exceeds max bytes, or nil if ok.
+// When max is 0 the check is skipped (no limit configured).
+func checkLen(value, fieldName string, max int) error {
+	if max > 0 && len(value) > max {
+		return fmt.Errorf("%s exceeds maximum length of %d bytes", fieldName, max)
+	}
+	return nil
+}
+
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -679,8 +796,8 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":           "ready",
-		"tools":            len(tools),
+		"status":            "ready",
+		"tools":             len(tools),
 		"signer_configured": s.signer != nil,
 	})
 }
