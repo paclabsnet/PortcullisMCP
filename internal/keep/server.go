@@ -32,7 +32,6 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
-	"github.com/paclabsnet/PortcullisMCP/internal/shared/secrets"
 	"github.com/paclabsnet/PortcullisMCP/internal/telemetry"
 )
 
@@ -58,47 +57,12 @@ type Server struct {
 	normalizer  IdentityNormalizer
 }
 
-// keepSecretAllowlist lists the config fields eligible for vault:// and other
-// restricted secret URI schemes. envvar:// and filevar:// may be used on any field.
-var keepSecretAllowlist = []string{
-	"listen.auth.bearer_token",
-	"admin.token",
-	"escalation_request_signing.key",
-}
-
 // NewServer creates a Keep server. configPath is retained so the admin reload
 // handler can re-read the file on demand.
+// cfg must already have secrets resolved (use LoadConfig, which calls the
+// shared config loader, for file-based startup).
 func NewServer(ctx context.Context, cfg Config, configPath string) (*Server, error) {
-	// Resolve secret URIs in one pass over the config struct.
-	if err := secrets.ResolveConfig(ctx, &cfg, keepSecretAllowlist); err != nil {
-		return nil, err
-	}
-
-	// Apply defaults for any unset limits.
-	if cfg.Limits.MaxRequestBodyBytes == 0 {
-		cfg.Limits.MaxRequestBodyBytes = 1 << 20
-	}
-	if cfg.Limits.MaxServerNameBytes == 0 {
-		cfg.Limits.MaxServerNameBytes = 256
-	}
-	if cfg.Limits.MaxToolNameBytes == 0 {
-		cfg.Limits.MaxToolNameBytes = 256
-	}
-	if cfg.Limits.MaxUserIDBytes == 0 {
-		cfg.Limits.MaxUserIDBytes = 512
-	}
-	if cfg.Limits.MaxTraceIDBytes == 0 {
-		cfg.Limits.MaxTraceIDBytes = 128
-	}
-	if cfg.Limits.MaxSessionIDBytes == 0 {
-		cfg.Limits.MaxSessionIDBytes = 128
-	}
-	if cfg.Limits.MaxReasonBytes == 0 {
-		cfg.Limits.MaxReasonBytes = 4096
-	}
-	if cfg.Limits.MaxLogBatchSize == 0 {
-		cfg.Limits.MaxLogBatchSize = 1000
-	}
+	cfg.Limits.ApplyDefaults()
 
 	var pdp PolicyDecisionPoint
 	switch cfg.PDP.Type {
@@ -207,19 +171,9 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for _, chk := range []struct {
-		v, name string
-		max     int
-	}{
-		{rawReq.ServerName, "server_name", s.cfg.Limits.MaxServerNameBytes},
-		{rawReq.ToolName, "tool_name", s.cfg.Limits.MaxToolNameBytes},
-		{rawReq.TraceID, "trace_id", s.cfg.Limits.MaxTraceIDBytes},
-		{rawReq.SessionID, "session_id", s.cfg.Limits.MaxSessionIDBytes},
-	} {
-		if err := checkLen(chk.v, chk.name, chk.max); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
+	if err := shared.CheckFields(enrichedRequestChecks(rawReq, s.cfg.Limits)); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	traceID := telemetry.TraceIDFromContext(ctx)
@@ -418,19 +372,9 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for _, chk := range []struct {
-		v, name string
-		max     int
-	}{
-		{rawReq.ServerName, "server_name", s.cfg.Limits.MaxServerNameBytes},
-		{rawReq.ToolName, "tool_name", s.cfg.Limits.MaxToolNameBytes},
-		{rawReq.TraceID, "trace_id", s.cfg.Limits.MaxTraceIDBytes},
-		{rawReq.SessionID, "session_id", s.cfg.Limits.MaxSessionIDBytes},
-	} {
-		if err := checkLen(chk.v, chk.name, chk.max); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
+	if err := shared.CheckFields(enrichedRequestChecks(rawReq, s.cfg.Limits)); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	traceID := telemetry.TraceIDFromContext(ctx)
@@ -639,10 +583,7 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
 	filtered := entries[:0]
 	for _, e := range entries {
 		invalid := false
-		for _, chk := range []struct {
-			v, name string
-			max     int
-		}{
+		for _, chk := range []shared.FieldCheck{
 			{e.UserID, "user_id", s.cfg.Limits.MaxUserIDBytes},
 			{e.ToolName, "tool_name", s.cfg.Limits.MaxToolNameBytes},
 			{e.ServerName, "server_name", s.cfg.Limits.MaxServerNameBytes},
@@ -650,8 +591,8 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
 			{e.SessionID, "session_id", s.cfg.Limits.MaxSessionIDBytes},
 			{e.Reason, "reason", s.cfg.Limits.MaxReasonBytes},
 		} {
-			if err := checkLen(chk.v, chk.name, chk.max); err != nil {
-				slog.Warn("dropping oversized log entry", "field", chk.name, "tool", e.ToolName)
+			if err := shared.CheckLen(chk.Value, chk.Name, chk.Max); err != nil {
+				slog.Warn("dropping oversized log entry", "field", chk.Name, "tool", e.ToolName)
 				invalid = true
 				break
 			}
@@ -698,7 +639,7 @@ func (s *Server) adminAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 // connections and tool cache. Only the backends section is reloaded; all other
 // config (TLS, PDP, etc.) requires a full restart.
 func (s *Server) handleReload(w http.ResponseWriter, r *http.Request) {
-	cfg, err := LoadConfig(s.configPath)
+	cfg, err := LoadConfig(r.Context(), s.configPath)
 	if err != nil {
 		slog.Error("admin reload: read config failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to read configuration")
@@ -747,13 +688,15 @@ func (s *Server) hasWorkflow() bool {
 	return !isNoop
 }
 
-// checkLen returns an error if value exceeds max bytes, or nil if ok.
-// When max is 0 the check is skipped (no limit configured).
-func checkLen(value, fieldName string, max int) error {
-	if max > 0 && len(value) > max {
-		return fmt.Errorf("%s exceeds maximum length of %d bytes", fieldName, max)
+// enrichedRequestChecks returns the field-length checks for an EnrichedMCPRequest.
+// Centralising them here means handleCall and handleAuthorize stay in sync automatically.
+func enrichedRequestChecks(req shared.EnrichedMCPRequest, limits LimitsConfig) []shared.FieldCheck {
+	return []shared.FieldCheck{
+		{req.ServerName, "server_name", limits.MaxServerNameBytes},
+		{req.ToolName, "tool_name", limits.MaxToolNameBytes},
+		{req.TraceID, "trace_id", limits.MaxTraceIDBytes},
+		{req.SessionID, "session_id", limits.MaxSessionIDBytes},
 	}
-	return nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

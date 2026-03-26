@@ -16,6 +16,7 @@ package gate
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 
@@ -23,9 +24,9 @@ import (
 )
 
 // resolveGateConfig is a test helper that runs ResolveConfig over a gate.Config
-// using the package-level allowlist, matching what gate.New does at startup.
+// using the package-level allowlist, matching what gate.LoadConfig does at startup.
 func resolveGateConfig(cfg *Config) error {
-	return secrets.ResolveConfig(context.Background(), cfg, gateSecretAllowlist)
+	return secrets.ResolveConfig(context.Background(), cfg, SecretAllowlist)
 }
 
 func TestGate_Secrets_EnvVar_AllowlistedField(t *testing.T) {
@@ -127,15 +128,25 @@ func TestGate_Secrets_EnvVarNotSet_ReturnsError(t *testing.T) {
 	}
 }
 
-func TestGate_New_WrapsResolverError(t *testing.T) {
-	// gate.New must wrap resolver errors with "resolve secrets:" so that
-	// operators see a clear prefix in the degraded-mode error message.
-	cfg := validBaseConfig()
-	cfg.Guard.BearerToken = "vault://secret/portcullis/gate#token" // vault:// on allowlisted field — no vault server in test
+func TestGate_LoadConfig_WrapsResolverError(t *testing.T) {
+	// LoadConfig must wrap resolver errors with "resolve secrets:" so that
+	// operators see a clear prefix in startup logs.
+	// Use an allowlisted field (keep.auth.token) with a vault:// URI so the
+	// allowlist check passes and the error comes from the Vault dial attempt.
+	yaml := "keep:\n  endpoint: \"http://keep.example.com\"\n  auth:\n    type: bearer\n    token: \"vault://secret/portcullis/gate#token\"\n"
+	f, err := os.CreateTemp("", "gate-config-*.yaml")
+	if err != nil {
+		t.Fatalf("create temp file: %v", err)
+	}
+	defer os.Remove(f.Name())
+	if _, err := f.WriteString(yaml); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+	f.Close()
 
-	_, err := New(context.Background(), cfg)
+	_, err = LoadConfig(context.Background(), f.Name())
 	if err == nil {
-		t.Fatal("expected error from gate.New with unresolvable vault URI, got nil")
+		t.Fatal("expected error from LoadConfig with unresolvable vault URI, got nil")
 	}
 	if !strings.Contains(err.Error(), "resolve secrets:") {
 		t.Errorf("error should be wrapped with 'resolve secrets:'; got: %v", err)

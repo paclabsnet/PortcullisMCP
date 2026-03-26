@@ -11,24 +11,52 @@
 
 
 
-
-
-### Task: Input sanitizing at Keep and Guard [DONE]
-- standard good hygiene
-- priority: medium
-- Completed in v0.2.11: LimitsConfig added to Keep and Guard configs; body size limits,
-  field length caps, log batch validation, and decision-field enum validation implemented.
-  Guard token-claim surface hardened: auth required by default, AllowUnauthenticatedTokenAPIs
-  flag added, expires_at returned in unclaimed list, remote_addr logged on claim.
-
-
-
-### Task: add http for gate, so it can support multiple agents in parallel
+### Task: add streamable-http access for Gate, so it can support multiple agents in parallel
 i.e. instead of running as a stdio MCP, it can run as an autonomous local process.
-- Portcullis-Gate needs to be concurrency-safe
+- IMPORTANT! Portcullis-Gate would need to be concurrency-safe
 - priority: medium-low
 
 
+### Task: Add Gate config option that disables the ability for users to add tokens manually
+This was a feature meant to prove the concept, and could potentially be abused.  We should
+turn if off by default, but allow the enterprise to enable the ability to post JWTs from
+the web page if it is enabled in the gate config yaml .  
+- priority: medium
+
+
+### Task: Optionally Include the traceid in the Deny, Escalate and Workflow messages back to the user
+Allows a user to escalate to the enterprise security team if they aren't allowed to do something they think they should be able to
+- priority: low
+
+
+
+### Task: Optionally create a Gate API to collect the list of DENY responses, along with trace/session information
+not sure if this is necessary. It might be helpful for troubleshooting
+- priority: very low
+
+
+
+
+
+
+
+
+------------------------------------------------------------------------------------
+
+
+# Phase 3 / Future
+
+
+
+### Task: Support Cloud Vaults (Phase 3)
+    These require importing heavy cloud-provider SDKs (AWS/GCP/Azure) and setting up complex test environments. By deferring them, we
+    keep the PR surgical and the binary size lean for the first release.
+
+    1. awssec://: AWS Secrets Manager.
+    2. gcpsec://: GCP Secret Manager.
+    3. azkv://: Azure Key Vault.
+
+    - priority: low
 
 
 
@@ -44,62 +72,6 @@ for different service / tool combos
 - priority: low
 
 
-
-
-
-### Task: Acquire Human Credentials (at Gate)
-- [x] Token file (Option B) — Gate reads `identity.oidc.token_file`; fails hard (no OS fallback) when source is "oidc" and token is missing or invalid; `~` is now expanded correctly on read
-- [ ] Keychain storage — optional future enhancement
-- [ ] Device authorization grant (RFC 8628) — fallback for when no token file exists; deferred until need confirmed (see Implementation Details below)
-- priority: low
-
-
-
-### Task: Optionally Include the traceid in the Deny, Escalate and Workflow messages back to the user
-- purpose: allows a user to escalate to the enterprise security team if they aren't allowed to do something they think they should be able to
-- low priority
-
-
-
-### Task: Optionally create a Gate API to collect the list of DENY responses, along with trace/session information
-- not sure if this is necessary. It might be helpful for troubleshooting
-- very low priority
-
-
-
-## Security Review
-
-
-1. [RESOLVED v0.2.11] Guard token-claim surface is capability-based and can be open depending on config
-- Auth is now required by default for token APIs; deployers must explicitly set
-  auth.allow_unauthenticated_token_apis: true to opt out (development/sandbox only).
-- Guard fails fast at startup if no bearer token is configured and the flag is not set.
-- expires_at is now included in the unclaimed-list response.
-- remote_addr is now logged on every token claim for audit purposes.
-
-
-
-
-
-
-
-
-
-# Phase 3 / Future
-
-### Task: Support Cloud Vaults (Phase 3)
-    These require importing heavy cloud-provider SDKs (AWS/GCP/Azure) and setting up complex test environments. By deferring them, we
-    keep the PR surgical and the binary size lean for the first release.
-
-    1. awssec://: AWS Secrets Manager.
-    2. gcpsec://: GCP Secret Manager.
-    3. azkv://: Azure Key Vault.
-
-    - priority: low
-
-
-
-
 ### Task: Pluggable Logging and Redaction
 - **Problem**: Enterprises need flexible logging destinations (SIEMs, files, console) and must ensure that sensitive PII or secrets in tool arguments are never leaked to those logs.
 - **Fix**: Implement a `LogSink` interface and a "Fail-Safe" redaction engine.
@@ -113,6 +85,17 @@ for different service / tool combos
   - `internal/keep/decisionlog.go` — Refactor to support multiple sinks and apply redaction before sending.
   - **New Sinks**: Implement `ConsoleSink`, `FileSink`, and refactor the existing `WebhookSink`.
   - priority: medium
+
+
+
+### Task: Acquire Human Credentials (at Gate)
+- [x] Token file (Option B) — Gate reads `identity.oidc.token_file`; fails hard (no OS fallback) when source is "oidc" and token is missing or invalid; `~` is now expanded correctly on read
+- [ ] Keychain storage — optional future enhancement
+- [ ] Device authorization grant (RFC 8628) — fallback for when no token file exists; deferred until need confirmed (see Implementation Details below)
+- priority: low
+
+
+
 
 
 ## Implementation notes

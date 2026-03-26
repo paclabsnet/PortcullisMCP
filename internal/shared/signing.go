@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package version holds the PortcullisMCP suite version.
-// Update Version on every change before committing.
-// The Makefile overrides this at build time via:
-//
-//	go build -ldflags "-X github.com/paclabsnet/PortcullisMCP/internal/version.Version=x.y.z"
-package version
+package shared
 
-var Version = "0.2.16"
+// SigningConfig holds an HMAC key and a token TTL in seconds.
+// It is shared by portcullis-keep (escalation request signing) and
+// portcullis-guard (escalation token signing).
+type SigningConfig struct {
+	Key string `yaml:"key"` // HMAC secret; reference a secret URI with envvar:// or vault://
+	TTL int    `yaml:"ttl"` // token TTL in seconds; 0 means use the service default
+}

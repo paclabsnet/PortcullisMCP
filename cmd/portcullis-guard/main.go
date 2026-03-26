@@ -15,15 +15,12 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"flag"
 	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
-
-	"gopkg.in/yaml.v3"
 
 	"github.com/paclabsnet/PortcullisMCP/internal/guard"
 	"github.com/paclabsnet/PortcullisMCP/internal/version"
@@ -35,14 +32,14 @@ func main() {
 
 	slog.Info("portcullis-guard starting", "version", version.Version)
 
-	cfg, err := loadConfig(*cfgPath)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	cfg, err := guard.LoadConfig(ctx, *cfgPath)
 	if err != nil {
 		slog.Error("load config", "error", err)
 		os.Exit(1)
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 
 	srv, err := guard.NewServer(ctx, cfg)
 	if err != nil {
@@ -54,18 +51,4 @@ func main() {
 		slog.Error("guard exited", "error", err)
 		os.Exit(1)
 	}
-}
-
-func loadConfig(path string) (guard.Config, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return guard.Config{}, err
-	}
-	var cfg guard.Config
-	dec := yaml.NewDecoder(bytes.NewReader(data))
-	dec.KnownFields(true)
-	if err := dec.Decode(&cfg); err != nil {
-		return guard.Config{}, err
-	}
-	return cfg, cfg.Validate()
 }

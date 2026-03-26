@@ -33,14 +33,14 @@ func main() {
 
 	slog.Info("portcullis-keep starting", "version", version.Version)
 
-	cfg, err := keep.LoadConfig(*cfgPath)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	cfg, err := keep.LoadConfig(ctx, *cfgPath)
 	if err != nil {
 		slog.Error("load config", "error", err)
 		os.Exit(1)
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 
 	shutdownTelemetry, err := telemetry.Setup(ctx, cfg.Telemetry)
 	if err != nil {

@@ -14,12 +14,38 @@
 
 package guard
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+
+	"github.com/paclabsnet/PortcullisMCP/internal/shared"
+	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
+)
+
+// SecretAllowlist lists the config fields eligible for vault:// and other
+// restricted secret URI schemes. envvar:// and filevar:// may be used on any field.
+var SecretAllowlist = []string{
+	"auth.bearer_token",
+	"keep.pending_escalation_request_signing_key",
+	"escalation_token_signing.key",
+}
+
+// SigningConfig is an alias for shared.SigningConfig.
+// Guard uses it for escalation_token_signing; the canonical definition lives in
+// internal/shared so it can be shared with portcullis-keep without duplication.
+type SigningConfig = shared.SigningConfig
+
+// LoadConfig reads, parses, resolves secrets in, and validates a guard config file.
+// It uses strict unmarshaling to ensure that unknown or deprecated fields
+// cause a configuration error at startup.
+func LoadConfig(ctx context.Context, path string) (Config, error) {
+	return cfgloader.Load[Config](ctx, path, SecretAllowlist)
+}
 
 // Validate returns an error if the configuration contains invalid values.
 func (c Config) Validate() error {
-	if c.Listen.Address == "" {
-		return fmt.Errorf("listen.address is required")
+	if err := c.Listen.Validate(); err != nil {
+		return err
 	}
 	if c.Keep.PendingEscalationRequestSigningKey == "" {
 		return fmt.Errorf("keep.pending_escalation_request_signing_key is required")
@@ -54,7 +80,7 @@ type AuthConfig struct {
 }
 
 // LimitsConfig controls request body, field length, and in-memory map size limits for Guard.
-// Zero values are replaced with defaults at server startup.
+// Zero values are replaced with service defaults by ApplyDefaults.
 type LimitsConfig struct {
 	MaxRequestBodyBytes   int `yaml:"max_request_body_bytes"`   // default: 524288 (512 KB)
 	MaxUserIDBytes        int `yaml:"max_user_id_bytes"`        // default: 512
@@ -64,6 +90,35 @@ type LimitsConfig struct {
 	MaxPendingRequests    int `yaml:"max_pending_requests"`     // default: 10000
 	MaxUnclaimedPerUser   int `yaml:"max_unclaimed_per_user"`   // default: 10000
 	MaxUnclaimedTotal     int `yaml:"max_unclaimed_total"`      // default: 100000
+}
+
+// ApplyDefaults fills any zero-value fields with their service defaults.
+// Call this once during server initialisation before any request is processed.
+func (l *LimitsConfig) ApplyDefaults() {
+	if l.MaxRequestBodyBytes == 0 {
+		l.MaxRequestBodyBytes = 512 << 10 // 512 KB
+	}
+	if l.MaxUserIDBytes == 0 {
+		l.MaxUserIDBytes = 512
+	}
+	if l.MaxJTIBytes == 0 {
+		l.MaxJTIBytes = 128
+	}
+	if l.MaxPendingJWTBytes == 0 {
+		l.MaxPendingJWTBytes = 8192
+	}
+	if l.MaxScopeOverrideBytes == 0 {
+		l.MaxScopeOverrideBytes = 16384
+	}
+	if l.MaxPendingRequests == 0 {
+		l.MaxPendingRequests = 10_000
+	}
+	if l.MaxUnclaimedPerUser == 0 {
+		l.MaxUnclaimedPerUser = 10_000
+	}
+	if l.MaxUnclaimedTotal == 0 {
+		l.MaxUnclaimedTotal = 100_000
+	}
 }
 
 // TokenStoreConfig controls the in-memory unclaimed token store.
@@ -80,16 +135,17 @@ type ListenConfig struct {
 	Address string `yaml:"address"`
 }
 
+// Validate returns an error if the listen config contains invalid values.
+func (c ListenConfig) Validate() error {
+	if c.Address == "" {
+		return fmt.Errorf("listen.address is required")
+	}
+	return nil
+}
+
 // KeepConfig holds the key Guard uses to verify Keep-signed escalation request JWTs.
 type KeepConfig struct {
 	PendingEscalationRequestSigningKey string `yaml:"pending_escalation_request_signing_key"` // must match keep.escalation_request_signing.key
-}
-
-// SigningConfig holds the key Guard uses to sign escalation token JWTs.
-// The PDP must be configured to trust tokens signed with this key.
-type SigningConfig struct {
-	Key string `yaml:"key"` // HMAC secret; reference env var with ${VAR}
-	TTL int    `yaml:"ttl"` // escalation token TTL in seconds (default: 86400 = 24h)
 }
 
 // TemplatesConfig points to the directory containing approval.html and token.html.

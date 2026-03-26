@@ -15,17 +15,30 @@
 package keep
 
 import (
-	"bytes"
+	"context"
 	"fmt"
-	"os"
 
-	"gopkg.in/yaml.v3"
-
+	"github.com/paclabsnet/PortcullisMCP/internal/shared"
+	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
+	identity "github.com/paclabsnet/PortcullisMCP/internal/shared/identity"
 	telemetrycfg "github.com/paclabsnet/PortcullisMCP/internal/telemetry"
 )
 
+// SecretAllowlist lists the config fields eligible for vault:// and other
+// restricted secret URI schemes. envvar:// and filevar:// may be used on any field.
+var SecretAllowlist = []string{
+	"listen.auth.bearer_token",
+	"admin.token",
+	"escalation_request_signing.key",
+}
+
+// SigningConfig is an alias for shared.SigningConfig.
+// Keep uses it for escalation_request_signing; the canonical definition lives in
+// internal/shared so it can be shared with portcullis-guard without duplication.
+type SigningConfig = shared.SigningConfig
+
 // LimitsConfig controls request body and field length limits for Keep.
-// Zero values are replaced with defaults at server startup.
+// Zero values are replaced with service defaults by ApplyDefaults.
 type LimitsConfig struct {
 	MaxRequestBodyBytes int `yaml:"max_request_body_bytes"` // default: 1048576 (1 MB)
 	MaxServerNameBytes  int `yaml:"max_server_name_bytes"`  // default: 256
@@ -35,6 +48,35 @@ type LimitsConfig struct {
 	MaxSessionIDBytes   int `yaml:"max_session_id_bytes"`   // default: 128
 	MaxReasonBytes      int `yaml:"max_reason_bytes"`       // default: 4096
 	MaxLogBatchSize     int `yaml:"max_log_batch_size"`     // default: 1000
+}
+
+// ApplyDefaults fills any zero-value fields with their service defaults.
+// Call this once during server initialisation before any request is processed.
+func (l *LimitsConfig) ApplyDefaults() {
+	if l.MaxRequestBodyBytes == 0 {
+		l.MaxRequestBodyBytes = 1 << 20 // 1 MB
+	}
+	if l.MaxServerNameBytes == 0 {
+		l.MaxServerNameBytes = 256
+	}
+	if l.MaxToolNameBytes == 0 {
+		l.MaxToolNameBytes = 256
+	}
+	if l.MaxUserIDBytes == 0 {
+		l.MaxUserIDBytes = 512
+	}
+	if l.MaxTraceIDBytes == 0 {
+		l.MaxTraceIDBytes = 128
+	}
+	if l.MaxSessionIDBytes == 0 {
+		l.MaxSessionIDBytes = 128
+	}
+	if l.MaxReasonBytes == 0 {
+		l.MaxReasonBytes = 4096
+	}
+	if l.MaxLogBatchSize == 0 {
+		l.MaxLogBatchSize = 1000
+	}
 }
 
 // Config holds the full portcullis-keep configuration loaded from keep.yaml.
@@ -51,62 +93,33 @@ type Config struct {
 	Limits                   LimitsConfig             `yaml:"limits"`
 }
 
-// IdentityConfig controls how Keep normalizes UserIdentity claims received from Gate.
-type IdentityConfig struct {
-	// Normalizer selects the identity normalization strategy.
-	//   "strict" (default) — OS-sourced identities are stripped to user_id only.
-	//                        OIDC-sourced identities pass through unchanged.
-	//   "passthrough"      — All identity fields are accepted as-is. Local
-	//                        evaluation and sandbox deployments only.
-	//   "oidc-verify"      — Rejects expired OIDC tokens and tokens not issued
-	//                        by the configured issuer. OS identities are handled
-	//                        with strict stripping.
-	Normalizer string `yaml:"normalizer"` // "strict" | "passthrough" | "oidc-verify"
+// IdentityConfig is an alias for identity.NormalizerConfig.
+// Keep uses it for the identity.normalizer section of keep.yaml; the canonical
+// definition lives in internal/shared/identity so it can be reused by other
+// components that perform identity normalization.
+type IdentityConfig = identity.NormalizerConfig
 
-	// AcceptForgedIdentities suppresses the per-request warning emitted in
-	// passthrough mode. Has no effect on other normalizers.
-	AcceptForgedIdentities bool `yaml:"accept_forged_identities"`
-
-	// OIDCVerify holds configuration for the oidc-verify normalizer.
-	OIDCVerify OIDCVerifyConfig `yaml:"oidc_verify"`
-}
-
-// OIDCVerifyConfig holds settings for the oidc-verify identity normalizer.
-type OIDCVerifyConfig struct {
-	// Issuer is the expected iss claim value, e.g.
-	// "https://login.microsoftonline.com/<tenant-id>/v2.0". Required when
-	// normalizer is "oidc-verify".
-	Issuer string `yaml:"issuer"`
-
-	// JWKSURL is the URL to the issuer's JSON Web Key Set (JWKS) for signature
-	// verification. Required when normalizer is "oidc-verify".
-	JWKSURL string `yaml:"jwks_url"`
-
-	// Audiences is an optional list of allowed audience (aud) values.
-	// If provided, the token must contain at least one of these audiences.
-	Audiences []string `yaml:"audiences"`
-
-	// AllowMissingExpiry defaults to false. If false (default), OIDC tokens
-	// without an expiration (exp) claim will be rejected (fail secure).
-	// Set to true only if your Identity Provider does not provide exp claims.
-	AllowMissingExpiry bool `yaml:"allow_missing_expiry"`
-}
+// OIDCVerifyConfig is an alias for identity.OIDCVerifyConfig.
+// The canonical definition lives in internal/shared/identity.
+type OIDCVerifyConfig = identity.OIDCVerifyConfig
 
 // AdminConfig holds credentials for the Keep admin API.
 type AdminConfig struct {
-	Token string `yaml:"token"` // required to call /admin/* endpoints; reference env var with ${VAR}
-}
-
-// SigningConfig holds the HMAC key Keep uses to sign escalation request JWTs.
-type SigningConfig struct {
-	Key string `yaml:"key"` // HMAC secret; reference env var with ${VAR}
-	TTL int    `yaml:"ttl"` // JWT TTL in seconds (default: 3600)
+	Token string `yaml:"token"` // required to call /admin/* endpoints; reference a secret URI with envvar:// or vault://
 }
 
 type ListenConfig struct {
 	Address string     `yaml:"address"`
 	TLS     TLSConfig  `yaml:"tls"`
 	Auth    AuthConfig `yaml:"auth"`
+}
+
+// Validate returns an error if the listen config contains invalid values.
+func (c ListenConfig) Validate() error {
+	if c.Address == "" {
+		return fmt.Errorf("listen.address is required")
+	}
+	return nil
 }
 
 type TLSConfig struct {
@@ -120,8 +133,16 @@ type AuthConfig struct {
 }
 
 type PDPConfig struct {
-	Type     string `yaml:"type"`     // "opa"
+	Type     string `yaml:"type"`     // "opa" | "noop"
 	Endpoint string `yaml:"endpoint"` // OPA REST API URL
+}
+
+// Validate returns an error if the PDP config contains invalid values.
+func (c PDPConfig) Validate() error {
+	if c.Type != "noop" && c.Endpoint == "" {
+		return fmt.Errorf("pdp.endpoint is required when pdp.type is not \"noop\"")
+	}
+	return nil
 }
 
 type BackendConfig struct {
@@ -155,6 +176,23 @@ type WorkflowConfig struct {
 	URL        URLWorkflowConfig `yaml:"url"`
 }
 
+// Validate returns an error if the workflow config contains invalid values.
+func (c WorkflowConfig) Validate() error {
+	switch c.Type {
+	case "", "noop", "url", "servicenow", "webhook":
+		// valid
+	default:
+		return fmt.Errorf("invalid escalation.workflow.type %q: must be \"noop\", \"url\", \"servicenow\", or \"webhook\"", c.Type)
+	}
+	if c.Type == "servicenow" && c.ServiceNow.Instance == "" {
+		return fmt.Errorf("escalation.workflow.servicenow.instance is required when workflow type is \"servicenow\"")
+	}
+	if c.Type == "webhook" && c.Webhook.URL == "" {
+		return fmt.Errorf("escalation.workflow.webhook.url is required when workflow type is \"webhook\"")
+	}
+	return nil
+}
+
 // URLWorkflowConfig is the demo workflow plugin that returns a Guard approval URL
 // through the MCP error channel so the user can approve directly.
 type URLWorkflowConfig struct {
@@ -183,57 +221,21 @@ type DecisionLogConfig struct {
 
 // Validate returns an error if the configuration contains invalid values.
 func (c Config) Validate() error {
-	if c.Listen.Address == "" {
-		return fmt.Errorf("listen.address is required")
+	if err := c.Listen.Validate(); err != nil {
+		return err
 	}
-	if c.PDP.Type != "noop" && c.PDP.Endpoint == "" {
-		return fmt.Errorf("pdp.endpoint is required when pdp.type is not \"noop\"")
+	if err := c.PDP.Validate(); err != nil {
+		return err
 	}
-
-	switch c.Identity.Normalizer {
-	case "", "strict", "passthrough", "oidc-verify":
-		// valid
-	default:
-		return fmt.Errorf("invalid identity.normalizer %q: must be \"strict\", \"passthrough\", or \"oidc-verify\"", c.Identity.Normalizer)
+	if err := c.Identity.Validate(); err != nil {
+		return err
 	}
-	if c.Identity.Normalizer == "oidc-verify" {
-		if c.Identity.OIDCVerify.Issuer == "" {
-			return fmt.Errorf("identity.oidc_verify.issuer is required when normalizer is \"oidc-verify\"")
-		}
-		if c.Identity.OIDCVerify.JWKSURL == "" {
-			return fmt.Errorf("identity.oidc_verify.jwks_url is required when normalizer is \"oidc-verify\"")
-		}
-	}
-
-	switch c.Escalation.Workflow.Type {
-	case "", "noop", "url", "servicenow", "webhook":
-		// valid
-	default:
-		return fmt.Errorf("invalid escalation.workflow.type %q: must be \"noop\", \"url\", \"servicenow\", or \"webhook\"", c.Escalation.Workflow.Type)
-	}
-	if c.Escalation.Workflow.Type == "servicenow" && c.Escalation.Workflow.ServiceNow.Instance == "" {
-		return fmt.Errorf("escalation.workflow.servicenow.instance is required when workflow type is \"servicenow\"")
-	}
-	if c.Escalation.Workflow.Type == "webhook" && c.Escalation.Workflow.Webhook.URL == "" {
-		return fmt.Errorf("escalation.workflow.webhook.url is required when workflow type is \"webhook\"")
-	}
-
-	return nil
+	return c.Escalation.Workflow.Validate()
 }
 
-// LoadConfig reads and parses a keep config file.
+// LoadConfig reads, parses, resolves secrets in, and validates a keep config file.
 // It uses strict unmarshaling to ensure that unknown or deprecated fields
 // cause a configuration error at startup.
-func LoadConfig(path string) (Config, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return Config{}, err
-	}
-	var cfg Config
-	dec := yaml.NewDecoder(bytes.NewReader(data))
-	dec.KnownFields(true)
-	if err := dec.Decode(&cfg); err != nil {
-		return Config{}, err
-	}
-	return cfg, cfg.Validate()
+func LoadConfig(ctx context.Context, path string) (Config, error) {
+	return cfgloader.Load[Config](ctx, path, SecretAllowlist)
 }

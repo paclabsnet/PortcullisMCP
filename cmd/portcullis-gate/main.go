@@ -15,15 +15,12 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"flag"
 	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
-
-	"gopkg.in/yaml.v3"
 
 	"github.com/paclabsnet/PortcullisMCP/internal/gate"
 	"github.com/paclabsnet/PortcullisMCP/internal/telemetry"
@@ -39,7 +36,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	cfg, err := loadConfig(*cfgPath)
+	cfg, err := gate.LoadConfig(ctx, *cfgPath)
 	if err != nil {
 		slog.Error("load config", "error", err)
 		runDegraded(ctx, "configuration error: "+err.Error())
@@ -74,33 +71,4 @@ func runDegraded(ctx context.Context, reason string) {
 		slog.Error("degraded gate exited with error", "error", err)
 		os.Exit(1)
 	}
-}
-
-func loadConfig(path string) (gate.Config, error) {
-	expanded, err := expandHome(path)
-	if err != nil {
-		return gate.Config{}, err
-	}
-	data, err := os.ReadFile(expanded)
-	if err != nil {
-		return gate.Config{}, err
-	}
-	var cfg gate.Config
-	dec := yaml.NewDecoder(bytes.NewReader(data))
-	dec.KnownFields(true)
-	if err := dec.Decode(&cfg); err != nil {
-		return gate.Config{}, err
-	}
-	return cfg, cfg.Validate()
-}
-
-func expandHome(path string) (string, error) {
-	if len(path) == 0 || path[0] != '~' {
-		return path, nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return home + path[1:], nil
 }

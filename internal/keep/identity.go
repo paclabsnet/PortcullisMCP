@@ -29,32 +29,21 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
+	identity "github.com/paclabsnet/PortcullisMCP/internal/shared/identity"
 )
 
-// IdentityNormalizer transforms a raw UserIdentity received from Gate into a
-// normalized Principal suitable for forwarding to the PDP.
-//
-// A non-nil error means the normalizer could not process the identity (e.g.,
-// invalid token, misconfigured normalizer). Keep returns 503 in that case.
-type IdentityNormalizer interface {
-	Normalize(ctx context.Context, id shared.UserIdentity) (shared.Principal, error)
-}
+// IdentityNormalizer is an alias for identity.Normalizer.
+// Kept here so existing Keep code and tests compile without changes.
+type IdentityNormalizer = identity.Normalizer
 
-// NormalizerFactory is a function that creates an IdentityNormalizer from the
-// provided configuration.
-type NormalizerFactory func(cfg IdentityConfig) (IdentityNormalizer, error)
-
-var (
-	normalizersMu sync.RWMutex
-	normalizers   = make(map[string]NormalizerFactory)
-)
+// NormalizerFactory is an alias for identity.NormalizerFactory.
+// Kept here so existing Keep code and tests compile without changes.
+type NormalizerFactory = identity.NormalizerFactory
 
 // RegisterNormalizer adds a new identity normalizer implementation to the global
-// registry. It should be called from an init() function.
+// registry. It is a thin wrapper around identity.Register.
 func RegisterNormalizer(name string, factory NormalizerFactory) {
-	normalizersMu.Lock()
-	defer normalizersMu.Unlock()
-	normalizers[name] = factory
+	identity.Register(name, factory)
 }
 
 func init() {
@@ -402,20 +391,7 @@ func jwtIssuer(token string) (string, error) {
 }
 
 // buildIdentityNormalizer constructs the configured IdentityNormalizer using
-// the global registry.
+// the global registry. It is a thin wrapper around identity.Build.
 func buildIdentityNormalizer(cfg IdentityConfig) (IdentityNormalizer, error) {
-	name := cfg.Normalizer
-	if name == "" {
-		name = "strict"
-	}
-
-	normalizersMu.RLock()
-	factory, ok := normalizers[name]
-	normalizersMu.RUnlock()
-
-	if !ok {
-		return nil, fmt.Errorf("unknown identity normalizer %q; supported: strict, passthrough, oidc-verify", name)
-	}
-
-	return factory(cfg)
+	return identity.Build(cfg)
 }
