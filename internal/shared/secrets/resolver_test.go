@@ -127,12 +127,25 @@ func TestResolveConfig_FileVar_TwoSlash(t *testing.T) {
 	if err := os.WriteFile(f, []byte("file-secret"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	got, err := wrapResolve(context.Background(), filevarURI(f), nil)
+	// Three-slash form: filevar:///abs/path
+	threeSlash, err := wrapResolve(context.Background(), filevarURI(f), nil)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("three-slash unexpected error: %v", err)
 	}
-	if got != "file-secret" {
-		t.Errorf("got %q, want %q", got, "file-secret")
+	// Two-slash form: filevar://abs/path — url.Parse puts first path segment
+	// into Host. Both forms must resolve to the same absolute path.
+	slashed := strings.TrimPrefix(filepath.ToSlash(f), "/")
+	twoSlashURI := "filevar://" + slashed
+	twoSlash, err := wrapResolve(context.Background(), twoSlashURI, nil)
+	if err != nil {
+		t.Fatalf("two-slash unexpected error: %v", err)
+	}
+	if threeSlash != twoSlash {
+		t.Errorf("two-slash %q resolved to %q, three-slash resolved to %q — must be equal",
+			twoSlashURI, twoSlash, threeSlash)
+	}
+	if twoSlash != "file-secret" {
+		t.Errorf("got %q, want %q", twoSlash, "file-secret")
 	}
 }
 

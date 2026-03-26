@@ -214,16 +214,17 @@ func resolveEnvVar(u *url.URL) (string, error) {
 }
 
 // resolveFileVar handles filevar:///path/to/file or filevar://path/to/file.
+// Both forms resolve to the same absolute path — operators should not need to
+// count slashes. url.Parse splits the first path segment into Host when only
+// two slashes are used; we reassemble the full absolute path in both cases.
 func resolveFileVar(u *url.URL) (string, error) {
-	// Normalize: strip one leading slash if host is empty (triple-slash form gives
-	// empty host and path starting with "/"). Double-slash gives host as first
-	// path segment — reconstruct the full path from host + path.
 	var path string
 	if u.Host != "" {
-		// filevar://relative/path  — host holds first segment
-		path = u.Host + u.Path
+		// filevar://etc/portcullis/key — host="etc", path="/portcullis/key"
+		// Reassemble as the absolute path /etc/portcullis/key.
+		path = "/" + u.Host + u.Path
 	} else {
-		// filevar:///absolute/path — host empty, path starts with "/"
+		// filevar:///etc/portcullis/key — host="", path="/etc/portcullis/key"
 		path = u.Path
 	}
 	if path == "" {
