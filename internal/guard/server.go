@@ -100,21 +100,19 @@ type Server struct {
 	pendingRequests map[string]pendingRequest
 }
 
+// guardSecretAllowlist lists the config fields eligible for vault:// and other
+// restricted secret URI schemes.
+var guardSecretAllowlist = []string{
+	"auth.bearer_token",
+	"keep.pending_escalation_request_signing_key",
+	"escalation_token_signing.key",
+}
+
 // NewServer creates a Guard server from config.
 func NewServer(ctx context.Context, cfg Config) (*Server, error) {
-	// Resolve secret URIs for allowlisted fields.
-	var err error
-	cfg.Auth.BearerToken, err = secrets.Resolve(ctx, cfg.Auth.BearerToken)
-	if err != nil {
-		return nil, fmt.Errorf("guard: auth.bearer_token: %w", err)
-	}
-	cfg.Keep.EscalationRequestSigningKey, err = secrets.Resolve(ctx, cfg.Keep.EscalationRequestSigningKey)
-	if err != nil {
-		return nil, fmt.Errorf("guard: keep.escalation_request_signing_key: %w", err)
-	}
-	cfg.EscalationTokenSigning.Key, err = secrets.Resolve(ctx, cfg.EscalationTokenSigning.Key)
-	if err != nil {
-		return nil, fmt.Errorf("guard: escalation_token_signing.key: %w", err)
+	// Resolve secret URIs in one pass over the config struct.
+	if err := secrets.ResolveConfig(ctx, &cfg, guardSecretAllowlist); err != nil {
+		return nil, err
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -132,7 +130,7 @@ func NewServer(ctx context.Context, cfg Config) (*Server, error) {
 
 	return &Server{
 		cfg:             cfg,
-		keepKey:         []byte(cfg.Keep.EscalationRequestSigningKey),
+		keepKey:         []byte(cfg.Keep.PendingEscalationRequestSigningKey),
 		signingKey:      []byte(cfg.EscalationTokenSigning.Key),
 		ttl:             ttl,
 		templates:       tmpl,

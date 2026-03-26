@@ -35,7 +35,7 @@ escalation:
       guard_url: "http://localhost:8444"
 
 escalation_request_signing:
-  key: "dev-keep-signing-secret"   # must match guard's keep.escalation_request_signing_key; use ${ENV_VAR} in production
+  key: "dev-keep-signing-secret"   # must match guard's keep.pending_escalation_request_signing_key; use ${ENV_VAR} in production
   ttl: 3600
 
 decision_logs:

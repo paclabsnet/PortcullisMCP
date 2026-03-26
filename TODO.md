@@ -78,7 +78,7 @@
   3. Update Server Constructors
     We will update the NewServer functions in Keep and Guard to resolve their critical secrets during initialization:
     * Keep Server: Resolves EscalationRequestSigning.Key and Auth.BearerToken.
-    * Guard Server: Resolves EscalationTokenSigning.Key, Keep.EscalationRequestSigningKey, and Auth.BearerToken.
+    * Guard Server: Resolves EscalationTokenSigning.Key, Keep.PendingEscalationRequestSigningKey, and Auth.BearerToken.
     * Context: Since secret resolution is an I/O operation, I'll ensure these constructors handle a context.Context (or use a
       startup-scoped context) for timeouts.
     * This will affect 30+ constructors including test cases, but it is the right thing to do, better now than later
@@ -157,7 +157,7 @@
 
       Guard Server
       * escalation_token_signing.key (HMAC/RSA Key)
-      * keep.escalation_request_signing_key (Public Key for verification)
+      * keep.pending_escalation_request_signing_key (Public Key for verification)
       * auth.bearer_token (API Auth)
 
       Gate (Future)

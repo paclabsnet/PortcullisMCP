@@ -2,7 +2,7 @@ listen:
   address: "0.0.0.0:8444"
 
 keep:
-  escalation_request_signing_key: "envvar://KEEP_SIGNING_KEY"   # must match keep.signing.key
+  pending_escalation_request_signing_key: "envvar://KEEP_SIGNING_KEY"   # must match keep.signing.key
 
 escalation_token_signing:
   key: "envvar://GUARD_SIGNING_KEY"          # PDP must be configured to trust tokens signed with this key

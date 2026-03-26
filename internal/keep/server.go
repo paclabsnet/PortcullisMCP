@@ -58,22 +58,20 @@ type Server struct {
 	normalizer  IdentityNormalizer
 }
 
+// keepSecretAllowlist lists the config fields eligible for vault:// and other
+// restricted secret URI schemes. envvar:// and filevar:// may be used on any field.
+var keepSecretAllowlist = []string{
+	"listen.auth.bearer_token",
+	"admin.token",
+	"escalation_request_signing.key",
+}
+
 // NewServer creates a Keep server. configPath is retained so the admin reload
 // handler can re-read the file on demand.
 func NewServer(ctx context.Context, cfg Config, configPath string) (*Server, error) {
-	// Resolve secret URIs for allowlisted fields.
-	var err error
-	cfg.Listen.Auth.BearerToken, err = secrets.Resolve(ctx, cfg.Listen.Auth.BearerToken)
-	if err != nil {
-		return nil, fmt.Errorf("keep: listen.auth.bearer_token: %w", err)
-	}
-	cfg.Admin.Token, err = secrets.Resolve(ctx, cfg.Admin.Token)
-	if err != nil {
-		return nil, fmt.Errorf("keep: admin.token: %w", err)
-	}
-	cfg.EscalationRequestSigning.Key, err = secrets.Resolve(ctx, cfg.EscalationRequestSigning.Key)
-	if err != nil {
-		return nil, fmt.Errorf("keep: escalation_request_signing.key: %w", err)
+	// Resolve secret URIs in one pass over the config struct.
+	if err := secrets.ResolveConfig(ctx, &cfg, keepSecretAllowlist); err != nil {
+		return nil, err
 	}
 
 	var pdp PolicyDecisionPoint

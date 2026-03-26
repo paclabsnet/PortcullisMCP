@@ -30,37 +30,172 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"reflect"
 	"strings"
 
 	vault "github.com/hashicorp/vault/api"
 )
 
-// Resolve resolves a secret URI to its plaintext value.
-// If the string contains no "://" it is returned unchanged (direct/passthrough mode).
-// Secret values are never included in returned errors.
-func Resolve(ctx context.Context, raw string) (string, error) {
+// restrictedSchemes are secret URI schemes that may only be used on allowlisted
+// config fields. envvar:// and filevar:// are unrestricted and may appear anywhere.
+var restrictedSchemes = map[string]bool{
+	"vault":  true,
+	"awssec": true,
+	"gcpsec": true,
+	"azkv":   true,
+}
+
+// ResolveConfig walks cfg (must be a non-nil pointer to a struct) using
+// reflection and resolves every secret URI found in string fields.
+//
+// envvar:// and filevar:// are resolved on any field.
+// vault:// (and future cloud schemes) are only resolved when the field's
+// dotted YAML-tag path is present in allowlist; otherwise an error is returned.
+//
+// Field paths are built from yaml struct tag names (e.g. "listen.auth.bearer_token").
+// If a field has no yaml tag the Go field name is used.
+func ResolveConfig(ctx context.Context, cfg any, allowlist []string) error {
+	allowset := make(map[string]bool, len(allowlist))
+	for _, f := range allowlist {
+		allowset[f] = true
+	}
+	v := reflect.ValueOf(cfg)
+	if v.Kind() != reflect.Ptr || v.IsNil() {
+		return fmt.Errorf("secrets: ResolveConfig requires a non-nil pointer")
+	}
+	return walkValue(ctx, v.Elem(), "", allowset)
+}
+
+func walkValue(ctx context.Context, v reflect.Value, path string, allowset map[string]bool) error {
+	switch v.Kind() {
+	case reflect.Ptr:
+		if v.IsNil() {
+			return nil
+		}
+		return walkValue(ctx, v.Elem(), path, allowset)
+
+	case reflect.Struct:
+		t := v.Type()
+		for i := 0; i < v.NumField(); i++ {
+			f := t.Field(i)
+			if !f.IsExported() {
+				continue
+			}
+			name := yamlFieldName(f)
+			childPath := name
+			if path != "" {
+				childPath = path + "." + name
+			}
+			if err := walkValue(ctx, v.Field(i), childPath, allowset); err != nil {
+				return err
+			}
+		}
+
+	case reflect.String:
+		if !v.CanSet() {
+			return nil
+		}
+		resolved, err := resolve(ctx, v.String(), path, allowset)
+		if err != nil {
+			return err
+		}
+		v.SetString(resolved)
+
+	case reflect.Map:
+		for _, key := range v.MapKeys() {
+			elem := v.MapIndex(key)
+			childPath := fmt.Sprintf("%s.%v", path, key.Interface())
+			if path == "" {
+				childPath = fmt.Sprintf("%v", key.Interface())
+			}
+			switch elem.Kind() {
+			case reflect.String:
+				resolved, err := resolve(ctx, elem.String(), childPath, allowset)
+				if err != nil {
+					return err
+				}
+				v.SetMapIndex(key, reflect.ValueOf(resolved))
+			case reflect.Struct, reflect.Ptr:
+				// Map values are not addressable; copy into addressable memory.
+				cp := reflect.New(elem.Type()).Elem()
+				cp.Set(elem)
+				if err := walkValue(ctx, cp, childPath, allowset); err != nil {
+					return err
+				}
+				v.SetMapIndex(key, cp)
+			}
+		}
+
+	case reflect.Slice:
+		for i := 0; i < v.Len(); i++ {
+			childPath := fmt.Sprintf("%s[%d]", path, i)
+			if err := walkValue(ctx, v.Index(i), childPath, allowset); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// resolve resolves a single string value. path is used only for error messages.
+func resolve(ctx context.Context, raw, path string, allowset map[string]bool) (string, error) {
 	if !strings.Contains(raw, "://") {
 		return raw, nil
 	}
-
 	u, err := url.Parse(raw)
 	if err != nil {
-		return "", fmt.Errorf("secrets: invalid URI: %w", err)
+		return "", fmt.Errorf("secrets: invalid URI at field %q: %w", path, err)
 	}
-
-	switch u.Scheme {
-	case "envvar":
+	switch {
+	case u.Scheme == "envvar":
 		return resolveEnvVar(u)
-	case "filevar":
+	case u.Scheme == "filevar":
 		return resolveFileVar(u)
-	case "vault":
-		return resolveVault(ctx, u)
+	case restrictedSchemes[u.Scheme]:
+		if !allowset[path] {
+			return "", fmt.Errorf("secrets: %s:// URI is not permitted at field %q — only allowed on: %v",
+				u.Scheme, path, allowlistKeys(allowset))
+		}
+		return resolveRestricted(ctx, u)
 	default:
-		return "", fmt.Errorf("secrets: unsupported scheme %q", u.Scheme)
+		return "", fmt.Errorf("secrets: unsupported scheme %q at field %q", u.Scheme, path)
 	}
 }
 
-// resolveEnvVar handles envvar://VAR_NAME
+// resolveRestricted dispatches vault and future cloud scheme resolution.
+func resolveRestricted(ctx context.Context, u *url.URL) (string, error) {
+	switch u.Scheme {
+	case "vault":
+		return resolveVault(ctx, u)
+	default:
+		return "", fmt.Errorf("secrets: scheme %q is reserved for future use and not yet implemented", u.Scheme)
+	}
+}
+
+// allowlistKeys returns field paths from the allowset for error messages.
+func allowlistKeys(allowset map[string]bool) []string {
+	keys := make([]string, 0, len(allowset))
+	for k := range allowset {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+// yamlFieldName returns the yaml tag name for a struct field, falling back to
+// the Go field name. Tag options (e.g. ",omitempty") are stripped.
+func yamlFieldName(f reflect.StructField) string {
+	tag := f.Tag.Get("yaml")
+	if tag == "" {
+		return f.Name
+	}
+	name, _, _ := strings.Cut(tag, ",")
+	if name == "" || name == "-" {
+		return f.Name
+	}
+	return name
+}
+
+// resolveEnvVar handles envvar://VAR_NAME (two or three slashes).
 func resolveEnvVar(u *url.URL) (string, error) {
 	// envvar://VAR_NAME  ->  host = "VAR_NAME", path = ""
 	// envvar:///VAR_NAME ->  host = "",          path = "/VAR_NAME"
@@ -78,7 +213,7 @@ func resolveEnvVar(u *url.URL) (string, error) {
 	return val, nil
 }
 
-// resolveFileVar handles filevar:///path/to/file or filevar://path/to/file
+// resolveFileVar handles filevar:///path/to/file or filevar://path/to/file.
 func resolveFileVar(u *url.URL) (string, error) {
 	// Normalize: strip one leading slash if host is empty (triple-slash form gives
 	// empty host and path starting with "/"). Double-slash gives host as first
@@ -106,7 +241,7 @@ func resolveFileVar(u *url.URL) (string, error) {
 	return strings.TrimRight(string(data), "\r\n"), nil
 }
 
-// resolveVault handles vault://[mount]/[path]#[key]
+// resolveVault handles vault://[mount]/[path]#[key].
 // The Vault KV v2 data/ prefix is automatically inserted by client.KVv2.
 // If no fragment (key) is specified, the field "value" is used.
 func resolveVault(ctx context.Context, u *url.URL) (string, error) {

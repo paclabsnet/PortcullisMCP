@@ -65,7 +65,7 @@ backends:
       list_orders:    "enterprise_list_orders"
 
 escalation_request_signing:
-  key: "envvar://KEEP_SIGNING_KEY"   # must match guard's keep.escalation_request_signing_key
+  key: "envvar://KEEP_SIGNING_KEY"   # must match guard's keep.pending_escalation_request_signing_key
   ttl: 3600                    # escalation request JWT TTL in seconds (default: 3600)
 
 escalation:
