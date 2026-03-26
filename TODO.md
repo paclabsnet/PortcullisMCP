@@ -17,19 +17,6 @@ i.e. instead of running as a stdio MCP, it can run as an autonomous local proces
 - priority: medium-low
 
 
-### Task: Add Gate config option that disables the ability for users to add tokens manually
-This was a feature meant to prove the concept, and could potentially be abused.  We should
-turn if off by default, but allow the enterprise to enable the ability to post JWTs from
-the web page if it is enabled in the gate config yaml .  
-
-We should add a config setting to enable/disable the POST /tokens endpoint.   But to be
-user friendly, we should also fix index.html so it doesn't offer the JWT textarea that
-is currently available, if the manual token POST is disabled.
-
-This suggests that index.html should become a template, similar to the templates in Guard
-(and possibly Keep?) .  We should implement this in a similar way
-
-- priority: medium
 
 
 ### Task: Optionally Include the traceid in the Deny, Escalate and Workflow messages back to the user
