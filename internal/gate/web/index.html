@@ -180,6 +180,7 @@
   <ul id="token-list"><li class="empty">Loading…</li></ul>
 </section>
 
+{{if .AllowManualTokens}}
 <section>
   <h2>Add Escalation Token</h2>
   <textarea id="jwt-input" placeholder="Paste the JWT you received from your approver here…" spellcheck="false"></textarea>
@@ -188,6 +189,7 @@
     <span class="msg" id="add-msg"></span>
   </div>
 </section>
+{{end}}
 
 <script>
   const BASE = window.location.origin; // http://localhost:7777
@@ -321,6 +323,7 @@
     if (btn) deleteToken(btn.dataset.id);
   });
 
+  {{if .AllowManualTokens}}
   async function addToken() {
     const btn = document.getElementById('add-btn');
     const msg = document.getElementById('add-msg');
@@ -347,6 +350,7 @@
       btn.disabled = false;
     }
   }
+  {{end}}
 
   async function deleteToken(id) {
     try {

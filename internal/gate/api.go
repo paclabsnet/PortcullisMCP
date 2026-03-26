@@ -20,13 +20,15 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"html/template"
+	"log/slog"
 	"net"
 	"net/http"
 	"time"
 )
 
 //go:embed web/index.html
-var uiHTML []byte
+var uiHTMLSrc string
 
 // ManagementServer is a localhost-only HTTP server for escalation token CRUD,
 // OIDC token updates, and the management UI at GET /.
@@ -37,6 +39,7 @@ type ManagementServer struct {
 	identity *IdentityCache
 	cfg      MgmtAPIConfig
 	server   *http.Server
+	uiTmpl   *template.Template
 }
 
 // NewManagementServer creates a ManagementServer but does not start it.
@@ -44,7 +47,15 @@ func NewManagementServer(store *TokenStore, identity *IdentityCache, cfg MgmtAPI
 	if cfg.Port == 0 {
 		cfg.Port = 7777
 	}
-	ms := &ManagementServer{store: store, identity: identity, cfg: cfg}
+	if cfg.AllowManualTokens {
+		slog.Warn("gate: management_api.allow_manual_tokens is enabled; users can inject arbitrary escalation tokens via the management UI — disable in production")
+	}
+	ms := &ManagementServer{
+		store:    store,
+		identity: identity,
+		cfg:      cfg,
+		uiTmpl:   template.Must(template.New("index.html").Parse(uiHTMLSrc)),
+	}
 	mux := http.NewServeMux()
 
 	// UI — always served without auth so the browser can load it.
@@ -108,7 +119,10 @@ func (ms *ManagementServer) Start(ctx context.Context) error {
 
 func (ms *ManagementServer) handleUI(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write(uiHTML)
+	data := struct{ AllowManualTokens bool }{ms.cfg.AllowManualTokens}
+	if err := ms.uiTmpl.Execute(w, data); err != nil {
+		slog.Error("gate: management UI render error", "err", err)
+	}
 }
 
 func (ms *ManagementServer) handleList(w http.ResponseWriter, _ *http.Request) {
@@ -165,6 +179,10 @@ func (ms *ManagementServer) handleList(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (ms *ManagementServer) handleAdd(w http.ResponseWriter, r *http.Request) {
+	if !ms.cfg.AllowManualTokens {
+		writeError(w, http.StatusForbidden, "manual token posting is disabled; set management_api.allow_manual_tokens: true to enable")
+		return
+	}
 	var body struct {
 		Token string `json:"token"`
 	}
