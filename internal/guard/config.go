@@ -27,25 +27,43 @@ func (c Config) Validate() error {
 	if c.EscalationTokenSigning.Key == "" {
 		return fmt.Errorf("escalation_token_signing.key is required")
 	}
+	if c.Auth.BearerToken == "" && !c.Auth.AllowUnauthenticatedTokenAPIs {
+		return fmt.Errorf("auth.bearer_token is required; to allow unauthenticated token API access (development only) set auth.allow_unauthenticated_token_apis: true")
+	}
 	return nil
 }
 
 // Config holds the full portcullis-guard configuration.
 type Config struct {
-	Listen                  ListenConfig    `yaml:"listen"`
-	Keep                    KeepConfig      `yaml:"keep"`
-	EscalationTokenSigning  SigningConfig   `yaml:"escalation_token_signing"`
-	Templates               TemplatesConfig `yaml:"templates"`
-	PortcullisGateManagementPort int          `yaml:"portcullis_gate_management_port"` // gate management API port shown in post-approval instructions (default: 7777)
-	Auth                    AuthConfig      `yaml:"auth"`
-	TokenStore              TokenStoreConfig `yaml:"token_store"`
+	Listen                       ListenConfig     `yaml:"listen"`
+	Keep                         KeepConfig       `yaml:"keep"`
+	EscalationTokenSigning       SigningConfig     `yaml:"escalation_token_signing"`
+	Templates                    TemplatesConfig  `yaml:"templates"`
+	PortcullisGateManagementPort int              `yaml:"portcullis_gate_management_port"` // gate management API port shown in post-approval instructions (default: 7777)
+	Auth                         AuthConfig       `yaml:"auth"`
+	TokenStore                   TokenStoreConfig `yaml:"token_store"`
+	Limits                       LimitsConfig     `yaml:"limits"`
 }
 
 // AuthConfig controls authentication for the token API endpoints.
 // /token/unclaimed/list and /token/deposit require a valid bearer token.
 // /token/claim does not require auth — the JTI is treated as a capability.
 type AuthConfig struct {
-	BearerToken string `yaml:"bearer_token"`
+	BearerToken                   string `yaml:"bearer_token"`
+	AllowUnauthenticatedTokenAPIs bool   `yaml:"allow_unauthenticated_token_apis"`
+}
+
+// LimitsConfig controls request body, field length, and in-memory map size limits for Guard.
+// Zero values are replaced with defaults at server startup.
+type LimitsConfig struct {
+	MaxRequestBodyBytes   int `yaml:"max_request_body_bytes"`   // default: 524288 (512 KB)
+	MaxUserIDBytes        int `yaml:"max_user_id_bytes"`        // default: 512
+	MaxJTIBytes           int `yaml:"max_jti_bytes"`            // default: 128
+	MaxPendingJWTBytes    int `yaml:"max_pending_jwt_bytes"`    // default: 8192
+	MaxScopeOverrideBytes int `yaml:"max_scope_override_bytes"` // default: 16384
+	MaxPendingRequests    int `yaml:"max_pending_requests"`     // default: 10000
+	MaxUnclaimedPerUser   int `yaml:"max_unclaimed_per_user"`   // default: 10000
+	MaxUnclaimedTotal     int `yaml:"max_unclaimed_total"`      // default: 100000
 }
 
 // TokenStoreConfig controls the in-memory unclaimed token store.

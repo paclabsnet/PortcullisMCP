@@ -105,3 +105,13 @@ telemetry:
   # otlp:
   #   endpoint: "http://otel-collector.internal.example.com:4318"  # OTLP HTTP endpoint
   #   insecure: true  # set false (default) to require TLS
+
+# limits:
+#   max_request_body_bytes: 1048576
+#   max_server_name_bytes: 256
+#   max_tool_name_bytes: 256
+#   max_user_id_bytes: 512
+#   max_trace_id_bytes: 128
+#   max_session_id_bytes: 128
+#   max_reason_bytes: 4096
+#   max_log_batch_size: 1000

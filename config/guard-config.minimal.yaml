@@ -12,3 +12,6 @@ templates:
   dir: "./internal/guard/templates"   # adjust to match your working directory
 
 portcullis_gate_management_port: 7777
+
+auth:
+  allow_unauthenticated_token_apis: true  # development only — remove in production

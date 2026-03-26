@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"time"
 )
 
 // GuardClient calls the portcullis-guard token API on behalf of Gate.
@@ -43,8 +44,9 @@ func NewGuardClient(cfg GuardConfig) *GuardClient {
 
 // unclaimedTokenInfo describes a single unclaimed token returned by Guard.
 type unclaimedTokenInfo struct {
-	JTI string `json:"jti"`
-	Raw string `json:"raw"`
+	JTI       string    `json:"jti"`
+	Raw       string    `json:"raw"`
+	ExpiresAt time.Time `json:"expires_at"`
 }
 
 // ListUnclaimedTokens returns all tokens that Guard holds for userID but have

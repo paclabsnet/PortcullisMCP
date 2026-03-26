@@ -10,29 +10,16 @@
 
 
 
-### Task: Add Secret Management to Gate [DONE]
-Gate doesn't currently perform the YAML secret resolution that is done by Keep and Guard.
-
-Whether or not we include support for vault-style secrets, we can and should use the same
-mechanism for environment variables and files
-
-Guidelines:
-  - Gate should run in degraded mode, which is already a defined failure mode for Gate. It does not stop running, because that
-    would make it impossible for the user to determine what the problem is, it would just appear that Portcullis wasn't responding
-    without any feedback. It is better for Gate to remain operational and return error messages to the user and Agent when the
-    agent tries to use the MCPs
-
-priority: high
 
 
 
-
-
-
-
-### Task: Input sanitizing at Keep and Guard
+### Task: Input sanitizing at Keep and Guard [DONE]
 - standard good hygiene
 - priority: medium
+- Completed in v0.2.11: LimitsConfig added to Keep and Guard configs; body size limits,
+  field length caps, log batch validation, and decision-field enum validation implemented.
+  Guard token-claim surface hardened: auth required by default, AllowUnauthenticatedTokenAPIs
+  flag added, expires_at returned in unclaimed list, remote_addr logged on claim.
 
 
 
@@ -83,17 +70,12 @@ for different service / tool combos
 ## Security Review
 
 
-1. High: Guard token-claim surface is capability-based and can be open depending on config
-- Claim endpoint intentionally unauthenticated: server.go:139
-- Guard can run with no bearer token protection for token APIs: server.go:385
-- Unclaimed-list response includes raw token material: server.go:414
-  
-Why this is major:
-- Security posture depends heavily on deployment hardening.
-- In permissive deployments, token retrieval paths expose high-value artifacts.
-
-Suggested direction:
-- Require auth by default for token APIs, return only metadata from list endpoints, and keep raw token retrieval tightly scoped/authenticated.
+1. [RESOLVED v0.2.11] Guard token-claim surface is capability-based and can be open depending on config
+- Auth is now required by default for token APIs; deployers must explicitly set
+  auth.allow_unauthenticated_token_apis: true to opt out (development/sandbox only).
+- Guard fails fast at startup if no bearer token is configured and the flag is not set.
+- expires_at is now included in the unclaimed-list response.
+- remote_addr is now logged on every token claim for audit purposes.
 
 
 
@@ -137,6 +119,114 @@ Suggested direction:
 
 
   
+## Plan for Input Sanitizing and Guard Token-Claim Hardening
+
+
+input_sanitizing:
+    - id: 1
+      title: Request body size limits (Keep and Guard HTTP servers)
+      details: Add http.MaxBytesReader at the start of every handler that decodes a request body.
+      constants:
+        keep:
+          name: maxRequestBodyBytes
+          value: 1 << 20
+          bytes: 1048576
+          note: covers large Arguments maps
+        guard:
+          name: maxRequestBodyBytes
+          value: 512 << 10
+          bytes: 524288
+          note: no tool arguments, only JWTs and small payloads
+      note:
+        - these restrictions should be in the config file, not hard-coded
+        - 1048576 and 524288 are reasonable defaults 
+        - normalize server.go structure first, if needed
+
+    - id: 2
+      title: String field length caps (Keep and Guard)
+      details: Define a set of constants and validate after decoding.
+      limits:
+        server_name_bytes: 256
+        tool_name_bytes: 256
+        user_id_bytes: 512
+        trace_id_bytes: 128
+        session_id_bytes: 128
+        reason_bytes: 4096
+        jti_bytes: 128
+        pending_jwt_bytes: 8192
+        scope_override_bytes: 16384                
+      rationale:
+        server_name_tool_name: no legitimate tool name is longer
+        trace_id_session_id: UUIDs are 36 chars; leave headroom for other formats
+        reason: enough for any human-readable explanation
+        jti: UUIDs are 36 chars
+      applied_in:
+        keep:
+          - handleCall
+          - handleAuthorize
+          - handleLog
+        guard:
+          - handlePending
+          - handleTokenDeposit
+          - handleTokenClaim
+      notes:
+        - the limits above should be the defaults, but it should be possible to override them in the config files
+
+    - id: 3
+      title: Decision field enum validation in handleLog
+      details: Gate sends decision log entries to Keep.
+      validate:
+        field: decision
+        allowed:
+          - allow
+          - deny
+          - escalate
+          - workflow
+        on_invalid: reject individual records that are invalid, process the rest
+
+    - id: 4
+      title: Unclaimed-token list size cap
+      details: pendingRequests and unclaimedTokens in Guard currently have no size limits.
+      cap:
+        per_user_entries: 10000
+        total_entries: 100000
+        on_exceeded: return 503
+      notes:
+        - the 10,000 and 100,000 entry restrictions should be in the config file, 
+          with 10000 and 100000 as defaults
+        - those entry caps should only apply if we're holding the tokens in memory. If we're
+          using a distributed cache, we'll let the cache enforce its own limits
+      
+
+guard_token_claim_surface:
+    - id: 5
+      title: Require auth by default on token APIs
+      details:
+        - Change requireTokenAuth to deny by default when cfg.Auth.BearerToken == "".
+        - Add config field auth.allow_unauthenticated_token_apis: true to explicitly re-enable open posture for development.
+        - Emit a loud slog.Warn at startup if allow_unauthenticated_token_apis is set.
+        - Update config validation to error when Guard has no bearer token and this flag is not set.
+          - errors here should cause Guard to fail-fast, which is the intended behavior if there's no bearer token
+            and API calls without a bearer token are denied
+      notes:
+        - this excludes `/token/claim` , which does not require a bearer token
+
+    - id: 6
+      title: Update the response data for /token/unclaimed/list
+      details:
+        - Return the raw JWT, jti, and expires_at.
+        - Gate will need to be modified to expect expires_at
+
+    - id: 7
+      title: Log requester IP on token claim
+      details:
+        - handleTokenClaim already logs claim events.
+        - Add r.RemoteAddr to the slog entry for audit value.
+
+not_proposed:
+    - Rate limiting (needs a storage design decision: in-memory vs Redis; deferred)
+    - Tool argument content inspection (belongs to PDP, not sanitizing)
+    - Argument map depth limits (complexity is high; body size limit covers worst case)
 
 
 
