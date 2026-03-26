@@ -33,6 +33,7 @@ import (
 
 	"github.com/paclabsnet/PortcullisMCP/internal/gate/localfs"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
+	"github.com/paclabsnet/PortcullisMCP/internal/shared/secrets"
 	"github.com/paclabsnet/PortcullisMCP/internal/telemetry"
 )
 
@@ -91,8 +92,21 @@ type Gate struct {
 	pendingEscalations map[string]pendingEscalation
 }
 
+// gateSecretAllowlist lists the config fields eligible for vault:// and other
+// restricted secret URI schemes. envvar:// and filevar:// may be used on any field.
+var gateSecretAllowlist = []string{
+	"keep.auth.token",
+	"keep.auth.key",
+	"guard.bearer_token",
+	"management_api.shared_secret",
+}
+
 // New creates a Gate from the given config. Call Run to start serving.
 func New(ctx context.Context, cfg Config) (*Gate, error) {
+	if err := secrets.ResolveConfig(ctx, &cfg, gateSecretAllowlist); err != nil {
+		return nil, fmt.Errorf("resolve secrets: %w", err)
+	}
+
 	identity, err := NewIdentityCache(ctx, cfg.Identity)
 	if err != nil {
 		return nil, fmt.Errorf("resolve identity: %w", err)

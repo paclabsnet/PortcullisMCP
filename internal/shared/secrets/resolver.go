@@ -158,7 +158,8 @@ func resolve(ctx context.Context, raw, path string, allowset map[string]bool) (s
 		}
 		return resolveRestricted(ctx, u)
 	default:
-		return "", fmt.Errorf("secrets: unsupported scheme %q at field %q", u.Scheme, path)
+		// Not a secret URI scheme (e.g. http://, https://). Leave the value unchanged.
+		return raw, nil
 	}
 }
 

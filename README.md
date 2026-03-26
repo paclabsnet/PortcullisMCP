@@ -206,6 +206,32 @@ See `docs/policy/opa-examples.md` for detailed policy examples and testing guida
 go test ./...
 ```
 
+## Portcullis-Gate Error Handling
+
+The Gate is the MCP client that (typically) lives on the user's desktop along with their Agent.
+
+This represents the "front-end" to the Portcullis system. That creates some unusual requirements
+for Gate:
+1) Regardless of other MCPs that are made available through the Gate MCP proxy, Gate always
+   offers one specific MCP tool: `portcullis_status` 
+  - `portcullis_status` allows the user and the Agent to check on the status of Portcullis-Gate
+  - when the Gate is running properly, `portcullis_status` will respond with the status of
+    the Gate itself, as well as a health status report from Portcullis-Keep and Portcullis-Guard
+2) If Gate's configuration files are mis-configured, or there is a network issue accessing the 
+   rest of the system, Gate doesn't shut down. Instead, Gate transitions to "Degraded Mode"
+   - Degraded Mode changes the output of `portcullis_status`
+     - when queried, it will return a description of the error that Gate is experiencing 
+       (misconfiguration, network access problems, incorrect keys, etc)
+     - this allows the user to reach out to IT support to help resolve the issue
+     - If we don't offer degraded mode, and just shut down Gate when there's a misconfiguration, the
+       user will be hard-pressed to know what is wrong.  So this represents a UX improvement
+       when an outage occurs
+
+
+
+
+
+
 ## Vault Secret URI Configuration
 
       The Portcullis Secret URI Specification
