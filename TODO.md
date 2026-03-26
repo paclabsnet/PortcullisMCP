@@ -10,7 +10,7 @@
 
 
 
-### Task: Add Secret Management to Gate
+### Task: Add Secret Management to Gate [DONE]
 Gate doesn't currently perform the YAML secret resolution that is done by Keep and Guard.
 
 Whether or not we include support for vault-style secrets, we can and should use the same

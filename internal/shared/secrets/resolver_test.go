@@ -199,19 +199,44 @@ func TestResolveConfig_FileVar_MissingPath(t *testing.T) {
 	}
 }
 
-// ---- unsupported scheme -----------------------------------------------------
+// ---- unrecognised scheme passthrough ----------------------------------------
 
-func TestResolveConfig_UnsupportedScheme(t *testing.T) {
-	_, err := wrapResolve(context.Background(), "awssm://my-secret-name", nil)
-	if err == nil {
-		t.Fatal("expected error for unsupported scheme, got nil")
+func TestResolveConfig_UnrecognisedScheme_PassedThrough(t *testing.T) {
+	// Schemes that are not secret URI schemes (http, https, ftp, etc.) must be
+	// left unchanged — they are legitimate config values such as endpoint URLs.
+	cases := []string{
+		"http://keep.internal:8080",
+		"https://guard.example.com/api",
+		"ftp://files.example.com/data",
+		"awssm://my-secret-name", // looks like a secret but not in restrictedSchemes
 	}
-	if !strings.Contains(err.Error(), "awssm") {
+	for _, raw := range cases {
+		t.Run(raw, func(t *testing.T) {
+			got, err := wrapResolve(context.Background(), raw, nil)
+			if err != nil {
+				t.Fatalf("unexpected error for %q: %v", raw, err)
+			}
+			if got != raw {
+				t.Errorf("got %q, want unchanged %q", got, raw)
+			}
+		})
+	}
+}
+
+// ---- restricted scheme on non-allowlisted field ----------------------------
+
+func TestResolveConfig_RestrictedScheme_NonAllowlisted_Error(t *testing.T) {
+	// vault:// (a restricted scheme) on a non-allowlisted field must produce
+	// a clear "not permitted" error naming the field and the scheme.
+	_, err := wrapResolve(context.Background(), "vault://secret/portcullis#key", nil)
+	if err == nil {
+		t.Fatal("expected error for vault:// on non-allowlisted field, got nil")
+	}
+	if !strings.Contains(err.Error(), "vault") {
 		t.Errorf("error should contain scheme name; got: %v", err)
 	}
-	// Verify the URI path value does not leak into the error.
-	if strings.Contains(err.Error(), "my-secret-name") {
-		t.Errorf("error should not contain the URI path value; got: %v", err)
+	if !strings.Contains(err.Error(), "not permitted") {
+		t.Errorf("error should say 'not permitted'; got: %v", err)
 	}
 }
 
@@ -466,13 +491,14 @@ func TestResolveConfig_SecretValueNotInErrors(t *testing.T) {
 		t.Errorf("secret value must not appear in error message; got: %v", err)
 	}
 
-	// Also verify unsupported scheme error does not contain the secret value.
-	_, err2 := wrapResolve(context.Background(), "badscheme://"+secretValue, nil)
+	// Also verify that a restricted-scheme error on a non-allowlisted field
+	// does not leak the secret value (the URI path is part of the raw string).
+	_, err2 := wrapResolve(context.Background(), "vault://secret/"+secretValue+"#key", nil)
 	if err2 == nil {
-		t.Fatal("expected error for unsupported scheme")
+		t.Fatal("expected error for vault:// on non-allowlisted field")
 	}
 	if strings.Contains(err2.Error(), secretValue) {
-		t.Errorf("secret value must not appear in unsupported scheme error; got: %v", err2)
+		t.Errorf("secret value must not appear in restricted-scheme error; got: %v", err2)
 	}
 }
 
