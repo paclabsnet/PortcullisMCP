@@ -127,6 +127,21 @@ func TestGate_Secrets_EnvVarNotSet_ReturnsError(t *testing.T) {
 	}
 }
 
+func TestGate_New_WrapsResolverError(t *testing.T) {
+	// gate.New must wrap resolver errors with "resolve secrets:" so that
+	// operators see a clear prefix in the degraded-mode error message.
+	cfg := validBaseConfig()
+	cfg.Guard.BearerToken = "vault://secret/portcullis/gate#token" // vault:// on allowlisted field — no vault server in test
+
+	_, err := New(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("expected error from gate.New with unresolvable vault URI, got nil")
+	}
+	if !strings.Contains(err.Error(), "resolve secrets:") {
+		t.Errorf("error should be wrapped with 'resolve secrets:'; got: %v", err)
+	}
+}
+
 func TestGate_Secrets_Passthrough_Unchanged(t *testing.T) {
 	cfg := validBaseConfig()
 	cfg.Keep.Auth.Token = "plain-literal-token"
