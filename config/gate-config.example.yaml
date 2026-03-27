@@ -58,17 +58,25 @@ guard:
   #
   # approval_management_strategy: "proactive"
 
-# agent controls the message Gate returns to the AI agent when escalation is
-# required. The instructions field supports two placeholders:
-#   {reason}  - the reason the PDP gave for requiring escalation
-#   {url}     - the approval URL (format depends on approval_management_strategy)
+# agent controls the messages Gate returns to the AI agent for deny, escalation,
+# and workflow responses. Each instructions field is a template; omit any
+# placeholder to hide that information from the agent.
 #
-# If omitted, a built-in default is used:
-#   "Escalation required: {reason}\n\nPresent this complete URL to the user so
-#    they can click it to approve the request. Do not truncate or shorten the
-#    URL:\n{url}"
+# Supported placeholders:
+#   approval.instructions: {reason}, {url}, {trace_id}
+#   deny.instructions:     {reason}, {trace_id}
 #
 # agent:
+#
+#   # Message shown when escalation or workflow approval is required.
+#   # Default:
+#   #   Escalation required: {reason}
+#   #
+#   #   Present this complete URL to the user so they can click it to approve
+#   #   the request. Do not truncate or shorten the URL:
+#   #   {url}
+#   #
+#   #   Trace ID: {trace_id}
 #   approval:
 #     instructions: |
 #       Action required: {reason}
@@ -76,7 +84,19 @@ guard:
 #       Ask the user to open the following link to approve this request:
 #       {url}
 #
-#       Once approved, retry the operation.
+#       Once approved, retry the operation. Trace ID: {trace_id}
+#
+#   # Message shown when a request is denied by policy.
+#   # Default:
+#   #   Access denied: {reason}
+#   #
+#   #   If you believe this is incorrect, contact your security team and
+#   #   reference trace ID: {trace_id}
+#   deny:
+#     instructions: |
+#       This action is not permitted: {reason}
+#
+#       To request access, contact your security team and quote trace ID: {trace_id}
 
 telemetry:
   # Supported exporters:
