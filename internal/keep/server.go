@@ -574,11 +574,21 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, int64(s.cfg.Limits.MaxRequestBodyBytes))
 	}
 
-	var entries []DecisionLogEntry
-	if err := json.NewDecoder(r.Body).Decode(&entries); err != nil {
+	var batch struct {
+		APIVersion string             `json:"api_version"`
+		Entries    []DecisionLogEntry `json:"entries"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+
+	if err := checkAPIVersion(batch.APIVersion); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	entries := batch.Entries
 
 	if s.cfg.Limits.MaxLogBatchSize > 0 && len(entries) > s.cfg.Limits.MaxLogBatchSize {
 		writeError(w, http.StatusBadRequest,

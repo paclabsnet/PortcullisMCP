@@ -90,8 +90,15 @@ func (f *Forwarder) SendLogs(ctx context.Context, entries []DecisionLogEntry) er
 	if len(entries) == 0 {
 		return nil
 	}
+	batch := struct {
+		APIVersion string             `json:"api_version,omitempty"`
+		Entries    []DecisionLogEntry `json:"entries"`
+	}{
+		APIVersion: shared.APIVersion,
+		Entries:    entries,
+	}
 	var result map[string]interface{}
-	return f.post(ctx, "/log", entries, &result)
+	return f.post(ctx, "/log", batch, &result)
 }
 
 func (f *Forwarder) post(ctx context.Context, path string, body, out any) error {
