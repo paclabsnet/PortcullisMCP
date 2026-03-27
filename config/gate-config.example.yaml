@@ -77,7 +77,7 @@ guard:
 #   #   {url}
 #   #
 #   #   Trace ID: {trace_id}
-#   approval:
+#   require_approval:
 #     instructions: |
 #       Action required: {reason}
 #

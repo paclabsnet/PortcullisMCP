@@ -514,9 +514,9 @@ func (g *Gate) isProactive() bool {
 	return g.cfg.Guard.ApprovalManagementStrategy == "proactive"
 }
 
-// defaultApprovalInstructions is the built-in escalation message template.
+// defaultRequireApprovalInstructions is the built-in escalation/workflow message template.
 // Supports {reason}, {url}, and {trace_id} placeholders.
-const defaultApprovalInstructions = "Escalation required: {reason}\n\nPresent this complete URL to the user so they can click it to approve the request. Do not truncate or shorten the URL:\n{url}\n\nTrace ID: {trace_id}"
+const defaultRequireApprovalInstructions = "Escalation required: {reason}\n\nPresent this complete URL to the user so they can click it to approve the request. Do not truncate or shorten the URL:\n{url}\n\nTrace ID: {trace_id}"
 
 // defaultDenyInstructions is the built-in deny message template.
 // Supports {reason} and {trace_id} placeholders.
@@ -567,9 +567,9 @@ func (g *Gate) buildEscalationMessage(e *shared.EscalationPendingError, traceID 
 		return msg
 	}
 
-	instructions := g.cfg.Agent.Approval.Instructions
+	instructions := g.cfg.Agent.RequireApproval.Instructions
 	if instructions == "" {
-		instructions = defaultApprovalInstructions
+		instructions = defaultRequireApprovalInstructions
 	}
 
 	msg := strings.ReplaceAll(instructions, "{reason}", e.Reason)

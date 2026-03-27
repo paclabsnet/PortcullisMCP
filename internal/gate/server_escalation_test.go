@@ -109,7 +109,7 @@ func TestBuildEscalationMessage_CustomInstructions(t *testing.T) {
 				ApprovalManagementStrategy: "proactive",
 			},
 			Agent: AgentConfig{
-				Approval: AgentApprovalConfig{
+				RequireApproval: AgentRequireApprovalConfig{
 					Instructions: "Please visit {url} for: {reason}",
 				},
 			},
@@ -218,7 +218,7 @@ func TestBuildEscalationMessage_CustomInstructions_TraceIDOmitted(t *testing.T) 
 				ApprovalManagementStrategy: "proactive",
 			},
 			Agent: AgentConfig{
-				Approval: AgentApprovalConfig{
+				RequireApproval: AgentRequireApprovalConfig{
 					Instructions: "Approve at {url} — reason: {reason}",
 				},
 			},
