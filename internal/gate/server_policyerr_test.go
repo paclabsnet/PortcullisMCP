@@ -64,11 +64,11 @@ func TestPolicyErrToResult_Deny_Sentinel(t *testing.T) {
 	}
 }
 
-func TestPolicyErrToResult_DenyError_IncludesReasonAndTraceID(t *testing.T) {
-	// DenyError carries reason text and trace ID from Keep's 403 body.
+func TestPolicyErrToResult_DenyError_PrefersKeepTraceID(t *testing.T) {
+	// Gate must show Keep's trace ID (what Keep logged) not its own local UUID.
 	g := newGateForPolicyErrTests("http://guard.example.com")
 	denyErr := &shared.DenyError{Reason: "user not in approved group", TraceID: "keep-trace-xyz"}
-	result, retErr := g.policyErrToResult(denyErr, "test-tool", "gate-trace-xyz")
+	result, retErr := g.policyErrToResult(denyErr, "test-tool", "gate-trace-uuid")
 	if retErr != nil {
 		t.Fatalf("expected nil error, got: %v", retErr)
 	}
@@ -79,8 +79,25 @@ func TestPolicyErrToResult_DenyError_IncludesReasonAndTraceID(t *testing.T) {
 	if !strings.Contains(text, "user not in approved group") {
 		t.Errorf("deny message should contain the reason; got: %s", text)
 	}
-	if !strings.Contains(text, "gate-trace-xyz") {
-		t.Errorf("deny message should contain the trace ID; got: %s", text)
+	if !strings.Contains(text, "keep-trace-xyz") {
+		t.Errorf("deny message should contain Keep's trace ID; got: %s", text)
+	}
+	if strings.Contains(text, "gate-trace-uuid") {
+		t.Errorf("deny message should not contain Gate's local UUID when Keep sent a trace ID; got: %s", text)
+	}
+}
+
+func TestPolicyErrToResult_DenyError_FallsBackToGateTraceID(t *testing.T) {
+	// When Keep sends no trace ID (e.g. Keep also noop), Gate's local ID is used.
+	g := newGateForPolicyErrTests("http://guard.example.com")
+	denyErr := &shared.DenyError{Reason: "not permitted", TraceID: ""}
+	result, retErr := g.policyErrToResult(denyErr, "test-tool", "gate-trace-uuid")
+	if retErr != nil {
+		t.Fatalf("expected nil error, got: %v", retErr)
+	}
+	text := policyErrText(t, result)
+	if !strings.Contains(text, "gate-trace-uuid") {
+		t.Errorf("deny message should fall back to Gate's trace ID; got: %s", text)
 	}
 }
 

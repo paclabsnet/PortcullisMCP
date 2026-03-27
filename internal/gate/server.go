@@ -664,6 +664,13 @@ func (g *Gate) policyErrToResult(err error, toolName, traceID string) (*mcp.Call
 	var denyErr *shared.DenyError
 	switch {
 	case errors.As(err, &escalationErr):
+		// Prefer the trace ID Keep sent back — it matches Keep's OTel spans and
+		// slog entries. Fall back to Gate's local ID only when Keep didn't send one
+		// (e.g. older Keep version or Keep also running noop telemetry).
+		effectiveTraceID := escalationErr.TraceID
+		if effectiveTraceID == "" {
+			effectiveTraceID = traceID
+		}
 		// Without a Guard endpoint Gate cannot poll for or claim escalation tokens,
 		// so escalation can never complete. Treat it as a deny so the agent does
 		// not present the user with an approval flow that will never resolve.
@@ -672,17 +679,22 @@ func (g *Gate) policyErrToResult(err error, toolName, traceID string) (*mcp.Call
 				"tool", toolName, "reason", escalationErr.Reason)
 			return &mcp.CallToolResult{
 				IsError: true,
-				Content: []mcp.Content{&mcp.TextContent{Text: g.buildDenyMessage(escalationErr.Reason, traceID)}},
+				Content: []mcp.Content{&mcp.TextContent{Text: g.buildDenyMessage(escalationErr.Reason, effectiveTraceID)}},
 			}, nil
 		}
 		return &mcp.CallToolResult{
 			IsError: true,
-			Content: []mcp.Content{&mcp.TextContent{Text: g.buildEscalationMessage(escalationErr, traceID)}},
+			Content: []mcp.Content{&mcp.TextContent{Text: g.buildEscalationMessage(escalationErr, effectiveTraceID)}},
 		}, nil
 	case errors.As(err, &denyErr):
+		// Same preference: use Keep's trace ID so the user can find it in Keep's logs.
+		effectiveTraceID := denyErr.TraceID
+		if effectiveTraceID == "" {
+			effectiveTraceID = traceID
+		}
 		return &mcp.CallToolResult{
 			IsError: true,
-			Content: []mcp.Content{&mcp.TextContent{Text: g.buildDenyMessage(denyErr.Reason, traceID)}},
+			Content: []mcp.Content{&mcp.TextContent{Text: g.buildDenyMessage(denyErr.Reason, effectiveTraceID)}},
 		}, nil
 	case errors.Is(err, shared.ErrDenied):
 		// Fallback for bare sentinel (e.g. fast-path deny reaching this code path).
