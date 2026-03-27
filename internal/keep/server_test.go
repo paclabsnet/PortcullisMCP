@@ -234,6 +234,63 @@ func TestServer_HandleCall_Escalate(t *testing.T) {
 
 }
 
+func TestServer_HandleCall_Escalate_ResponseIncludesTraceID(t *testing.T) {
+	pdp := &mockPDP{decision: "escalate", reason: "needs approval"}
+	srv := &Server{
+		pdp:         pdp,
+		router:      &mockRouter{},
+		workflow:    &mockWorkflow{requestID: "wf-ref"},
+		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
+		normalizer:  &passthroughNormalizer{silenced: true},
+	}
+
+	body, _ := json.Marshal(shared.EnrichedMCPRequest{ServerName: "s", ToolName: "t", TraceID: "trace-esc-99"})
+	req := httptest.NewRequest(http.MethodPost, "/call", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.handleCall(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+	// Use interface{} so we can distinguish a missing key from an empty-string value.
+	// traceID is empty in unit tests (no active OTel span), but the key must be present.
+	var result map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, ok := result["trace_id"]; !ok {
+		t.Error("202 escalation body should include trace_id key")
+	}
+}
+
+func TestServer_HandleCall_Workflow_ResponseIncludesTraceID(t *testing.T) {
+	signer, _ := NewEscalationSigner(SigningConfig{Key: "test-signing-key-32bytes!!!!!!!!"})
+	srv := &Server{
+		pdp:         &mockPDP{decision: "workflow", reason: "needs ServiceNow"},
+		router:      &mockRouter{},
+		workflow:    &mockWorkflow{requestID: "SNOW-001"},
+		signer:      signer,
+		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
+		normalizer:  &passthroughNormalizer{silenced: true},
+	}
+
+	body, _ := json.Marshal(shared.EnrichedMCPRequest{ServerName: "s", ToolName: "t", TraceID: "trace-wf-99"})
+	req := httptest.NewRequest(http.MethodPost, "/call", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.handleCall(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+	var result map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, ok := result["trace_id"]; !ok {
+		t.Error("202 workflow body should include trace_id key")
+	}
+}
+
 func TestServer_HandleCall_Escalate_NoSignerNoWorkflowRef_Returns500(t *testing.T) {
 	// When the signer is not configured AND the workflow handler returns no
 	// reference (as the URL handler does now), Keep must return 500 rather than

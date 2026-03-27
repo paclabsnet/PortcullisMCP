@@ -63,7 +63,7 @@ func TestBuildEscalationMessage_UserDrivenMode(t *testing.T) {
 		EscalationJTI: "test-jti",
 		PendingJWT: "header.payload.sig",
 	}
-	msg := g.buildEscalationMessage(e)
+	msg := g.buildEscalationMessage(e, "test-trace")
 
 	if !strings.Contains(msg, "needs approval") {
 		t.Errorf("message should contain reason; got: %s", msg)
@@ -87,7 +87,7 @@ func TestBuildEscalationMessage_ProactiveMode(t *testing.T) {
 		EscalationJTI: "test-jti-xyz",
 		PendingJWT: "header.payload.sig",
 	}
-	msg := g.buildEscalationMessage(e)
+	msg := g.buildEscalationMessage(e, "test-trace")
 
 	// Proactive: URL uses ?jti= with the JTI
 	if !strings.Contains(msg, "?jti=test-jti-xyz") {
@@ -119,7 +119,7 @@ func TestBuildEscalationMessage_CustomInstructions(t *testing.T) {
 		Reason:        "manager sign-off",
 		EscalationJTI: "jti-abc",
 	}
-	msg := g.buildEscalationMessage(e)
+	msg := g.buildEscalationMessage(e, "test-trace")
 
 	if !strings.HasPrefix(msg, "Please visit") {
 		t.Errorf("custom instructions not used; got: %s", msg)
@@ -139,7 +139,7 @@ func TestBuildEscalationMessage_FallbackToReference(t *testing.T) {
 		Reason:    "needs approval",
 		Reference: "https://servicenow.example.com/ticket/INC123",
 	}
-	msg := g.buildEscalationMessage(e)
+	msg := g.buildEscalationMessage(e, "test-trace")
 
 	if !strings.Contains(msg, "servicenow.example.com") {
 		t.Errorf("expected Reference URL as fallback; got: %s", msg)
@@ -153,7 +153,7 @@ func TestBuildEscalationMessage_NoGuardEndpoint(t *testing.T) {
 		Reason:        "needs approval",
 		PendingJWT: "header.payload.sig",
 	}
-	msg := g.buildEscalationMessage(e)
+	msg := g.buildEscalationMessage(e, "test-trace")
 
 	if !strings.Contains(msg, "needs approval") {
 		t.Errorf("message should contain reason; got: %s", msg)
@@ -168,7 +168,7 @@ func TestBuildEscalationMessage_NoURL_MisconfiguredMessage(t *testing.T) {
 		Reason: "needs approval",
 		// EscalationJTI, PendingJWT, and Reference all empty
 	}
-	msg := g.buildEscalationMessage(e)
+	msg := g.buildEscalationMessage(e, "test-trace")
 
 	if strings.Contains(msg, "Do not truncate") {
 		t.Errorf("should not show URL instructions when no URL available; got: %s", msg)
@@ -185,12 +185,55 @@ func TestBuildEscalationMessage_DefaultInstructions(t *testing.T) {
 	// When no custom instructions are configured, the default template is used.
 	g := newGateForEscalationTests(GuardConfig{Endpoint: "http://guard.example.com"})
 	e := &shared.EscalationPendingError{
-		Reason:        "needs approval",
+		Reason:     "needs approval",
 		PendingJWT: "h.p.s",
 	}
-	msg := g.buildEscalationMessage(e)
+	msg := g.buildEscalationMessage(e, "test-trace")
 
 	if !strings.Contains(msg, "Escalation required") {
 		t.Errorf("default instructions should start with 'Escalation required'; got: %s", msg)
+	}
+}
+
+func TestBuildEscalationMessage_TraceIDSubstituted(t *testing.T) {
+	// {trace_id} in the default template must be replaced with the supplied trace ID.
+	g := newGateForEscalationTests(GuardConfig{Endpoint: "http://guard.example.com"})
+	e := &shared.EscalationPendingError{
+		Reason:     "needs approval",
+		PendingJWT: "h.p.s",
+	}
+	msg := g.buildEscalationMessage(e, "trace-xyz-999")
+
+	if !strings.Contains(msg, "trace-xyz-999") {
+		t.Errorf("trace ID should be substituted into message; got: %s", msg)
+	}
+}
+
+func TestBuildEscalationMessage_CustomInstructions_TraceIDOmitted(t *testing.T) {
+	// IT team omits {trace_id} from their template — it should not appear in the output.
+	g := &Gate{
+		cfg: Config{
+			Guard: GuardConfig{
+				Endpoint:                   "http://guard.example.com",
+				ApprovalManagementStrategy: "proactive",
+			},
+			Agent: AgentConfig{
+				Approval: AgentApprovalConfig{
+					Instructions: "Approve at {url} — reason: {reason}",
+				},
+			},
+		},
+	}
+	e := &shared.EscalationPendingError{
+		Reason:        "manager sign-off",
+		EscalationJTI: "jti-omit",
+	}
+	msg := g.buildEscalationMessage(e, "trace-should-not-appear")
+
+	if strings.Contains(msg, "trace-should-not-appear") {
+		t.Errorf("trace ID should be hidden when {trace_id} not in template; got: %s", msg)
+	}
+	if !strings.Contains(msg, "manager sign-off") {
+		t.Errorf("reason should still appear; got: %s", msg)
 	}
 }

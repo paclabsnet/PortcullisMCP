@@ -293,6 +293,7 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 			"workflow_reference": wfRef,
 			"escalation_jti":     escalationJTI,
 			"pending_jwt":        pendingJWT,
+			"trace_id":           traceID,
 		})
 
 	case "workflow":
@@ -350,6 +351,7 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 			"workflow_reference": wfRef,
 			"escalation_jti":     escalationJTI,
 			"pending_jwt":        pendingJWT,
+			"trace_id":           traceID,
 		})
 
 	default:
@@ -490,6 +492,7 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 			"workflow_reference": wfRef,
 			"escalation_jti":     escalationJTI,
 			"pending_jwt":        pendingJWT,
+			"trace_id":           traceID,
 		})
 
 	case "workflow":
@@ -547,6 +550,7 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 			"workflow_reference": wfRef,
 			"escalation_jti":     escalationJTI,
 			"pending_jwt":        pendingJWT,
+			"trace_id":           traceID,
 		})
 
 	default:

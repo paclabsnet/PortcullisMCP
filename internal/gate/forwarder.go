@@ -127,13 +127,19 @@ func (f *Forwarder) post(ctx context.Context, path string, body, out any) error 
 	case http.StatusOK, http.StatusCreated:
 		return json.NewDecoder(resp.Body).Decode(out)
 	case http.StatusForbidden:
-		return shared.ErrDenied
+		var body struct {
+			Error   string `json:"error"`
+			TraceID string `json:"trace_id"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&body)
+		return &shared.DenyError{Reason: body.Error, TraceID: body.TraceID}
 	case http.StatusAccepted:
 		var body struct {
 			Reason        string `json:"reason"`
 			Reference     string `json:"workflow_reference"`
 			EscalationJTI string `json:"escalation_jti"`
 			PendingJWT    string `json:"pending_jwt"`
+			TraceID       string `json:"trace_id"`
 		}
 		_ = json.NewDecoder(resp.Body).Decode(&body)
 		return &shared.EscalationPendingError{
@@ -141,6 +147,7 @@ func (f *Forwarder) post(ctx context.Context, path string, body, out any) error 
 			Reference:     body.Reference,
 			EscalationJTI: body.EscalationJTI,
 			PendingJWT:    body.PendingJWT,
+			TraceID:       body.TraceID,
 		}
 	case http.StatusServiceUnavailable:
 		return shared.ErrPDPUnavailable

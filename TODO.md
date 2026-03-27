@@ -7,15 +7,15 @@
 
 
 
-### Task: Include the traceid in the Deny, Escalate and Workflow EnrichedMCPResponse message from Keep -> Gate
-Allows a user to escalate to the enterprise security team if they aren't allowed to do something they think they should be able to
-- priority: low
+### ~~Task: Include the traceid in the Deny, Escalate and Workflow EnrichedMCPResponse message from Keep -> Gate~~ (done)
+- Keep now includes `trace_id` in all 202 escalate/workflow bodies (deny 403 already had it)
+- `shared.DenyError` carries reason + trace_id from Keep's 403 body; unwraps to `ErrDenied`
+- `shared.EscalationPendingError` gains `TraceID` field; forwarder decodes it from 202 body
 
-
-### Task: Customize messaging for Deny / Escalate / Workflow
-The messaging that Portcullis-Gate uses to tell the Agent what has happened in a Deny / Escalate / Workflow response
-should be pulled from the config, with a sensible default.  
-- priority: low
+### ~~Task: Customize messaging for Deny / Escalate / Workflow~~ (done)
+- `agent.deny.instructions` config field; supports `{reason}` and `{trace_id}` placeholders
+- `agent.approval.instructions` updated to also support `{trace_id}`
+- IT team includes or omits placeholders to control what the agent sees
 
 
 

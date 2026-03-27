@@ -113,12 +113,32 @@ type PDPResponse struct {
 // to track and later claim the approved token from Guard.
 // PendingJWT is the raw Keep-signed escalation request JWT; Gate uses it to
 // either build the approval URL (user-driven mode) or push it proactively to Guard.
+// TraceID is the correlation ID Keep logged for this request; Gate surfaces it
+// in the agent-facing message so users can quote it to the security team.
 type EscalationPendingError struct {
 	Reason        string
 	Reference     string
 	EscalationJTI string
 	PendingJWT    string
+	TraceID       string
 }
+
+// DenyError is returned when Keep denies a request. It carries the policy
+// reason text and the trace ID so Gate can surface them in the agent-facing
+// message. Unwraps to ErrDenied so existing errors.Is checks continue to work.
+type DenyError struct {
+	Reason  string
+	TraceID string
+}
+
+func (e *DenyError) Error() string {
+	if e.Reason != "" {
+		return "portcullis: request denied by policy: " + e.Reason
+	}
+	return ErrDenied.Error()
+}
+
+func (e *DenyError) Unwrap() error { return ErrDenied }
 
 func (e *EscalationPendingError) Error() string {
 	msg := "Escalation required"
