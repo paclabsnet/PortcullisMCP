@@ -25,6 +25,14 @@ import (
 // execute the tool — gate executes it locally via its in-process filesystem session.
 const LocalFSServerName = "portcullis-localfs"
 
+// APIVersion is the current version of the Gate→Keep request protocol.
+// Gate sets this on every EnrichedMCPRequest; Keep rejects requests that
+// carry an unrecognised non-empty version so that mismatched deployments
+// fail loudly rather than silently misinterpreting request fields.
+// Increment this constant — and handle or reject the previous value in Keep —
+// whenever a breaking change is made to EnrichedMCPRequest.
+const APIVersion = "1"
+
 // AnnotatedTool pairs an MCP tool schema with the backend server name it belongs to.
 // The server name is used by portcullis-gate to route tool calls to the correct backend.
 type AnnotatedTool struct {
@@ -74,6 +82,11 @@ type EscalationToken struct {
 // EnrichedMCPRequest is the payload portcullis-gate sends to portcullis-keep
 // for every tool call that is not handled by the local fast-path.
 type EnrichedMCPRequest struct {
+	// APIVersion identifies the protocol version of this request.
+	// Gate sets this to the APIVersion constant; Keep rejects requests with an
+	// unrecognised non-empty value. Omitted by older Gate versions — Keep
+	// accepts those for backward compatibility and treats them as version "1".
+	APIVersion       string            `json:"api_version,omitempty"`
 	ServerName       string            `json:"server_name"`
 	ToolName         string            `json:"tool_name"`
 	Arguments        map[string]any    `json:"arguments"`
