@@ -168,13 +168,21 @@ func (c Config) Validate() error {
 
 // AgentConfig holds settings that control how Gate communicates with the MCP agent.
 type AgentConfig struct {
-	Approval AgentApprovalConfig `yaml:"approval"`
+	RequireApproval AgentRequireApprovalConfig `yaml:"require_approval"`
+	Deny            AgentDenyConfig            `yaml:"deny"`
 }
 
-// AgentApprovalConfig controls the message Gate returns to the agent when
-// escalation is required. Supports {reason} and {url} template placeholders.
-type AgentApprovalConfig struct {
-	// Instructions overrides the default escalation message shown to the agent.
-	// If empty, a built-in default is used.
+// AgentRequireApprovalConfig controls the message Gate returns to the agent when
+// escalation or workflow approval is required. Supports {reason}, {url}, and
+// {trace_id} template placeholders. If empty, a built-in default is used.
+type AgentRequireApprovalConfig struct {
+	Instructions string `yaml:"instructions"`
+}
+
+// AgentDenyConfig controls the message Gate returns to the agent when a
+// request is denied by policy. Supports {reason} and {trace_id} template
+// placeholders. Omit either placeholder to hide that information from the
+// agent. If empty, a built-in default (including both) is used.
+type AgentDenyConfig struct {
 	Instructions string `yaml:"instructions"`
 }

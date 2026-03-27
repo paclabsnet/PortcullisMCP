@@ -54,3 +54,14 @@ sandbox:
 # decision_logs:
 #   flush_interval: 30          # seconds between batched sends to Keep (default: 30)
 #   max_batch_size: 100         # max entries per batch (default: 100)
+
+# agent:
+#   require_approval:                   # message shown when escalation/workflow approval is required
+#     instructions: |
+#       Action required: {reason}
+#       Approve at: {url}
+#       Trace ID: {trace_id}
+#   deny:                       # message shown when a request is denied by policy
+#     instructions: |
+#       This action is not permitted: {reason}
+#       Reference trace ID {trace_id} when contacting your security team.

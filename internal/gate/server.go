@@ -514,13 +514,30 @@ func (g *Gate) isProactive() bool {
 	return g.cfg.Guard.ApprovalManagementStrategy == "proactive"
 }
 
-// defaultApprovalInstructions is the built-in escalation message template.
-// Supports {reason} and {url} placeholders.
-const defaultApprovalInstructions = "Escalation required: {reason}\n\nPresent this complete URL to the user so they can click it to approve the request. Do not truncate or shorten the URL:\n{url}"
+// defaultRequireApprovalInstructions is the built-in escalation/workflow message template.
+// Supports {reason}, {url}, and {trace_id} placeholders.
+const defaultRequireApprovalInstructions = "Escalation required: {reason}\n\nPresent this complete URL to the user so they can click it to approve the request. Do not truncate or shorten the URL:\n{url}\n\nTrace ID: {trace_id}"
+
+// defaultDenyInstructions is the built-in deny message template.
+// Supports {reason} and {trace_id} placeholders.
+const defaultDenyInstructions = "Access denied: {reason}\n\nIf you believe this is incorrect, contact your security team and reference trace ID: {trace_id}"
+
+// buildDenyMessage constructs the agent-facing message for a deny response,
+// substituting {reason} and {trace_id} in the configured deny instructions template.
+func (g *Gate) buildDenyMessage(reason, traceID string) string {
+	instructions := g.cfg.Agent.Deny.Instructions
+	if instructions == "" {
+		instructions = defaultDenyInstructions
+	}
+	msg := strings.ReplaceAll(instructions, "{reason}", reason)
+	msg = strings.ReplaceAll(msg, "{trace_id}", traceID)
+	return msg
+}
 
 // buildEscalationMessage constructs the agent-facing message for an escalation
-// response, substituting {reason} and {url} in the configured instructions template.
-func (g *Gate) buildEscalationMessage(e *shared.EscalationPendingError) string {
+// response, substituting {reason}, {url}, and {trace_id} in the configured
+// instructions template.
+func (g *Gate) buildEscalationMessage(e *shared.EscalationPendingError, traceID string) string {
 	guardEndpoint := g.cfg.Guard.Endpoint
 
 	var approvalURL string
@@ -550,13 +567,14 @@ func (g *Gate) buildEscalationMessage(e *shared.EscalationPendingError) string {
 		return msg
 	}
 
-	instructions := g.cfg.Agent.Approval.Instructions
+	instructions := g.cfg.Agent.RequireApproval.Instructions
 	if instructions == "" {
-		instructions = defaultApprovalInstructions
+		instructions = defaultRequireApprovalInstructions
 	}
 
 	msg := strings.ReplaceAll(instructions, "{reason}", e.Reason)
 	msg = strings.ReplaceAll(msg, "{url}", approvalURL)
+	msg = strings.ReplaceAll(msg, "{trace_id}", traceID)
 	return msg
 }
 
@@ -641,10 +659,18 @@ func (g *Gate) claimAllUnclaimedTokens(ctx context.Context) {
 // policyErrToResult converts a policy error (deny or escalation) from Keep into
 // an MCP tool-level error result so the agent reads the message rather than
 // seeing a JSON-RPC protocol error.
-func (g *Gate) policyErrToResult(err error, toolName, requestID string) (*mcp.CallToolResult, error) {
+func (g *Gate) policyErrToResult(err error, toolName, traceID string) (*mcp.CallToolResult, error) {
 	var escalationErr *shared.EscalationPendingError
+	var denyErr *shared.DenyError
 	switch {
 	case errors.As(err, &escalationErr):
+		// Prefer the trace ID Keep sent back — it matches Keep's OTel spans and
+		// slog entries. Fall back to Gate's local ID only when Keep didn't send one
+		// (e.g. older Keep version or Keep also running noop telemetry).
+		effectiveTraceID := escalationErr.TraceID
+		if effectiveTraceID == "" {
+			effectiveTraceID = traceID
+		}
 		// Without a Guard endpoint Gate cannot poll for or claim escalation tokens,
 		// so escalation can never complete. Treat it as a deny so the agent does
 		// not present the user with an approval flow that will never resolve.
@@ -653,20 +679,31 @@ func (g *Gate) policyErrToResult(err error, toolName, requestID string) (*mcp.Ca
 				"tool", toolName, "reason", escalationErr.Reason)
 			return &mcp.CallToolResult{
 				IsError: true,
-				Content: []mcp.Content{&mcp.TextContent{Text: "Access denied: " + escalationErr.Reason}},
+				Content: []mcp.Content{&mcp.TextContent{Text: g.buildDenyMessage(escalationErr.Reason, effectiveTraceID)}},
 			}, nil
 		}
 		return &mcp.CallToolResult{
 			IsError: true,
-			Content: []mcp.Content{&mcp.TextContent{Text: g.buildEscalationMessage(escalationErr)}},
+			Content: []mcp.Content{&mcp.TextContent{Text: g.buildEscalationMessage(escalationErr, effectiveTraceID)}},
 		}, nil
-	case errors.Is(err, shared.ErrDenied):
+	case errors.As(err, &denyErr):
+		// Same preference: use Keep's trace ID so the user can find it in Keep's logs.
+		effectiveTraceID := denyErr.TraceID
+		if effectiveTraceID == "" {
+			effectiveTraceID = traceID
+		}
 		return &mcp.CallToolResult{
 			IsError: true,
-			Content: []mcp.Content{&mcp.TextContent{Text: "Access denied: " + err.Error()}},
+			Content: []mcp.Content{&mcp.TextContent{Text: g.buildDenyMessage(denyErr.Reason, effectiveTraceID)}},
+		}, nil
+	case errors.Is(err, shared.ErrDenied):
+		// Fallback for bare sentinel (e.g. fast-path deny reaching this code path).
+		return &mcp.CallToolResult{
+			IsError: true,
+			Content: []mcp.Content{&mcp.TextContent{Text: g.buildDenyMessage("", traceID)}},
 		}, nil
 	}
-	slog.Error("keep call failed", "error", err, "tool", toolName, "request_id", requestID)
+	slog.Error("keep call failed", "error", err, "tool", toolName, "request_id", traceID)
 	return nil, err
 }
 

@@ -181,11 +181,22 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Prefer the OTel trace ID — it is what Keep's exported spans are tagged with,
+	// so it is the ID the ops team will find in Jaeger/APM when Keep has active
+	// telemetry. Fall back to the trace ID Gate stamped on the request body when
+	// Keep's exporter is noop (no spans exported, but Gate's UUID is still useful
+	// for correlating Gate-side logs with the deny/escalation message shown to
+	// the user). Gate's own decision log entries are only written for fast-path
+	// (local filesystem) decisions and are never involved in a Keep deny or
+	// escalation, so there is no cross-log inconsistency to worry about.
 	traceID := telemetry.TraceIDFromContext(ctx)
+	if traceID == "" {
+		traceID = rawReq.TraceID
+	}
 	span.SetAttributes(
 		attribute.String("tool.name", rawReq.ToolName),
 		attribute.String("server.name", rawReq.ServerName),
-		attribute.String("trace.id", rawReq.TraceID),
+		attribute.String("trace.id", traceID),
 	)
 
 	principal, normErr := s.normalizer.Normalize(ctx, rawReq.UserIdentity)
@@ -293,6 +304,7 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 			"workflow_reference": wfRef,
 			"escalation_jti":     escalationJTI,
 			"pending_jwt":        pendingJWT,
+			"trace_id":           traceID,
 		})
 
 	case "workflow":
@@ -350,6 +362,7 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 			"workflow_reference": wfRef,
 			"escalation_jti":     escalationJTI,
 			"pending_jwt":        pendingJWT,
+			"trace_id":           traceID,
 		})
 
 	default:
@@ -387,11 +400,22 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Prefer the OTel trace ID — it is what Keep's exported spans are tagged with,
+	// so it is the ID the ops team will find in Jaeger/APM when Keep has active
+	// telemetry. Fall back to the trace ID Gate stamped on the request body when
+	// Keep's exporter is noop (no spans exported, but Gate's UUID is still useful
+	// for correlating Gate-side logs with the deny/escalation message shown to
+	// the user). Gate's own decision log entries are only written for fast-path
+	// (local filesystem) decisions and are never involved in a Keep deny or
+	// escalation, so there is no cross-log inconsistency to worry about.
 	traceID := telemetry.TraceIDFromContext(ctx)
+	if traceID == "" {
+		traceID = rawReq.TraceID
+	}
 	span.SetAttributes(
 		attribute.String("tool.name", rawReq.ToolName),
 		attribute.String("server.name", rawReq.ServerName),
-		attribute.String("trace.id", rawReq.TraceID),
+		attribute.String("trace.id", traceID),
 	)
 
 	principal, normErr := s.normalizer.Normalize(ctx, rawReq.UserIdentity)
@@ -490,6 +514,7 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 			"workflow_reference": wfRef,
 			"escalation_jti":     escalationJTI,
 			"pending_jwt":        pendingJWT,
+			"trace_id":           traceID,
 		})
 
 	case "workflow":
@@ -547,6 +572,7 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 			"workflow_reference": wfRef,
 			"escalation_jti":     escalationJTI,
 			"pending_jwt":        pendingJWT,
+			"trace_id":           traceID,
 		})
 
 	default:

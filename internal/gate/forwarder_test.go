@@ -15,6 +15,7 @@
 package gate
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -23,6 +24,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -30,8 +32,6 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
-	"context"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
@@ -187,14 +187,33 @@ func TestCallTool_Allow(t *testing.T) {
 
 func TestCallTool_Deny(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error":    "user not in approved group",
+			"trace_id": "keep-trace-deny",
+		})
 	}))
 	defer srv.Close()
 
 	f := newTestForwarder(t, srv)
 	_, err := f.CallTool(context.Background(), shared.EnrichedMCPRequest{TraceID: "req-deny"})
-	if err != shared.ErrDenied {
-		t.Errorf("error = %v, want ErrDenied", err)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	// DenyError must unwrap to ErrDenied so existing errors.Is checks work.
+	if !errors.Is(err, shared.ErrDenied) {
+		t.Errorf("error = %v (%T), want error wrapping ErrDenied", err, err)
+	}
+	var denyErr *shared.DenyError
+	if !errors.As(err, &denyErr) {
+		t.Fatalf("error = %T, want *shared.DenyError", err)
+	}
+	if denyErr.Reason != "user not in approved group" {
+		t.Errorf("DenyError.Reason = %q, want \"user not in approved group\"", denyErr.Reason)
+	}
+	if denyErr.TraceID != "keep-trace-deny" {
+		t.Errorf("DenyError.TraceID = %q, want \"keep-trace-deny\"", denyErr.TraceID)
 	}
 }
 
@@ -252,6 +271,27 @@ func TestCallTool_EscalationPending_WithJWT(t *testing.T) {
 	}
 	if escErr.PendingJWT != "header.payload.signature" {
 		t.Errorf("PendingJWT = %q, want header.payload.signature", escErr.PendingJWT)
+	}
+}
+
+func TestCallTool_EscalationPending_TraceIDDecoded(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		json.NewEncoder(w).Encode(map[string]string{
+			"reason":   "approval required",
+			"trace_id": "keep-trace-esc-42",
+		})
+	}))
+	defer srv.Close()
+
+	f := newTestForwarder(t, srv)
+	_, err := f.CallTool(context.Background(), shared.EnrichedMCPRequest{TraceID: "req-esc-42"})
+	var escErr *shared.EscalationPendingError
+	if !errors.As(err, &escErr) {
+		t.Fatalf("error = %T, want *EscalationPendingError", err)
+	}
+	if escErr.TraceID != "keep-trace-esc-42" {
+		t.Errorf("EscalationPendingError.TraceID = %q, want \"keep-trace-esc-42\"", escErr.TraceID)
 	}
 }
 
