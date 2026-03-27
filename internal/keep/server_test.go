@@ -581,6 +581,26 @@ func TestServer_HandleLog_InvalidJSON(t *testing.T) {
 	}
 }
 
+func TestServer_HandleLog_BareArray_Rejected(t *testing.T) {
+	// A Gate that pre-dates the versioned envelope posts a raw JSON array.
+	// Keep must reject it with 400 — the decoder cannot unmarshal an array
+	// into the envelope struct, so the request fails before version checking.
+	srv := &Server{
+		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
+		normalizer:  &passthroughNormalizer{silenced: true},
+	}
+
+	entries := []DecisionLogEntry{{Decision: "allow", ToolName: "t", ServerName: "s"}}
+	body, _ := json.Marshal(entries) // bare array, no envelope
+	req := httptest.NewRequest(http.MethodPost, "/log", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.handleLog(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for bare array (no envelope)", w.Code)
+	}
+}
+
 func TestServer_HandleLog_WrongAPIVersion(t *testing.T) {
 	srv := &Server{
 		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
