@@ -181,11 +181,17 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	traceID := telemetry.TraceIDFromContext(ctx)
+	// Prefer the trace ID Gate stamped on the request body — it is the same ID
+	// Gate will show the user on deny/escalation, ensuring log correlation works
+	// even when Keep's OTel exporter is noop and TraceIDFromContext returns "".
+	traceID := rawReq.TraceID
+	if traceID == "" {
+		traceID = telemetry.TraceIDFromContext(ctx)
+	}
 	span.SetAttributes(
 		attribute.String("tool.name", rawReq.ToolName),
 		attribute.String("server.name", rawReq.ServerName),
-		attribute.String("trace.id", rawReq.TraceID),
+		attribute.String("trace.id", traceID),
 	)
 
 	principal, normErr := s.normalizer.Normalize(ctx, rawReq.UserIdentity)
@@ -389,11 +395,17 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	traceID := telemetry.TraceIDFromContext(ctx)
+	// Prefer the trace ID Gate stamped on the request body — it is the same ID
+	// Gate will show the user on deny/escalation, ensuring log correlation works
+	// even when Keep's OTel exporter is noop and TraceIDFromContext returns "".
+	traceID := rawReq.TraceID
+	if traceID == "" {
+		traceID = telemetry.TraceIDFromContext(ctx)
+	}
 	span.SetAttributes(
 		attribute.String("tool.name", rawReq.ToolName),
 		attribute.String("server.name", rawReq.ServerName),
-		attribute.String("trace.id", rawReq.TraceID),
+		attribute.String("trace.id", traceID),
 	)
 
 	principal, normErr := s.normalizer.Normalize(ctx, rawReq.UserIdentity)
