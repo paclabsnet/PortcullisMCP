@@ -181,12 +181,17 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Prefer the trace ID Gate stamped on the request body — it is the same ID
-	// Gate will show the user on deny/escalation, ensuring log correlation works
-	// even when Keep's OTel exporter is noop and TraceIDFromContext returns "".
-	traceID := rawReq.TraceID
+	// Prefer the OTel trace ID — it is what Keep's exported spans are tagged with,
+	// so it is the ID the ops team will find in Jaeger/APM when Keep has active
+	// telemetry. Fall back to the trace ID Gate stamped on the request body when
+	// Keep's exporter is noop (no spans exported, but Gate's UUID is still useful
+	// for correlating Gate-side logs with the deny/escalation message shown to
+	// the user). Gate's own decision log entries are only written for fast-path
+	// (local filesystem) decisions and are never involved in a Keep deny or
+	// escalation, so there is no cross-log inconsistency to worry about.
+	traceID := telemetry.TraceIDFromContext(ctx)
 	if traceID == "" {
-		traceID = telemetry.TraceIDFromContext(ctx)
+		traceID = rawReq.TraceID
 	}
 	span.SetAttributes(
 		attribute.String("tool.name", rawReq.ToolName),
@@ -395,12 +400,17 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Prefer the trace ID Gate stamped on the request body — it is the same ID
-	// Gate will show the user on deny/escalation, ensuring log correlation works
-	// even when Keep's OTel exporter is noop and TraceIDFromContext returns "".
-	traceID := rawReq.TraceID
+	// Prefer the OTel trace ID — it is what Keep's exported spans are tagged with,
+	// so it is the ID the ops team will find in Jaeger/APM when Keep has active
+	// telemetry. Fall back to the trace ID Gate stamped on the request body when
+	// Keep's exporter is noop (no spans exported, but Gate's UUID is still useful
+	// for correlating Gate-side logs with the deny/escalation message shown to
+	// the user). Gate's own decision log entries are only written for fast-path
+	// (local filesystem) decisions and are never involved in a Keep deny or
+	// escalation, so there is no cross-log inconsistency to worry about.
+	traceID := telemetry.TraceIDFromContext(ctx)
 	if traceID == "" {
-		traceID = telemetry.TraceIDFromContext(ctx)
+		traceID = rawReq.TraceID
 	}
 	span.SetAttributes(
 		attribute.String("tool.name", rawReq.ToolName),
