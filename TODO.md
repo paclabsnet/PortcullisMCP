@@ -5,15 +5,6 @@
 
 
 
-### ~~Task: Add API versioning to the logging API~~ (done)
-- `/log` now accepts `{"api_version":"1","entries":[...]}` envelope; bare array rejected with 400
-- `shared.APIVersion` constant reused — one version governs all Gate→Keep APIs
-
-
-
-
-
-
 
 
 ### Task: Include the traceid in the Deny, Escalate and Workflow EnrichedMCPResponse message from Keep -> Gate
@@ -42,7 +33,7 @@ should be pulled from the config, with a sensible default.
 
 ### Task: Support Cloud Vaults (Phase 3)
     These require importing heavy cloud-provider SDKs (AWS/GCP/Azure) and setting up complex test environments. By deferring them, we
-    keep the PR surgical and the binary size lean for the first release.
+    keep the scope of the first release a little more manageable
 
     1. awssec://: AWS Secrets Manager.
     2. gcpsec://: GCP Secret Manager.
@@ -66,11 +57,11 @@ for different service / tool combos
 
 
 
-
 ### Task: Acquire Human Credentials (at Gate)
 - [x] Token file (Option B) — Gate reads `identity.oidc.token_file`; fails hard (no OS fallback) when source is "oidc" and token is missing or invalid; `~` is now expanded correctly on read
-- [ ] Keychain storage — optional future enhancement
-- [ ] Device authorization grant (RFC 8628) — fallback for when no token file exists; deferred until need confirmed (see Implementation Details below)
+- [ ] Keychain storage — optional future  source of identity
+- [ ] Certificate - optional future source of identity
+- [ ] Device authorization grant (RFC 8628) — probably not necessary
 - priority: low
 
 
