@@ -228,6 +228,9 @@ listen:
   address: "localhost:8080"
 pdp:
   endpoint: "http://opa:8181"
+identity:
+  normalizer: "passthrough"
+  accept_forged_identities: true
 `
 	tmp := filepath.Join(t.TempDir(), "keep.yaml")
 	if err := os.WriteFile(tmp, []byte(cfgContent), 0644); err != nil {

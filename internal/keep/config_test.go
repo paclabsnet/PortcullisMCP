@@ -24,8 +24,9 @@ import (
 // validBaseConfig returns a minimal Config that passes Validate().
 func validBaseConfig() Config {
 	return Config{
-		Listen: ListenConfig{Address: "localhost:8080"},
-		PDP:    PDPConfig{Type: "opa", Endpoint: "http://opa:8181"},
+		Listen:   ListenConfig{Address: "localhost:8080"},
+		PDP:      PDPConfig{Type: "opa", Endpoint: "http://opa:8181"},
+		Identity: IdentityConfig{Normalizer: "passthrough"},
 	}
 }
 
@@ -67,14 +68,14 @@ func TestConfigValidate(t *testing.T) {
 
 		// --- identity.normalizer ---
 		{
-			name:    "normalizer empty string is valid",
+			name:    "normalizer empty string is invalid",
 			mutate:  func(c *Config) { c.Identity.Normalizer = "" },
-			wantErr: false,
+			wantErr: true,
 		},
 		{
-			name:    "normalizer strict is valid",
+			name:    "normalizer strict is invalid",
 			mutate:  func(c *Config) { c.Identity.Normalizer = "strict" },
-			wantErr: false,
+			wantErr: true,
 		},
 		{
 			name:    "normalizer passthrough is valid",
@@ -121,6 +122,26 @@ func TestConfigValidate(t *testing.T) {
 			},
 			wantErr:     true,
 			errContains: "identity.oidc_verify.jwks_url is required",
+		},
+		{
+			name: "oidc-verify http jwks_url is rejected by default",
+			mutate: func(c *Config) {
+				c.Identity.Normalizer = "oidc-verify"
+				c.Identity.OIDCVerify.Issuer = "https://issuer.example.com"
+				c.Identity.OIDCVerify.JWKSURL = "http://issuer.example.com/.well-known/jwks.json"
+			},
+			wantErr:     true,
+			errContains: "must use https://",
+		},
+		{
+			name: "oidc-verify http jwks_url allowed with override",
+			mutate: func(c *Config) {
+				c.Identity.Normalizer = "oidc-verify"
+				c.Identity.OIDCVerify.Issuer = "https://issuer.example.com"
+				c.Identity.OIDCVerify.JWKSURL = "http://issuer.example.com/.well-known/jwks.json"
+				c.Identity.OIDCVerify.AllowInsecureJWKSURL = true
+			},
+			wantErr: false,
 		},
 
 		// --- escalation.workflow.type ---

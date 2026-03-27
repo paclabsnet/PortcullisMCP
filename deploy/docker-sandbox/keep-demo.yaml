@@ -9,11 +9,10 @@ pdp:
 
 
 
-# passthrough mode: accept OS-sourced identities with all claims intact.
-# Change to normalizer: "strict" for production deployments.
+# passthrough mode (dev/PoC only): accepts all claims without verification.
 # identity:
-#  normalizer: "passthrough"
-#  accept_forged_identities: true  # suppress per-request warnings in local dev
+#   normalizer: "passthrough"
+#   accept_forged_identities: true  # suppress per-request warnings
 
 # oidc mode (demo), using a mock iDp for testing purposes.  visit https://mock-idp.dev 
 # if you want to mint new tokens with different attributes

@@ -71,100 +71,6 @@ func signToken(t *testing.T, key *rsa.PrivateKey, kid string, claims jwt.MapClai
 	return tokenString
 }
 
-// --- strictNormalizer tests ---
-
-func TestStrictNormalizer_OIDCPassesThrough(t *testing.T) {
-	n := &strictNormalizer{}
-	id := oidcIdentity()
-
-	got, err := n.Normalize(context.Background(), id)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got.UserID != id.UserID || len(got.Groups) != len(id.Groups) {
-		t.Errorf("OIDC identity should pass through unchanged; got %+v", got)
-	}
-}
-
-func TestStrictNormalizer_OSStripsDirectoryClaims(t *testing.T) {
-	n := &strictNormalizer{}
-	id := osIdentity()
-
-	got, err := n.Normalize(context.Background(), id)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got.UserID != id.UserID {
-		t.Errorf("UserID = %q, want %q", got.UserID, id.UserID)
-	}
-	if got.SourceType != "os" {
-		t.Errorf("SourceType = %q, want os", got.SourceType)
-	}
-	if len(got.Groups) != 0 {
-		t.Errorf("Groups should be empty, got %v", got.Groups)
-	}
-	if len(got.Roles) != 0 {
-		t.Errorf("Roles should be empty, got %v", got.Roles)
-	}
-	if got.Department != "" {
-		t.Errorf("Department should be empty, got %q", got.Department)
-	}
-	if len(got.AuthMethod) != 0 {
-		t.Errorf("AuthMethod should be empty, got %v", got.AuthMethod)
-	}
-	if got.DisplayName != "" {
-		t.Errorf("DisplayName should be empty, got %q", got.DisplayName)
-	}
-}
-
-func TestStrictNormalizer_OSStripsAllUnverifiedFields(t *testing.T) {
-	n := &strictNormalizer{}
-	id := osIdentity()
-	// Ensure all fields are populated before stripping
-	id.Email = "alice@example.com"
-	id.Department = "Security"
-	id.Roles = []string{"admin"}
-	id.AuthMethod = []string{"password"}
-	id.TokenExpiry = 123456789
-	id.RawToken = "secret"
-
-	got, err := n.Normalize(context.Background(), id)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// List of fields that MUST be stripped for "os" source
-	if got.Email != "" {
-		t.Errorf("Email should be stripped, got %q", got.Email)
-	}
-	if got.DisplayName != "" {
-		t.Errorf("DisplayName should be stripped, got %q", got.DisplayName)
-	}
-	if len(got.Groups) != 0 {
-		t.Errorf("Groups should be stripped, got %v", got.Groups)
-	}
-	if len(got.Roles) != 0 {
-		t.Errorf("Roles should be stripped, got %v", got.Roles)
-	}
-	if got.Department != "" {
-		t.Errorf("Department should be stripped, got %q", got.Department)
-	}
-	if len(got.AuthMethod) != 0 {
-		t.Errorf("AuthMethod should be stripped, got %v", got.AuthMethod)
-	}
-	if got.TokenExpiry != 0 {
-		t.Errorf("TokenExpiry should be stripped, got %d", got.TokenExpiry)
-	}
-
-	// Fields that MUST remain
-	if got.UserID != "alice" {
-		t.Errorf("UserID should remain, got %q", got.UserID)
-	}
-	if got.SourceType != "os" {
-		t.Errorf("SourceType should remain, got %q", got.SourceType)
-	}
-}
-
 // --- passthroughNormalizer tests ---
 
 func TestPassthroughNormalizer_AcceptsAll(t *testing.T) {
@@ -215,9 +121,9 @@ func TestOIDCVerifyingNormalizer_ValidToken(t *testing.T) {
 	raw := signToken(t, privateKey, kid, claims)
 
 	n := &oidcVerifyingNormalizer{
-		issuer:  issuer,
-		jwksURL: server.URL,
-		strict:  &strictNormalizer{},
+		issuer:     issuer,
+		jwksURL:    server.URL,
+		httpClient: &http.Client{},
 	}
 	id := shared.UserIdentity{
 		UserID:     "alice@corp.com",
@@ -265,7 +171,7 @@ func TestOIDCVerifyingNormalizer_VerifiedSubjectOverridesClaim(t *testing.T) {
 	}
 	raw := signToken(t, privateKey, kid, claims)
 
-	n := &oidcVerifyingNormalizer{issuer: issuer, jwksURL: server.URL, strict: &strictNormalizer{}}
+	n := &oidcVerifyingNormalizer{issuer: issuer, jwksURL: server.URL, httpClient: &http.Client{}}
 	
 	// Request claims to be "imposter-alice"
 	id := shared.UserIdentity{
@@ -307,10 +213,10 @@ func TestOIDCVerifyingNormalizer_AudienceMismatch(t *testing.T) {
 	raw := signToken(t, privateKey, kid, claims)
 
 	n := &oidcVerifyingNormalizer{
-		issuer:    issuer,
-		jwksURL:   server.URL,
-		audiences: []string{"expected-audience"},
-		strict:    &strictNormalizer{},
+		issuer:     issuer,
+		jwksURL:    server.URL,
+		audiences:  []string{"expected-audience"},
+		httpClient: &http.Client{},
 	}
 	id := shared.UserIdentity{SourceType: "oidc", RawToken: raw}
 
@@ -345,10 +251,10 @@ func TestOIDCVerifyingNormalizer_AudienceMatch(t *testing.T) {
 	raw := signToken(t, privateKey, kid, claims)
 
 	n := &oidcVerifyingNormalizer{
-		issuer:    issuer,
-		jwksURL:   server.URL,
-		audiences: []string{"expected-audience"},
-		strict:    &strictNormalizer{},
+		issuer:     issuer,
+		jwksURL:    server.URL,
+		audiences:  []string{"expected-audience"},
+		httpClient: &http.Client{},
 	}
 	id := shared.UserIdentity{SourceType: "oidc", RawToken: raw}
 
@@ -379,7 +285,7 @@ func TestOIDCVerifyingNormalizer_AllowMissingExpiry(t *testing.T) {
 	raw := signToken(t, privateKey, kid, claims)
 
 	// 1. Rejected by default (fail secure)
-	n1 := &oidcVerifyingNormalizer{issuer: issuer, jwksURL: server.URL, allowMissingExpiry: false, strict: &strictNormalizer{}}
+	n1 := &oidcVerifyingNormalizer{issuer: issuer, jwksURL: server.URL, allowMissingExpiry: false, httpClient: &http.Client{}}
 	id := shared.UserIdentity{SourceType: "oidc", RawToken: raw}
 	_, err := n1.Normalize(context.Background(), id)
 	if err == nil {
@@ -390,7 +296,7 @@ func TestOIDCVerifyingNormalizer_AllowMissingExpiry(t *testing.T) {
 	}
 
 	// 2. Acceptable when allowMissingExpiry=true
-	n2 := &oidcVerifyingNormalizer{issuer: issuer, jwksURL: server.URL, allowMissingExpiry: true, strict: &strictNormalizer{}}
+	n2 := &oidcVerifyingNormalizer{issuer: issuer, jwksURL: server.URL, allowMissingExpiry: true, httpClient: &http.Client{}}
 	_, err = n2.Normalize(context.Background(), id)
 	if err != nil {
 		t.Errorf("expected no error when allowMissingExpiry=true, got %v", err)
@@ -426,7 +332,7 @@ func TestOIDCVerifyingNormalizer_JWKSRefreshOnKidMiss(t *testing.T) {
 	server := httptest.NewServer(jwksHandler)
 	defer server.Close()
 
-	n := &oidcVerifyingNormalizer{issuer: issuer, jwksURL: server.URL, strict: &strictNormalizer{}}
+	n := &oidcVerifyingNormalizer{issuer: issuer, jwksURL: server.URL, httpClient: &http.Client{}}
 
 	// 1. First call with kid1 should work and populate cache
 	claims1 := jwt.MapClaims{"iss": issuer, "sub": "alice", "exp": time.Now().Add(time.Hour).Unix()}
@@ -484,7 +390,7 @@ func TestOIDCVerifyingNormalizer_ExpiredToken(t *testing.T) {
 	}
 	raw := signToken(t, privateKey, kid, claims)
 
-	n := &oidcVerifyingNormalizer{issuer: issuer, jwksURL: server.URL, strict: &strictNormalizer{}}
+	n := &oidcVerifyingNormalizer{issuer: issuer, jwksURL: server.URL, httpClient: &http.Client{}}
 	id := shared.UserIdentity{SourceType: "oidc", RawToken: raw}
 
 	_, err := n.Normalize(context.Background(), id)
@@ -515,7 +421,7 @@ func TestOIDCVerifyingNormalizer_WrongIssuer(t *testing.T) {
 	}
 	raw := signToken(t, privateKey, kid, claims)
 
-	n := &oidcVerifyingNormalizer{issuer: "https://idp.example.com", jwksURL: server.URL, strict: &strictNormalizer{}}
+	n := &oidcVerifyingNormalizer{issuer: "https://idp.example.com", jwksURL: server.URL, httpClient: &http.Client{}}
 	id := shared.UserIdentity{SourceType: "oidc", RawToken: raw}
 
 	_, err := n.Normalize(context.Background(), id)
@@ -524,28 +430,31 @@ func TestOIDCVerifyingNormalizer_WrongIssuer(t *testing.T) {
 	}
 }
 
-func TestOIDCVerifyingNormalizer_OSAppliesStrict(t *testing.T) {
-	n := &oidcVerifyingNormalizer{issuer: "https://idp.example.com", jwksURL: "http://localhost", strict: &strictNormalizer{}}
+func TestOIDCVerifyingNormalizer_OSStripsDirectoryClaims(t *testing.T) {
+	n := &oidcVerifyingNormalizer{issuer: "https://idp.example.com", jwksURL: "http://localhost", httpClient: &http.Client{}}
 	id := osIdentity()
 
 	got, err := n.Normalize(context.Background(), id)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	if got.UserID != id.UserID {
+		t.Errorf("UserID = %q, want %q", got.UserID, id.UserID)
+	}
 	if len(got.Groups) != 0 {
-		t.Errorf("OS identity groups should be stripped by oidc-verify normalizer, got %v", got.Groups)
+		t.Errorf("oidc-verify strips OS groups, got %v", got.Groups)
+	}
+	if len(got.Roles) != 0 {
+		t.Errorf("oidc-verify strips OS roles, got %v", got.Roles)
 	}
 }
 
 // --- buildIdentityNormalizer factory tests ---
 
-func TestBuildIdentityNormalizer_DefaultIsStrict(t *testing.T) {
-	n, err := buildIdentityNormalizer(IdentityConfig{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if _, ok := n.(*strictNormalizer); !ok {
-		t.Errorf("expected *strictNormalizer, got %T", n)
+func TestBuildIdentityNormalizer_EmptyNormalizerReturnsError(t *testing.T) {
+	_, err := buildIdentityNormalizer(IdentityConfig{})
+	if err == nil {
+		t.Fatal("expected error for empty normalizer, got nil")
 	}
 }
 
@@ -598,7 +507,7 @@ func TestBuildIdentityNormalizer_UnknownNormalizer(t *testing.T) {
 func TestNormalizeIdentity_HandleCallIntegration(t *testing.T) {
 	pdp := &capturingPDP{}
 	srv := &Server{
-		normalizer:  &strictNormalizer{},
+		normalizer:  &passthroughNormalizer{silenced: true},
 		pdp:         pdp,
 		router:      &mockRouter{callToolResult: &mcp.CallToolResult{}},
 		workflow:    &mockWorkflow{requestID: "wf-1"},
@@ -622,11 +531,11 @@ func TestNormalizeIdentity_HandleCallIntegration(t *testing.T) {
 	srv.handleCall(w, r)
 
 	captured := pdp.lastReq.Principal
-	if len(captured.Groups) != 0 {
-		t.Errorf("PDP received groups %v — strict normalizer should have stripped them", captured.Groups)
-	}
 	if captured.UserID != "alice" {
 		t.Errorf("PDP received UserID %q, want alice", captured.UserID)
+	}
+	if len(captured.Groups) != 1 || captured.Groups[0] != "admins" {
+		t.Errorf("PDP received groups %v, want [admins]", captured.Groups)
 	}
 }
 
@@ -643,14 +552,14 @@ func (c *capturingPDP) Evaluate(_ context.Context, req AuthorizedRequest) (share
 func TestRegisterNormalizer(t *testing.T) {
 	name := "custom-test"
 	RegisterNormalizer(name, func(cfg IdentityConfig) (IdentityNormalizer, error) {
-		return &strictNormalizer{}, nil
+		return &passthroughNormalizer{silenced: true}, nil
 	})
 
 	n, err := buildIdentityNormalizer(IdentityConfig{Normalizer: name})
 	if err != nil {
 		t.Fatalf("failed to build custom normalizer: %v", err)
 	}
-	if _, ok := n.(*strictNormalizer); !ok {
-		t.Errorf("expected *strictNormalizer, got %T", n)
+	if _, ok := n.(*passthroughNormalizer); !ok {
+		t.Errorf("expected *passthroughNormalizer, got %T", n)
 	}
 }

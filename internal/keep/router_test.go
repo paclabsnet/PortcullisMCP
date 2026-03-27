@@ -140,6 +140,40 @@ func TestRouter_BuildBackendTransport_HTTPMissingURL(t *testing.T) {
 	}
 }
 
+func TestRouter_BuildBackendTransport_SSE(t *testing.T) {
+	cfg := BackendConfig{
+		Type: "sse",
+		URL:  "https://mcp-server.example.com/sse",
+	}
+
+	transport, err := buildBackendTransport(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if transport == nil {
+		t.Fatal("expected non-nil transport")
+	}
+	if _, ok := transport.(*mcp.SSEClientTransport); !ok {
+		t.Errorf("expected *mcp.SSEClientTransport, got %T", transport)
+	}
+}
+
+func TestRouter_BuildBackendTransport_SSEMissingURL(t *testing.T) {
+	cfg := BackendConfig{
+		Type: "sse",
+	}
+
+	_, err := buildBackendTransport(cfg)
+	if err == nil {
+		t.Fatal("expected error for sse backend without URL, got nil")
+	}
+
+	expectedMsg := "requires a URL"
+	if err.Error()[len(err.Error())-len(expectedMsg):] != expectedMsg {
+		t.Errorf("error message = %q, want suffix %q", err.Error(), expectedMsg)
+	}
+}
+
 // --- checkBackendURL tests ---
 
 func TestCheckBackendURL_ValidPublicURL(t *testing.T) {

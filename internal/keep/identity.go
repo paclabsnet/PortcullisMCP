@@ -47,9 +47,6 @@ func RegisterNormalizer(name string, factory NormalizerFactory) {
 }
 
 func init() {
-	RegisterNormalizer("strict", func(cfg IdentityConfig) (IdentityNormalizer, error) {
-		return &strictNormalizer{}, nil
-	})
 	RegisterNormalizer("passthrough", func(cfg IdentityConfig) (IdentityNormalizer, error) {
 		return &passthroughNormalizer{silenced: cfg.AcceptForgedIdentities}, nil
 	})
@@ -65,37 +62,9 @@ func init() {
 			jwksURL:            cfg.OIDCVerify.JWKSURL,
 			audiences:          cfg.OIDCVerify.Audiences,
 			allowMissingExpiry: cfg.OIDCVerify.AllowMissingExpiry,
-			strict:             &strictNormalizer{},
+			httpClient:         &http.Client{Timeout: 10 * time.Second},
 		}, nil
 	})
-}
-
-// strictNormalizer passes OIDC-sourced identity through unchanged and strips
-// all directory claims from OS-sourced identity, retaining only user_id and
-// source_type. This prevents Gate from injections unverified group claims.
-type strictNormalizer struct{}
-
-func (n *strictNormalizer) Normalize(_ context.Context, id shared.UserIdentity) (shared.Principal, error) {
-	if id.SourceType != "os" {
-		return shared.Principal{
-			UserID:      id.UserID,
-			Email:       id.Email,
-			DisplayName: id.DisplayName,
-			Groups:      id.Groups,
-			Roles:       id.Roles,
-			Department:  id.Department,
-			AuthMethod:  id.AuthMethod,
-			TokenExpiry: id.TokenExpiry,
-			SourceType:  id.SourceType,
-		}, nil
-	}
-	slog.Warn("keep: os-sourced identity received — directory claims stripped; configure normalizer: passthrough for local evaluation",
-		"user_id", id.UserID,
-	)
-	return shared.Principal{
-		UserID:     id.UserID,
-		SourceType: id.SourceType,
-	}, nil
 }
 
 // passthroughNormalizer accepts all identity fields as-is. Intended for local
@@ -127,15 +96,14 @@ func (n *passthroughNormalizer) Normalize(_ context.Context, id shared.UserIdent
 }
 
 // oidcVerifyingNormalizer validates OIDC token claims before forwarding to
-// the PDP. It rejects expired tokens and, when an issuer is configured,
-// tokens not issued by that issuer. OS-sourced identities are handled by
-// the embedded strictNormalizer.
+// the PDP. It rejects expired tokens and tokens not issued by the configured
+// issuer. OS-sourced identities are stripped to user_id + source_type only.
 type oidcVerifyingNormalizer struct {
 	issuer             string
 	jwksURL            string
 	audiences          []string
 	allowMissingExpiry bool
-	strict             *strictNormalizer
+	httpClient         *http.Client // used for JWKS fetches; must have Timeout set
 
 	jwksMu sync.RWMutex
 	jwks   *jwks
@@ -156,15 +124,27 @@ type jwk struct {
 
 func (n *oidcVerifyingNormalizer) Normalize(ctx context.Context, id shared.UserIdentity) (shared.Principal, error) {
 	if id.SourceType != "oidc" {
-		return n.strict.Normalize(ctx, id)
+		slog.Warn("keep: non-oidc identity received in oidc-verify mode — directory claims stripped",
+			"user_id", id.UserID,
+			"source", id.SourceType,
+		)
+		return shared.Principal{
+			UserID:     id.UserID,
+			SourceType: id.SourceType,
+		}, nil
 	}
 
 	if id.RawToken == "" {
 		return shared.Principal{}, fmt.Errorf("oidc identity missing raw token")
 	}
 
-	// 1. Verify signature and parse claims
-	token, err := jwt.Parse(id.RawToken, n.keyFunc)
+	// 1. Verify signature and parse claims.
+	// keyFunc is a per-call closure so the request context propagates into
+	// the JWKS fetch (timeout, cancellation).
+	keyFn := func(token *jwt.Token) (interface{}, error) {
+		return n.keyFuncCtx(ctx, token)
+	}
+	token, err := jwt.Parse(id.RawToken, keyFn)
 	if err != nil {
 		return shared.Principal{}, fmt.Errorf("verify oidc token: %w", err)
 	}
@@ -273,7 +253,7 @@ func (n *oidcVerifyingNormalizer) Normalize(ctx context.Context, id shared.UserI
 	}, nil
 }
 
-func (n *oidcVerifyingNormalizer) keyFunc(token *jwt.Token) (interface{}, error) {
+func (n *oidcVerifyingNormalizer) keyFuncCtx(ctx context.Context, token *jwt.Token) (interface{}, error) {
 	if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
 		return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 	}
@@ -284,7 +264,7 @@ func (n *oidcVerifyingNormalizer) keyFunc(token *jwt.Token) (interface{}, error)
 	}
 
 	// 1. Try with cached JWKS
-	keys, err := n.getJWKS(false)
+	keys, err := n.getJWKS(ctx, false)
 	if err != nil {
 		return nil, fmt.Errorf("fetch JWKS: %w", err)
 	}
@@ -297,7 +277,7 @@ func (n *oidcVerifyingNormalizer) keyFunc(token *jwt.Token) (interface{}, error)
 
 	// 2. Kid miss: force immediate refresh and retry
 	slog.Info("JWKS kid miss; forcing immediate refresh", "kid", kid)
-	keys, err = n.getJWKS(true)
+	keys, err = n.getJWKS(ctx, true)
 	if err != nil {
 		return nil, fmt.Errorf("refresh JWKS: %w", err)
 	}
@@ -333,7 +313,7 @@ func (n *oidcVerifyingNormalizer) buildRSAPublicKey(k jwk) (*rsa.PublicKey, erro
 	}, nil
 }
 
-func (n *oidcVerifyingNormalizer) getJWKS(force bool) (*jwks, error) {
+func (n *oidcVerifyingNormalizer) getJWKS(ctx context.Context, force bool) (*jwks, error) {
 	if !force {
 		n.jwksMu.RLock()
 		if n.jwks != nil && time.Since(n.last) < 1*time.Hour {
@@ -351,7 +331,11 @@ func (n *oidcVerifyingNormalizer) getJWKS(force bool) (*jwks, error) {
 		return n.jwks, nil
 	}
 
-	resp, err := http.Get(n.jwksURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, n.jwksURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build JWKS request: %w", err)
+	}
+	resp, err := n.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

@@ -20,8 +20,9 @@ identity:
   normalizer: "oidc-verify"
   oidc_verify:
     issuer: "https://mock-idp.dev"             # Must match the 'iss' claim in your token
-    jwks_url: "https://mock-idp.dev/jwt/.well-known/jwks.json" # URL where Keep fetches public keys
-    audiences: ["portcullis-mcp"]              # Optional: must match the 'aud' claim  
+    jwks_url: "https://mock-idp.dev/jwt/.well-known/jwks.json" # Must be https:// in production
+    audiences: ["portcullis-mcp"]              # Optional: must match the 'aud' claim
+    # allow_insecure_jwks_url: true            # Permits http:// jwks_url — dev/test only
 
 backends:
   # HTTP MCP backend for demo - run the mock server with:

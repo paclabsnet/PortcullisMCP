@@ -17,27 +17,32 @@ pdp:
 
 # Identity enforcement controls how Keep handles the UserIdentity claims sent by Gate.
 identity:
-  # Normalizer selects the identity normalization strategy.
-  #   "strict" (default) — OS-sourced identities are stripped to user_id only.
-  #                        OIDC-sourced identities pass through unchanged.
-  #   "passthrough"      — All identity fields are accepted as-is. Local
-  #                        evaluation and sandbox deployments only.
-  #   "oidc-verify"      — Rejects expired OIDC tokens and tokens not issued
-  #                        by the configured issuer. OS identities are handled
-  #                        with strict stripping.
-  normalizer: "strict"
+  # Normalizer is required — Keep will not start without an explicit value.
+  #   "passthrough"  — All identity fields accepted as-is. Dev, PoC, and
+  #                    sandbox deployments only.
+  #   "oidc-verify"  — Cryptographically verifies OIDC tokens via JWKS and
+  #                    extracts claims from the verified token only. Required
+  #                    for all production deployments.
+  normalizer: "oidc-verify"
 
   # accept_forged_identities suppresses the per-request warning emitted in
   # passthrough mode. Has no effect on other normalizers.
   # accept_forged_identities: false
 
-  # Settings for oidc-verify normalizer
-  # oidc_verify:
-  #   issuer: "https://login.microsoftonline.com/<tenant-id>/v2.0"
+  # Settings for oidc-verify normalizer (required when normalizer is "oidc-verify")
+  oidc_verify:
+    issuer: "https://login.microsoftonline.com/<tenant-id>/v2.0"
+    jwks_url: "https://login.microsoftonline.com/<tenant-id>/discovery/v2.0/keys"
+    # audiences: ["<your-client-id>"]      # Optional: restrict to a specific client
+    # allow_insecure_jwks_url: true         # Permits http:// jwks_url — dev/test only; never use in production
 
 backends:
-  # stdio backends are useful for local development/testing
-  # but enterprise deployments typically use HTTP
+  # Backend types:
+  #   "stdio"  — launches a local process; suited for development and desktop tools
+  #   "http"   — Streamable HTTP (2025-03-26 MCP spec); preferred for new deployments
+  #   "sse"    — legacy HTTP+SSE transport (2024-11-05 spec); use for older MCP servers
+
+  # stdio example
   github:
     type: "stdio"
     command: "npx"
@@ -47,10 +52,15 @@ backends:
       # Use a literal value here or manage this secret through your process environment.
       GITHUB_TOKEN: "your-github-token-here"
 
-  # Streamable HTTP backends (current MCP standard, preferred for new deployments)
+  # Streamable HTTP backend (current MCP standard, preferred for new deployments)
   fetch:
     type: "http"
     url: "http://localhost:8080/mcp"
+
+  # Legacy SSE backend (for older MCP servers that have not yet migrated)
+  # legacy-service:
+  #   type: "sse"
+  #   url: "https://legacy-mcp.internal.example.com/sse"
 
   enterprise-api:
     type: "http"

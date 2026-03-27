@@ -6,7 +6,7 @@ This is a simple HTTP MCP server for testing and demonstrating PortcullisMCP wit
 
 In enterprise environments, MCP backends are typically HTTP services (not stdio processes). This mock server:
 
-- Exposes MCP tools via HTTP/SSE transport
+- Exposes MCP tools via Streamable HTTP transport (current MCP standard)
 - Simulates enterprise APIs (customer data, orders, inventory)
 - Demonstrates policy enforcement for different operation types
 

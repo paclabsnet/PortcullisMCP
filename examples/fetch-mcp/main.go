@@ -22,6 +22,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -33,7 +34,9 @@ type fetchInput struct {
 	Format string `json:"format,omitempty"` // "text" (default) or "html"
 }
 
-func handleFetch(_ context.Context, _ *mcp.CallToolRequest, in fetchInput) (*mcp.CallToolResult, any, error) {
+var fetchClient = &http.Client{Timeout: 30 * time.Second}
+
+func handleFetch(ctx context.Context, _ *mcp.CallToolRequest, in fetchInput) (*mcp.CallToolResult, any, error) {
 	if in.URL == "" {
 		return nil, nil, fmt.Errorf("url is required")
 	}
@@ -41,7 +44,11 @@ func handleFetch(_ context.Context, _ *mcp.CallToolRequest, in fetchInput) (*mcp
 		in.Format = "text"
 	}
 
-	resp, err := http.Get(in.URL) //nolint:noctx
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, in.URL, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("build request %q: %w", in.URL, err)
+	}
+	resp, err := fetchClient.Do(req)
 	if err != nil {
 		return nil, nil, fmt.Errorf("fetch %q: %w", in.URL, err)
 	}

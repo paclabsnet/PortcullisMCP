@@ -14,8 +14,8 @@ pdp:
   type: "noop"
   # endpoint: "http://localhost:8181/v1/data/portcullis/decision"
 
-# passthrough mode: accept OS-sourced identities with all claims intact.
-# Change to normalizer: "strict" for production deployments.
+# passthrough mode: accept all identity claims without verification.
+# For production, use normalizer: "oidc-verify" with oidc_verify.issuer and jwks_url.
 identity:
   normalizer: "passthrough"
   accept_forged_identities: true  # suppress per-request warnings in local dev

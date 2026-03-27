@@ -39,7 +39,7 @@ func TestAuthMiddleware_ValidToken(t *testing.T) {
 		router:      &mockRouter{},
 		workflow:    &mockWorkflow{},
 		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
-		normalizer:  &strictNormalizer{},
+		normalizer:  &passthroughNormalizer{silenced: true},
 	}
 
 	mux := http.NewServeMux()
@@ -79,7 +79,7 @@ func TestAuthMiddleware_InvalidToken(t *testing.T) {
 		router:      &mockRouter{},
 		workflow:    &mockWorkflow{},
 		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
-		normalizer:  &strictNormalizer{},
+		normalizer:  &passthroughNormalizer{silenced: true},
 	}
 
 	mux := http.NewServeMux()
@@ -152,7 +152,7 @@ func TestAuthMiddleware_Disabled(t *testing.T) {
 		router:      &mockRouter{},
 		workflow:    &mockWorkflow{},
 		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
-		normalizer:  &strictNormalizer{},
+		normalizer:  &passthroughNormalizer{silenced: true},
 	}
 
 	mux := http.NewServeMux()

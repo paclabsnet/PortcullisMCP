@@ -38,7 +38,7 @@ func NewGuardClient(cfg GuardConfig) *GuardClient {
 	return &GuardClient{
 		endpoint:    cfg.Endpoint,
 		bearerToken: cfg.BearerToken,
-		client:      &http.Client{},
+		client:      &http.Client{Timeout: 10 * time.Second},
 	}
 }
 
