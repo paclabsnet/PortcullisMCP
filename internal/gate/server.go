@@ -349,6 +349,7 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 	// This ensures all non-fast-path filesystem ops are policy-checked and audited.
 	if g.localFSTools[toolName] {
 		enriched := shared.EnrichedMCPRequest{
+			APIVersion:       shared.APIVersion,
 			ServerName:       shared.LocalFSServerName,
 			ToolName:         toolName,
 			Arguments:        args,
@@ -379,6 +380,7 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 		serverName = "unknown"
 	}
 	enriched := shared.EnrichedMCPRequest{
+		APIVersion:       shared.APIVersion,
 		ServerName:       serverName,
 		ToolName:         toolName,
 		Arguments:        args,

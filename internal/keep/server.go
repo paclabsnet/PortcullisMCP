@@ -176,6 +176,11 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := checkAPIVersion(rawReq.APIVersion); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	traceID := telemetry.TraceIDFromContext(ctx)
 	span.SetAttributes(
 		attribute.String("tool.name", rawReq.ToolName),
@@ -373,6 +378,11 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := shared.CheckFields(enrichedRequestChecks(rawReq, s.cfg.Limits)); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if err := checkAPIVersion(rawReq.APIVersion); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -743,6 +753,16 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 		"tools":             len(tools),
 		"signer_configured": s.signer != nil,
 	})
+}
+
+// checkAPIVersion returns an error if v is a non-empty, unrecognised protocol
+// version. An empty v is accepted for backward compatibility with Gate versions
+// that pre-date the api_version field.
+func checkAPIVersion(v string) error {
+	if v != "" && v != shared.APIVersion {
+		return fmt.Errorf("unsupported api_version %q: this Keep speaks version %q — upgrade portcullis-gate to match", v, shared.APIVersion)
+	}
+	return nil
 }
 
 // authMiddleware validates the bearer token if configured.
