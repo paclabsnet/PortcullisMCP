@@ -441,6 +441,30 @@ func TestServer_HandleAuthorize_WrongAPIVersion(t *testing.T) {
 	}
 }
 
+func TestServer_HandleAuthorize_EmptyAPIVersionAccepted(t *testing.T) {
+	srv := &Server{
+		pdp:         &mockPDP{decision: "allow"},
+		router:      &mockRouter{},
+		workflow:    &mockWorkflow{},
+		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
+		normalizer:  &passthroughNormalizer{silenced: true},
+	}
+
+	// No APIVersion field — backward compat with older Gate versions.
+	req := shared.EnrichedMCPRequest{
+		ServerName: "s", ToolName: "t", TraceID: "tr",
+		UserIdentity: shared.UserIdentity{UserID: "u", SourceType: "os"},
+	}
+	body, _ := json.Marshal(req)
+	r := httptest.NewRequest(http.MethodPost, "/authorize", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.handleAuthorize(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d for missing api_version (backward compat)", w.Code, http.StatusOK)
+	}
+}
+
 func TestServer_HandleListTools(t *testing.T) {
 	router := &mockRouter{
 		listToolsResult: []shared.AnnotatedTool{

@@ -171,12 +171,12 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := shared.CheckFields(enrichedRequestChecks(rawReq, s.cfg.Limits)); err != nil {
+	if err := checkAPIVersion(rawReq.APIVersion); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	if err := checkAPIVersion(rawReq.APIVersion); err != nil {
+	if err := shared.CheckFields(enrichedRequestChecks(rawReq, s.cfg.Limits)); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -377,12 +377,12 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := shared.CheckFields(enrichedRequestChecks(rawReq, s.cfg.Limits)); err != nil {
+	if err := checkAPIVersion(rawReq.APIVersion); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	if err := checkAPIVersion(rawReq.APIVersion); err != nil {
+	if err := shared.CheckFields(enrichedRequestChecks(rawReq, s.cfg.Limits)); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
