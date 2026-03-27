@@ -131,6 +131,14 @@ func TestKeep_Validation_TraceIDTooLong(t *testing.T) {
 	}
 }
 
+func logBatch(entries []DecisionLogEntry) []byte {
+	b, _ := json.Marshal(struct {
+		APIVersion string             `json:"api_version"`
+		Entries    []DecisionLogEntry `json:"entries"`
+	}{APIVersion: "1", Entries: entries})
+	return b
+}
+
 func TestKeep_Validation_Log_BatchTooLarge(t *testing.T) {
 	srv := validatedServer()
 
@@ -144,7 +152,7 @@ func TestKeep_Validation_Log_BatchTooLarge(t *testing.T) {
 			Decision:   "allow",
 		}
 	}
-	body, _ := json.Marshal(entries)
+	body := logBatch(entries)
 	req := httptest.NewRequest(http.MethodPost, "/log", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 	srv.handleLog(w, req)
@@ -175,8 +183,7 @@ func TestKeep_Validation_Log_InvalidDecision_Skipped(t *testing.T) {
 			Decision:   "allow", // valid
 		},
 	}
-	body, _ := json.Marshal(entries)
-	req := httptest.NewRequest(http.MethodPost, "/log", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/log", bytes.NewReader(logBatch(entries)))
 	w := httptest.NewRecorder()
 	srv.handleLog(w, req)
 
@@ -213,8 +220,7 @@ func TestKeep_Validation_Log_ReasonTooLong_Skipped(t *testing.T) {
 			Reason:     "normal reason",
 		},
 	}
-	body, _ := json.Marshal(entries)
-	req := httptest.NewRequest(http.MethodPost, "/log", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/log", bytes.NewReader(logBatch(entries)))
 	w := httptest.NewRecorder()
 	srv.handleLog(w, req)
 

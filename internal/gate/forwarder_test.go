@@ -423,12 +423,15 @@ func TestSendLogs_EmptyBatch(t *testing.T) {
 }
 
 func TestSendLogs_Success(t *testing.T) {
-	var received []DecisionLogEntry
+	var receivedBatch struct {
+		APIVersion string             `json:"api_version"`
+		Entries    []DecisionLogEntry `json:"entries"`
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/log" {
 			t.Errorf("path = %q, want /log", r.URL.Path)
 		}
-		json.NewDecoder(r.Body).Decode(&received)
+		json.NewDecoder(r.Body).Decode(&receivedBatch)
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]any{"status": "accepted", "count": 2})
 	}))
@@ -442,8 +445,11 @@ func TestSendLogs_Success(t *testing.T) {
 	if err := f.SendLogs(context.Background(), entries); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(received) != 2 {
-		t.Errorf("server received %d entries, want 2", len(received))
+	if receivedBatch.APIVersion != shared.APIVersion {
+		t.Errorf("api_version = %q, want %q", receivedBatch.APIVersion, shared.APIVersion)
+	}
+	if len(receivedBatch.Entries) != 2 {
+		t.Errorf("server received %d entries, want 2", len(receivedBatch.Entries))
 	}
 }
 

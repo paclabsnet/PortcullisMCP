@@ -3,39 +3,28 @@
 ## Tasks
 
 
-### Task: Improve Wrapped MCP Request / Response API
-We need to version the Wrapped MCP Request, and response to same, so we can manage the contents over time
-  -  add a version field to the wrapped MCP request Gate sends to Keep
-  -  teach Keep to validate it
-  -  add tests on both sides
-
-- priority: high , but only after we've gotten all of the core communications done, no need in versioning our API too early
 
 
-### Task: Add API versioning to the logging API
-- We need to version the logging API (how Gate sends logs to Keep)
-- priority: high , but only after we've gotten all of the core communications done, no need in versioning our API too early
+### ~~Task: Add API versioning to the logging API~~ (done)
+- `/log` now accepts `{"api_version":"1","entries":[...]}` envelope; bare array rejected with 400
+- `shared.APIVersion` constant reused — one version governs all Gate→Keep APIs
 
 
 
 
-### Task: add streamable-http access for Gate, so it can support multiple agents in parallel
-i.e. instead of running as a stdio MCP, it can run as an autonomous local process.
-- IMPORTANT! Portcullis-Gate would need to be concurrency-safe
-- priority: medium-low
 
 
 
 
-### Task: Optionally Include the traceid in the Deny, Escalate and Workflow messages back to the user
+### Task: Include the traceid in the Deny, Escalate and Workflow EnrichedMCPResponse message from Keep -> Gate
 Allows a user to escalate to the enterprise security team if they aren't allowed to do something they think they should be able to
 - priority: low
 
 
-
-### Task: Optionally create a Gate API to collect the list of DENY responses, along with trace/session information
-not sure if this is necessary. It might be helpful for troubleshooting
-- priority: very low
+### Task: Customize messaging for Deny / Escalate / Workflow
+The messaging that Portcullis-Gate uses to tell the Agent what has happened in a Deny / Escalate / Workflow response
+should be pulled from the config, with a sensible default.  
+- priority: low
 
 
 
@@ -84,6 +73,17 @@ for different service / tool combos
 - [ ] Device authorization grant (RFC 8628) — fallback for when no token file exists; deferred until need confirmed (see Implementation Details below)
 - priority: low
 
+
+
+### Task: add streamable-http access for Gate, so it can support multiple agents in parallel
+i.e. instead of running as a stdio MCP, it can run as an autonomous local process.
+- IMPORTANT! Portcullis-Gate would need to be concurrency-safe
+- priority: low
+
+
+### Task: Optionally create a Gate API to collect the list of DENY responses, along with trace/session information
+not sure if this is necessary. It might be helpful for troubleshooting
+- priority: very low
 
 
 
