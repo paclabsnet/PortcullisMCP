@@ -50,7 +50,7 @@ PortcullisMCP is a security gateway for MCP: it sits between AI agents and an or
 ## How does it work?
 
 Portcullis is a system with three parts:
-- Portcullis-Keep : the central MCP Gateway Proxy.  It is the secure checkpoint between every Agent
+- Portcullis-Keep: the central MCP Gateway Proxy.  It is the secure checkpoint between every Agent
   and every MCP tool server.
   - It validates the identity of each user as their Agents consume MCP tools
   - It enforces organization policy on every tool request, using a Policy Decision Point to evaluate 
@@ -117,19 +117,13 @@ Note that the PDP will create decision logs, both for the original 'escalate' re
 
 ## Quick Start
 
+> **Windows users:** See [docs/quickstart-windows.md](docs/quickstart-windows.md) for a step-by-step guide covering prerequisites, PATH setup, and agent configuration.
+
 ### Prerequisites
 
 - **Go 1.24+**
 - **Docker** (optional, for full demo stack)
-- **Make** (standard on Linux/Mac; see below for Windows)
-
-#### Installing Make on Windows
-If you don't have `make` installed, the easiest way is via a package manager:
-- **Winget (Built-in):** `winget install ezwinports.make`
-- **Chocolatey:** `choco install make`
-- **Scoop:** `scoop install make`
-
-Alternatively, if you have **Git for Windows** installed, you can use `mingw32-make` (you may want to alias it to `make`).
+- **Make** (standard on Linux/Mac; install via `winget install ezwinports.make` on Windows)
 
 ### Minimal (no Docker, no OPA)
 
@@ -149,7 +143,7 @@ Then configure your MCP client to launch Gate. Example for Claude Desktop (`clau
 "mcpServers": {
     "portcullis": {
         "command": "portcullis-gate",
-        "args": ["-config", "/home/you/.portcullis/gate.yaml"]
+        "args": ["-config", "~/.portcullis/gate.yaml"]
     }
 }
 ```
@@ -164,28 +158,10 @@ This path runs the complete stack: OPA with a sample policy bundle, Keep, Guard,
 
 **Prerequisites:** Go 1.24+, Docker
 
-To build the binaries and start the demo:
-
-#### Linux / Mac / Unix / Windows (familiar with golang)
 ```sh
 make build && make install && make demo-start
 ```
 
-#### Windows, Not familiar with golang
-
-The instructions for installing make on Windows are included in the Quickstart instructions above.
-
-`make build`
-
-find portcullis-gate.exe
-
-put it in `C:\Tools`
- - when you create your MCP configuration, tell it to find the binary in C:\Tools\portcullis-gate.exe
-
-finally
-`make demo-start` which will start the set of docker processes
-
-#### Docker Demo 
 Services started:
 - Keep on `http://localhost:8080`
 - Guard on `http://localhost:8444`
@@ -195,17 +171,16 @@ Services started:
 Configure Gate as above, then try these prompts with your agent:
 
 ```
-"what services are available from portcullis mcp?"
+What services are available from Portcullis MCP?
 
-"Please use portcullis to fetch the latest news from <website>"
+Please use Portcullis to fetch the latest headlines from bbc.com
 
-"Please use portcullis to query orders for customer <id>"
+Please use Portcullis to query orders for customer C001
 
-"Please use portcullis to update the name of customer <id> to Arbitrary Name"
+Please use Portcullis to update order O001 status to shipped
 ```
 
-The last request should trigger an escalation. The agent will present a link to you (the user). Click it, review the request in Guard. It should be a request to allow the update_customer tool to update the customer you  and approve it.
-Then ask the agent to try again — this time it should succeed.
+The last request should trigger an escalation. The agent will present a link — click it to open the Guard approval page at `http://localhost:8444`, review the request, and approve it. Then ask the agent to try again; it should succeed.
 
 ```sh
 # Stop the demo stack
@@ -338,41 +313,7 @@ for Gate:
 
 ## Vault Secret URI Configuration
 
-      The Portcullis Secret URI Specification
-
-      1. General Format
-      vault://[mount]/[path]#[key]
-
-      * vault://: The mandatory scheme identifying the resolver.
-      * [mount]: The name of the Secret Engine (e.g., secret, kv, production).
-      * [path]: The logical path to the secret.
-      * #[key]: The specific field name inside the secret's JSON payload.
-
-      ---
-
-      2. Examples for Vault KV v2 (Standard)
-      If your secret is at path portcullis/signing in the default secret/ mount:
-      * YAML: key: "vault://secret/portcullis/signing#key_value"
-      * Resolution:
-          1. Fetch from Vault: secret/data/portcullis/signing (the data/ is automatically handled by the SDK for KV v2).
-          2. Extract field: key_value.
-
-      3. Handling Special Cases
-      * Multiple Keys: If a secret has multiple keys (e.g., username and password), you use the same path with different anchors:
-
-      1     user: "vault://secret/db#username"
-      2     pass: "vault://secret/db#password"
-      * No Anchor: If the anchor is missing (vault://secret/my-secret), Portcullis will look for a default key named value. If that
-        doesn't exist, it returns an error.
-      * URL Encoding: If your path contains characters like # or ?, they must be URL-encoded (e.g., %23).
-
-      ---
-
-      4. Administrative Prerequisites
-      We must also document that the resolver expects the standard Vault environment variables to be set on the host:
-      * VAULT_ADDR: The URL of the Vault server.
-      * VAULT_TOKEN: The token used for authentication (or handled via Vault Agent).
-      * VAULT_NAMESPACE: (Optional) For Vault Enterprise users.
+See [docs/vault-integration.md](docs/vault-integration.md) for the full URI specification, examples, and administrative prerequisites.
 
 
 ## Contributing
@@ -392,7 +333,7 @@ Apache License 2.0. See [LICENSE](LICENSE).
 ## Common Objections
 
 **Portcullis-Keep is a single point of failure**
-The Keep servers are stateless, and can (and should) be implemented in a round-robin cluster
+The Keep servers only hold individual requests in memory, and can (and should) be implemented in a round-robin cluster
 
 **I don't have managed devices, so this won't work**
 Even if you don't have managed devices, you can still use this mechanism to enforce security
@@ -425,7 +366,7 @@ Portcullis-Keep does not care where the MCP servers are. And it doesn't send any
 We are planning on adding ways for the Portcullis-Keep to send extra information with each request, to address this need.  Having said that, if you can put the MCP servers into a private zone where they are inaccessable from the employee network, perhaps you no longer need that capability.
 
 **Is the policy managed by groups, roles, userids or something else**
-Portcullis-Keep pulls claims from the oidc-token and sends them as part of the Principal to the policy engine. Most common claims are already supported. You control the policy, so you can enforce on any criteria (or combination of criteria) that you like. Others clais can be added if necessary.
+Portcullis-Keep pulls claims from the oidc-token and sends them as part of the Principal to the policy engine. Most common claims are already supported. You control the policy, so you can enforce on any criteria (or combination of criteria) that you like. Other claims can be added if necessary.
 
 **I don't want to have to write custom policy for every tool**
 As a reference implementation, we have created a table-based policy lookup model that should make policy setup much easier. And this reference implementation has the ability to delegate to custom Rego logic.
@@ -434,9 +375,9 @@ As a reference implementation, we have created a table-based policy lookup model
 PAC.Labs provides helpdesk and consulting support for PortcullisMCP, with several tiers of support available, including 24/7, if required.
 
 **My users have several agents on their desktop, how would this work?**
-Right now, Portcullis-Gate is designed to be a stdio MCP tool interface for one Agent. So you would need to havemultiple Portcullis-Gate instances running, listening on different ports for web traffic.   
+Right now, Portcullis-Gate is designed to be a stdio MCP tool interface for one Agent. So you would need to have multiple Portcullis-Gate instances running, listening on different ports for web traffic.   
 
-We are planning on implementing a streamable-http interface for Portcullis-Gate, so that one gate can supportmultiple agents in parallel.
+We are planning on implementing a streamable-http interface for Portcullis-Gate, so that one gate can support multiple agents in parallel.
 
 **What about Telemetry?**
 OpenTelemetry is embedded into all three elements of the system.  
