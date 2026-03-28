@@ -397,8 +397,7 @@ The Keep servers are stateless, and can (and should) be implemented in a round-r
 **I don't have managed devices, so this won't work**
 Even if you don't have managed devices, you can still use this mechanism to enforce security
 on any MCP tool that is managed by the organization.  Yes, the user may call out to some MCP
-that is out of the organization's control, but one wouldn't expect that those MCPs would have access to 
-significant organization resources
+that is out of the organization's control, but one wouldn't expect that those MCPs would have access to significant organization resources
 
 **The Agents can spoof the requests**
 The Agent's MCP requests are wrapped in additional metadata that includes the user identity and
@@ -414,40 +413,47 @@ Portcullis is designed to use existing policy systems, it does not implement a p
 reference example uses OPA and Rego, but it can be modified to support other PDPs.
 
 **This won't scale to the size of my organization**
-The Portcullis-Keep can scale horizontally and each supports a large number of simultaneous connections. The 
-PDPs can be scaled horizontally as well.  You can have geographically disparate Portcullis-Keep clusters anywhere you like,
-and the regional Gate instances could be configured to talk to the regional Keep and Guard clusters.
+The Portcullis-Keep can scale horizontally and each supports a large number of simultaneous connections. The PDPs can be scaled horizontally as well.  You can have geographically disparate Portcullis-Keep clusters anywhere you like,and the regional Gate instances could be configured to talk to the regional Keep and Guard clusters.
 
 **Portcullis-Guard maintains user state, so it can't scale**
-You can use sticky sessions to help with this.  In addition, we are already planning on adding distributed caching
-to Portcullis-Guard to improve its scalability
+You can use sticky sessions to help with this.  In addition, we are already planning on adding distributed caching to Portcullis-Guard to improve its scalability
 
 **I can't have MCP servers in my network**
 Portcullis-Keep does not care where the MCP servers are. And it doesn't send any extra information to the MCP server.
 
 **My MCP Servers require additional security information with each call**
-We are planning on adding ways for the Portcullis-Keep to send extra information with each request, to address this
-need.  Having said that, if you can put the MCP servers into a private zone where they are inaccessable from the 
-employee network, perhaps you no longer need that capability.
+We are planning on adding ways for the Portcullis-Keep to send extra information with each request, to address this need.  Having said that, if you can put the MCP servers into a private zone where they are inaccessable from the employee network, perhaps you no longer need that capability.
 
 **Is the policy managed by groups, roles, userids or something else**
-Portcullis-Keep pulls claims from the oidc-token and sends them as part of the Principal to the policy engine. Most
-common claims are already supported. You control the policy, so you can enforce on any criteria (or combination of
-criteria) that you like. Others clais can be added if necessary.
+Portcullis-Keep pulls claims from the oidc-token and sends them as part of the Principal to the policy engine. Most common claims are already supported. You control the policy, so you can enforce on any criteria (or combination of criteria) that you like. Others clais can be added if necessary.
 
 **I don't want to have to write custom policy for every tool**
-As a reference implementation, we have created a table-based policy lookup model that should make policy setup much easier.
-And this reference implementation has the ability to delegate to custom Rego logic.
+As a reference implementation, we have created a table-based policy lookup model that should make policy setup much easier. And this reference implementation has the ability to delegate to custom Rego logic.
 
 **I would need helpdesk support to implement this**
-PACLabs provides helpdesk and consulting support
+PAC.Labs provides helpdesk and consulting support for PortcullisMCP, with several tiers of support available, including 24/7, if required.
 
 **My users have several agents on their desktop, how would this work?**
-Right now, Portcullis-Gate is designed to be a stdio MCP tool interface for one Agent. So you would need to have
-multiple Portcullis-Gate instances running, listening on different ports for web traffic.   
+Right now, Portcullis-Gate is designed to be a stdio MCP tool interface for one Agent. So you would need to havemultiple Portcullis-Gate instances running, listening on different ports for web traffic.   
 
-We are planning on implementing a streamable-http interface for Portcullis-Gate, so that one gate can support
-multiple agents in parallel.
+We are planning on implementing a streamable-http interface for Portcullis-Gate, so that one gate can supportmultiple agents in parallel.
+
+**What about Telemetry?**
+OpenTelemetry is embedded into all three elements of the system.  
+
+**What about monitoring**
+Portcullis-Keep includes `/healthz` and `/readyz` endpoints for monitoring
+
+**Users are complaining about policy denials**
+When we deny a request, the error message back to the user will include a `trace_id` from the telemetry. This will be mapped from Gate to Keep to PDP and back, and should provide very detailed tracing of exactly why a particular call was denied.  We also include the `trace_id` on the escalate response, although typically it is not used.
+
+**Auditors want to know that this is capturing everything**
+Every decision by OPA is logged in SIEM-friendly ways
+
+**How do I change my policies**
+If you use the OPA-based implementation, you can manage the policy like any other codebase, and build policy bundles, which can then be deployed to the OPAs.   Explaining OPA's capabilities are beyond the scope of this document, but PACLabs has extensive experience helping organizations use Policy as Code with OPA and Rego to implement policy solutions.
+
+
 
 
 

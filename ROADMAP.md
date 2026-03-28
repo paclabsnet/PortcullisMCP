@@ -86,6 +86,9 @@ Configuration option at Portculils-Gate to allow escalation tokens to be used a 
 ### Task: Enrich the capabilities of portcullis-localfs policy
 Allow IT to configure the policy to allow for local writes, deletes, et al, to certain directory trees without checking agains Portcullis-Keep
 
+### Task: Add performance monitoring to Portcullis-Keep
+Use the OpenTelemetry wrapper around HTTP calls to get detailed measurements
+
 
 
 
