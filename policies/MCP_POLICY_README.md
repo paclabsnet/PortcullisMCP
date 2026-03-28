@@ -36,6 +36,59 @@ The Rego samples are an effort to think through some of the common use cases. Th
 patterns that you can use to implement the policy that your organization needs.  We wrote the Rego policies in two
 different styles, for the implementor's benefit.
 
+## PDP Neutral
+The idea is that we don't require the use of a particular PDP.  As long as the PDP handles:
+1. JWT validation & parsing
+2. Sophisticated response objects (so you can return more than just 'allow', 'deny')
+
+You can use a JWT-based strategy to allow users to grant the Agent specific rights to perform
+specific actions on the user's behalf.
+
+The easiest PDP to get set up and running to do this work is OPA, but if that's no the right choice
+for you, it should be straightforward to adapt.
+
+## Using OPA
+
+If you do want to use OPA, these tests use the open source tool 'raygun' https://github.com/paclabsnet/raygun
+to validate the behavior of the policy logic
+
+There are two different implementations of the policy, for the benefit of the reader.
+
+One uses custom rego rules
+
+The other uses a table-driven data element, which does a fair amount of the grunt
+work for you, but will probably not scale to the most complex scenarios.
+
+**Tabular -> Custom**
+The current setup of the rules is to use the tabular rules first, and if there's no
+answer available in the table, delegate to the custom rules.  This gives the policy
+architect some flexibility.
+
+**TO REITERATE**
+You do *not* have to use the approach I've written to implement policy. You are free
+to implement policy any way you want.   The approach I offer makes it straightforward
+to offer the escalation and workflow options, but if you don't need those, you can
+enable and disable specific MCPs and tools with minimal policy logic.
+
+## Testing
+
+The raygun tests are using the 'tabular' policy path (so using the table-driven policy
+found in data.json, in the directory above this one). 
+
+## Writing your own policy
+
+The data-driven policy table is probably an easy place to get started. You don't have to
+just use the policy table, you can add custom rules to the tabular decision.rego (or
+more modularly, call out to custom policy in a different package) .
+
+## Creating your own escalation tokens
+
+For simplicity, and to demonstrate the concept, I just implemented shared-secret JWTs. There's
+no reason that the JWTs couldn't use PK signatures, it's just a hassle for me to get that set up
+for a PoC.
+
+
+
 
 
 

@@ -24,11 +24,9 @@ Acts as the local, lightweight proxy for the user's access to the MCPs.
 
 ### portcullis-keep
 Acts as a central MCP proxy, responsible for authorizing all MCP requests against corporate policy rules.
-
 - **Authorization:** Calls a PDP (e.g., OPA) to allow/deny/escalate requests using full context.
 - **Routing:** On `allow`, routes requests to the appropriate backend MCP server (stdio, HTTP, etc.).
-- **Escalation:** On `escalate`, triggers enterprise workflow plugins (ServiceNow, Webhooks, or Guard URL).
-- **Audit:** Forwards all decisions and received logs to central SIEM/audit systems.
+- **Escalation:** On `escalate`, sends information back to the `portcullis-gate` and eventually the user for authorization
 
 ### portcullis-guard
 A web-based service where users or administrators approve pending escalation requests.
