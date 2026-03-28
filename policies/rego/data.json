@@ -149,6 +149,7 @@
 				}, 
                                 "escalate": {
                                         "arg_restrictions" :[
+						{ "type":"prefix","key_path":"customer_id", "data":"" },
                                                 { "type":"gte","key_path":"customer_id", "data":0 }
                                         ]
                                 }
