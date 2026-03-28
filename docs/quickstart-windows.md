@@ -180,10 +180,10 @@ Please use Portcullis to query orders for customer C001
 ```
 
 ```
-Please use Portcullis to update order O001 status to shipped
+Please use Portcullis to update customer C001's name to Bilbo Baggins
 ```
 
-The last prompt should trigger an escalation. Your agent will return a link — click it to open the Guard approval page at `http://localhost:8444`. Review the request details and approve it. Then ask the agent to try again; it should succeed this time.
+The last prompt should trigger an escalation. Your agent will return a link — click it to open the Guard approval page at `http://localhost:8444`. Review the request details and approve it. Then ask the agent to try again; it should succeed this time. (It won't actually do anything on the back-end)
 
 ---
 
@@ -210,7 +210,7 @@ Run `docker compose -f deploy/docker-sandbox/docker-compose.yml logs` to see err
 This usually means the Makefile was opened and re-saved with spaces instead of tabs. Re-clone the repo and do not open the Makefile in Notepad.
 
 **Policy is denying everything**
-The demo ships with a sample policy that allows most read operations. If you see unexpected denials, check the OPA decision log at `http://localhost:8181/v1/data/portcullis` or look at the Keep container logs.
+The demo ships with a sample policy that allows most read operations. If you see unexpected denials, check the OPA decision log in the OPA docker container, or look at the Keep container logs.
 
 ---
 
