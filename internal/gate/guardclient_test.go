@@ -51,7 +51,7 @@ func TestRegisterPending_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	g := NewGuardClient(GuardConfig{Endpoint: srv.URL})
+	g := NewGuardClient(GuardConfig{TokenAPIEndpoint: srv.URL})
 	if err := g.RegisterPending(context.Background(), "test-jti", "header.payload.sig"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestRegisterPending_AuthFailure(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	g := NewGuardClient(GuardConfig{Endpoint: srv.URL, BearerToken: "wrong"})
+	g := NewGuardClient(GuardConfig{TokenAPIEndpoint: srv.URL, BearerToken: "wrong"})
 	if err := g.RegisterPending(context.Background(), "jti", "jwt"); err == nil {
 		t.Fatal("expected error for 401 response, got nil")
 	}
@@ -76,14 +76,14 @@ func TestRegisterPending_ServerError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	g := NewGuardClient(GuardConfig{Endpoint: srv.URL})
+	g := NewGuardClient(GuardConfig{TokenAPIEndpoint: srv.URL})
 	if err := g.RegisterPending(context.Background(), "jti", "jwt"); err == nil {
 		t.Fatal("expected error for 500 response, got nil")
 	}
 }
 
 func TestRegisterPending_NetworkError(t *testing.T) {
-	g := NewGuardClient(GuardConfig{Endpoint: "http://127.0.0.1:1"})
+	g := NewGuardClient(GuardConfig{TokenAPIEndpoint: "http://127.0.0.1:1"})
 	if err := g.RegisterPending(context.Background(), "jti", "jwt"); err == nil {
 		t.Fatal("expected network error, got nil")
 	}
@@ -98,7 +98,7 @@ func TestRegisterPending_BearerTokenSent(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	g := NewGuardClient(GuardConfig{Endpoint: srv.URL, BearerToken: "my-secret"})
+	g := NewGuardClient(GuardConfig{TokenAPIEndpoint: srv.URL, BearerToken: "my-secret"})
 	_ = g.RegisterPending(context.Background(), "j", "jwt")
 
 	if gotAuth != "Bearer my-secret" {
@@ -115,7 +115,7 @@ func TestRegisterPending_NoBearerTokenWhenNotConfigured(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	g := NewGuardClient(GuardConfig{Endpoint: srv.URL}) // no bearer token
+	g := NewGuardClient(GuardConfig{TokenAPIEndpoint: srv.URL}) // no bearer token
 	_ = g.RegisterPending(context.Background(), "j", "jwt")
 
 	if gotAuth != "" {

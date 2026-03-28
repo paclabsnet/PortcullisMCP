@@ -28,7 +28,7 @@ func newGateForStatusTests(keepURL, guardURL, degradedReason string) *Gate {
 	return &Gate{
 		cfg: Config{
 			Keep:  KeepConfig{Endpoint: keepURL},
-			Guard: GuardConfig{Endpoint: guardURL},
+			Guard: GuardConfig{EscalationApprovalEndpoint: guardURL},
 		},
 		degradedReason: degradedReason,
 	}

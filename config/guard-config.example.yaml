@@ -1,3 +1,9 @@
+# IMPORTANT: In production, place Guard behind a corporate SSO proxy (Cloudflare
+# Access, Pomerium, nginx+oauth2-proxy, etc.) to prevent agents from self-approving
+# escalations by fetching the approval URL programmatically. The proxy enforces
+# browser-based SSO on /approve; the bearer-token-protected API endpoints
+# (/token/*, /pending) should remain directly reachable by Gate only.
+# See docs/guard-sso-proxy.md for deployment examples.
 listen:
   address: "0.0.0.0:8444"
 

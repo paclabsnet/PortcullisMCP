@@ -27,7 +27,7 @@ func newGateForPolicyErrTests(guardEndpoint string) *Gate {
 	return &Gate{
 		cfg: Config{
 			Keep:  KeepConfig{Endpoint: "http://keep.example.com"},
-			Guard: GuardConfig{Endpoint: guardEndpoint},
+			Guard: GuardConfig{EscalationApprovalEndpoint: guardEndpoint},
 		},
 	}
 }
@@ -106,7 +106,7 @@ func TestPolicyErrToResult_DenyError_CustomTemplate_ReasonOnly(t *testing.T) {
 	g := &Gate{
 		cfg: Config{
 			Keep:  KeepConfig{Endpoint: "http://keep.example.com"},
-			Guard: GuardConfig{Endpoint: "http://guard.example.com"},
+			Guard: GuardConfig{EscalationApprovalEndpoint: "http://guard.example.com"},
 			Agent: AgentConfig{
 				Deny: AgentDenyConfig{Instructions: "Denied: {reason}"},
 			},
@@ -125,7 +125,7 @@ func TestPolicyErrToResult_DenyError_CustomTemplate_TraceOnly(t *testing.T) {
 	g := &Gate{
 		cfg: Config{
 			Keep:  KeepConfig{Endpoint: "http://keep.example.com"},
-			Guard: GuardConfig{Endpoint: "http://guard.example.com"},
+			Guard: GuardConfig{EscalationApprovalEndpoint: "http://guard.example.com"},
 			Agent: AgentConfig{
 				Deny: AgentDenyConfig{Instructions: "Request blocked. Reference: {trace_id}"},
 			},

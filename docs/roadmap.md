@@ -91,5 +91,9 @@ Use the OpenTelemetry wrapper around HTTP calls to get detailed measurements
 
 
 
+### Task: Guard-native OIDC login
+for organizations that don't want to use SSO proxies to protect the human-focused endpoint(s) of Portcullis-Guard, we could implement
+a login interface
 
-  
+
+

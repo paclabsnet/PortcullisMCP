@@ -36,7 +36,7 @@ type GuardClient struct {
 // NewGuardClient creates a GuardClient for the given Guard endpoint.
 func NewGuardClient(cfg GuardConfig) *GuardClient {
 	return &GuardClient{
-		endpoint:    cfg.Endpoint,
+		endpoint:    cfg.resolvedAPIEndpoint(),
 		bearerToken: cfg.BearerToken,
 		client:      &http.Client{Timeout: 10 * time.Second},
 	}

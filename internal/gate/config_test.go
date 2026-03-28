@@ -81,7 +81,7 @@ func TestConfig_Validate_ApprovalManagementStrategy(t *testing.T) {
 			cfg := validBaseConfig()
 			cfg.Guard.ApprovalManagementStrategy = tc.strategy
 			if tc.strategy == "proactive" {
-				cfg.Guard.Endpoint = "http://guard.example.com"
+				cfg.Guard.EscalationApprovalEndpoint = "http://guard.example.com"
 			}
 			err := cfg.Validate()
 			if (err != nil) != tc.wantErr {
@@ -94,8 +94,8 @@ func TestConfig_Validate_ApprovalManagementStrategy(t *testing.T) {
 func TestConfig_Validate_ProactiveRequiresGuardEndpoint(t *testing.T) {
 	cfg := validBaseConfig()
 	cfg.Guard.ApprovalManagementStrategy = "proactive"
-	cfg.Guard.Endpoint = ""
+	cfg.Guard.EscalationApprovalEndpoint = ""
 	if err := cfg.Validate(); err == nil {
-		t.Error("expected error when proactive strategy set but guard.endpoint is empty")
+		t.Error("expected error when proactive strategy set but guard.escalation_approval_endpoint is empty")
 	}
 }

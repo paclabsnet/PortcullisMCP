@@ -128,7 +128,7 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 	}
 
 	var guardClient *GuardClient
-	if cfg.Guard.Endpoint != "" {
+	if cfg.Guard.resolvedAPIEndpoint() != "" {
 		guardClient = NewGuardClient(cfg.Guard)
 	}
 
@@ -222,7 +222,7 @@ func (g *Gate) Run(ctx context.Context) error {
 		if g.cfg.Guard.PollInterval > 0 {
 			interval = time.Duration(g.cfg.Guard.PollInterval) * time.Second
 		}
-		slog.Info("guard poll worker starting", "endpoint", g.cfg.Guard.Endpoint, "interval", interval)
+		slog.Info("guard poll worker starting", "endpoint", g.cfg.Guard.resolvedAPIEndpoint(), "interval", interval)
 		go func() {
 			g.claimAllUnclaimedTokens(ctx)
 			g.pollGuardWorker(ctx)
@@ -538,7 +538,7 @@ func (g *Gate) buildDenyMessage(reason, traceID string) string {
 // response, substituting {reason}, {url}, and {trace_id} in the configured
 // instructions template.
 func (g *Gate) buildEscalationMessage(e *shared.EscalationPendingError, traceID string) string {
-	guardEndpoint := g.cfg.Guard.Endpoint
+	guardEndpoint := g.cfg.Guard.EscalationApprovalEndpoint
 
 	var approvalURL string
 	if guardEndpoint != "" {
@@ -674,7 +674,7 @@ func (g *Gate) policyErrToResult(err error, toolName, traceID string) (*mcp.Call
 		// Without a Guard endpoint Gate cannot poll for or claim escalation tokens,
 		// so escalation can never complete. Treat it as a deny so the agent does
 		// not present the user with an approval flow that will never resolve.
-		if g.cfg.Guard.Endpoint == "" {
+		if g.cfg.Guard.resolvedAPIEndpoint() == "" {
 			slog.Warn("escalation required but Guard is not configured — treating as deny",
 				"tool", toolName, "reason", escalationErr.Reason)
 			return &mcp.CallToolResult{

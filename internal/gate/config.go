@@ -135,10 +135,34 @@ type DecisionLogBatchConfig struct {
 // deep knowledge of the Rego structures and policies, and the capabilities
 // of PortcullisGate's web interface
 type GuardConfig struct {
-	Endpoint                   string `yaml:"endpoint"`                     // e.g. "https://guard.internal.example.com"
+	// EscalationApprovalEndpoint is the human-facing base URL of portcullis-guard,
+	// used to construct the /approve link shown to the user and their agent.
+	// In production this should be the SSO-proxy-protected address
+	// (e.g. "https://guard.corp.example.com") so that agents cannot self-approve
+	// escalations by fetching the URL programmatically.
+	// See docs/guard-sso-proxy.md for deployment guidance.
+	EscalationApprovalEndpoint string `yaml:"escalation_approval_endpoint"`
+
+	// TokenAPIEndpoint is the machine-to-machine base URL used by Gate for
+	// /token/unclaimed/list, /token/claim, and /pending API calls (bearer-token
+	// protected). Set this to the internal Guard address when the SSO proxy is on
+	// a separate hostname from the API. Defaults to EscalationApprovalEndpoint
+	// when unset, which is correct for single-hostname deployments.
+	TokenAPIEndpoint string `yaml:"token_api_endpoint"`
+
 	BearerToken                string `yaml:"bearer_token"`                 // for /token/unclaimed/list, /token/deposit, and /pending
 	PollInterval               int    `yaml:"poll_interval"`                // seconds between polls of /token/unclaimed/list (default: 60)
 	ApprovalManagementStrategy string `yaml:"approval_management_strategy"` // "proactive" | "user-driven" (default: "user-driven")
+}
+
+// resolvedAPIEndpoint returns the endpoint Gate should use for machine-to-machine
+// Guard API calls. It returns TokenAPIEndpoint if set, and falls back to
+// EscalationApprovalEndpoint for single-hostname deployments.
+func (c GuardConfig) resolvedAPIEndpoint() string {
+	if c.TokenAPIEndpoint != "" {
+		return c.TokenAPIEndpoint
+	}
+	return c.EscalationApprovalEndpoint
 }
 
 // Validate returns an error if the guard connection config contains invalid values.
@@ -149,8 +173,8 @@ func (c GuardConfig) Validate() error {
 	default:
 		return fmt.Errorf("invalid approval_management_strategy %q: must be \"user-driven\" or \"proactive\"", c.ApprovalManagementStrategy)
 	}
-	if c.ApprovalManagementStrategy == "proactive" && c.Endpoint == "" {
-		return fmt.Errorf("guard.endpoint is required when approval_management_strategy is \"proactive\"")
+	if c.ApprovalManagementStrategy == "proactive" && c.EscalationApprovalEndpoint == "" {
+		return fmt.Errorf("guard.escalation_approval_endpoint is required when approval_management_strategy is \"proactive\"")
 	}
 	return nil
 }

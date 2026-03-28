@@ -54,8 +54,8 @@ func (g *Gate) buildStatusReport(ctx context.Context) (msg string, isErr bool) {
 	keepStatus := pingHealth(ctx, g.cfg.Keep.Endpoint)
 
 	guardStatus := "not configured"
-	if g.cfg.Guard.Endpoint != "" {
-		guardStatus = pingHealth(ctx, g.cfg.Guard.Endpoint)
+	if g.cfg.Guard.EscalationApprovalEndpoint != "" {
+		guardStatus = pingHealth(ctx, g.cfg.Guard.EscalationApprovalEndpoint)
 	}
 
 	msg = fmt.Sprintf(

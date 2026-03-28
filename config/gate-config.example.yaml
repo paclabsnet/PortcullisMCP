@@ -39,7 +39,17 @@ decision_logs:
 # web UI or deposited by remote workflows (e.g. ServiceNow), without the user
 # needing to paste tokens manually via the management API.
 guard:
-  endpoint: "https://guard.internal.example.com"
+  # escalation_approval_endpoint is the human-facing Guard URL shown to users
+  # in approval links. In production, point this at your SSO proxy address so
+  # agents cannot self-approve escalations. See docs/guard-sso-proxy.md.
+  escalation_approval_endpoint: "https://guard.internal.example.com"
+
+  # token_api_endpoint is the machine-to-machine URL Gate uses for API calls
+  # (/token/unclaimed/list, /token/claim, /pending). Set this to Guard's direct
+  # internal address when the SSO proxy is on a separate hostname. Defaults to
+  # escalation_approval_endpoint when unset.
+  # token_api_endpoint: "https://guard-api.internal.example.com"
+
   bearer_token: "envvar://GUARD_BEARER_TOKEN"  # must match guard.auth.bearer_token
   poll_interval: 60  # seconds between polls of /token/unclaimed/list (default: 60)
 

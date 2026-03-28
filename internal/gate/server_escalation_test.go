@@ -55,7 +55,7 @@ func TestIsProactive_Proactive(t *testing.T) {
 
 func TestBuildEscalationMessage_UserDrivenMode(t *testing.T) {
 	g := newGateForEscalationTests(GuardConfig{
-		Endpoint:                   "http://guard.example.com",
+		EscalationApprovalEndpoint:                   "http://guard.example.com",
 		ApprovalManagementStrategy: "user-driven",
 	})
 	e := &shared.EscalationPendingError{
@@ -79,7 +79,7 @@ func TestBuildEscalationMessage_UserDrivenMode(t *testing.T) {
 
 func TestBuildEscalationMessage_ProactiveMode(t *testing.T) {
 	g := newGateForEscalationTests(GuardConfig{
-		Endpoint:                   "http://guard.example.com",
+		EscalationApprovalEndpoint:                   "http://guard.example.com",
 		ApprovalManagementStrategy: "proactive",
 	})
 	e := &shared.EscalationPendingError{
@@ -105,7 +105,7 @@ func TestBuildEscalationMessage_CustomInstructions(t *testing.T) {
 	g := &Gate{
 		cfg: Config{
 			Guard: GuardConfig{
-				Endpoint:                   "http://guard.example.com",
+				EscalationApprovalEndpoint:                   "http://guard.example.com",
 				ApprovalManagementStrategy: "proactive",
 			},
 			Agent: AgentConfig{
@@ -134,7 +134,7 @@ func TestBuildEscalationMessage_CustomInstructions(t *testing.T) {
 
 func TestBuildEscalationMessage_FallbackToReference(t *testing.T) {
 	// When no JWT and no JTI are available, fall back to the Reference field.
-	g := newGateForEscalationTests(GuardConfig{Endpoint: "http://guard.example.com"})
+	g := newGateForEscalationTests(GuardConfig{EscalationApprovalEndpoint: "http://guard.example.com"})
 	e := &shared.EscalationPendingError{
 		Reason:    "needs approval",
 		Reference: "https://servicenow.example.com/ticket/INC123",
@@ -163,7 +163,7 @@ func TestBuildEscalationMessage_NoGuardEndpoint(t *testing.T) {
 func TestBuildEscalationMessage_NoURL_MisconfiguredMessage(t *testing.T) {
 	// When no URL can be constructed from any source, the message should
 	// indicate misconfiguration rather than presenting a broken empty URL.
-	g := newGateForEscalationTests(GuardConfig{Endpoint: "http://guard.example.com"})
+	g := newGateForEscalationTests(GuardConfig{EscalationApprovalEndpoint: "http://guard.example.com"})
 	e := &shared.EscalationPendingError{
 		Reason: "needs approval",
 		// EscalationJTI, PendingJWT, and Reference all empty
@@ -183,7 +183,7 @@ func TestBuildEscalationMessage_NoURL_MisconfiguredMessage(t *testing.T) {
 
 func TestBuildEscalationMessage_DefaultInstructions(t *testing.T) {
 	// When no custom instructions are configured, the default template is used.
-	g := newGateForEscalationTests(GuardConfig{Endpoint: "http://guard.example.com"})
+	g := newGateForEscalationTests(GuardConfig{EscalationApprovalEndpoint: "http://guard.example.com"})
 	e := &shared.EscalationPendingError{
 		Reason:     "needs approval",
 		PendingJWT: "h.p.s",
@@ -197,7 +197,7 @@ func TestBuildEscalationMessage_DefaultInstructions(t *testing.T) {
 
 func TestBuildEscalationMessage_TraceIDSubstituted(t *testing.T) {
 	// {trace_id} in the default template must be replaced with the supplied trace ID.
-	g := newGateForEscalationTests(GuardConfig{Endpoint: "http://guard.example.com"})
+	g := newGateForEscalationTests(GuardConfig{EscalationApprovalEndpoint: "http://guard.example.com"})
 	e := &shared.EscalationPendingError{
 		Reason:     "needs approval",
 		PendingJWT: "h.p.s",
@@ -214,7 +214,7 @@ func TestBuildEscalationMessage_CustomInstructions_TraceIDOmitted(t *testing.T) 
 	g := &Gate{
 		cfg: Config{
 			Guard: GuardConfig{
-				Endpoint:                   "http://guard.example.com",
+				EscalationApprovalEndpoint:                   "http://guard.example.com",
 				ApprovalManagementStrategy: "proactive",
 			},
 			Agent: AgentConfig{

@@ -324,6 +324,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
+There is an exotic edge case involving a desktop agent that somehow gains direct HTTP Post ability, secretly generates escalatory requests, receives the approval URL from Portcullis-Keep, and directly visits the Portcullis-Guard to approve the escalation without any human involvement or visibility. For production Guard deployments, see [docs/guard-sso-proxy.md](docs/guard-sso-proxy.md) for guidance on preventing this.
+
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).
@@ -346,8 +348,7 @@ the communications channel is protected by bearer tokens. The Agent would have t
 know the location of the Portcullis-Keep, know the user's oidc-token, and know the bearer token. 
 
 **Escalation is not secure**
-Escalation is an optional feature that you can control through policy. You don't have to allow
-escalation, it's a policy outcome that you can mandate
+Escalation is an optional feature you can control entirely through policy — you can mandate that no tool ever escalates if you choose. For deployments that do use escalation, Guard should be placed behind a corporate SSO proxy (Cloudflare Access, Pomerium, nginx + oauth2-proxy, etc.) so that only a human who can satisfy an interactive SSO challenge can reach the approval page. An agent that receives the approval URL cannot complete the SSO login and therefore cannot self-approve. See [docs/guard-sso-proxy.md](docs/guard-sso-proxy.md) for deployment examples.
 
 **Great, another policy language**
 Portcullis is designed to use existing policy systems, it does not implement a policy engine. The

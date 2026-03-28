@@ -36,7 +36,8 @@ identity:
 # When configured, Gate will automatically claim tokens approved via the Guard
 # without the user needing to paste tokens manually.
 guard:
-  endpoint: "http://localhost:8444"
+  escalation_approval_endpoint: "http://localhost:8444"
+  # token_api_endpoint: ""   # optional: set to a separate internal URL if Guard's approval page is behind an SSO proxy on a different hostname
   # bearer_token: "dev-guard-bearer-token" # not needed if guard has no bearer_token set
 
 sandbox:
