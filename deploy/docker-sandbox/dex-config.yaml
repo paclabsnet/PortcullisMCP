@@ -7,6 +7,13 @@ web:
   http: 0.0.0.0:5556
 
 staticClients:
+
+  - id: portcullis-keep
+    name: Portcullis Keep
+    secret: portcullis-keep-secret
+    trustedPeers:
+      - portcullis-gate
+
   - id: portcullis-gate
     secret: portcullis-gate-secret
     name: Portcullis Gate
@@ -16,10 +23,13 @@ staticClients:
 enablePasswordDB: true
 
 staticPasswords:
-  - email: "admin@example.com"
+  - email: "demo@paclabs.net"
     hash: "$2y$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"  # bcrypt of "password"
-    username: "admin"
-    userID: "08a8684b-db88-4b73-90a9-3cd1661f5466"
+    username: "demo"
+    userID: "demo@paclabs.net"
+    name: "Joe Demo"
+    groups:
+      - "developer"
 
 oauth2:
   skipApprovalScreen: true

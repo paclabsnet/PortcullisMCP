@@ -1,0 +1,113 @@
+#
+#  OIDC Login Version
+#
+#  This is the version of gate.yaml that is properly wired to use Docker. It will
+#  require a login with the portcullis-dex container, collect an oidc-token from
+#  Dex, and then send that token along with requests to portcullis-keep.
+#
+#  And if there are escalations, the configuration below will also interact
+#  with Portcullis-Guard for escalations.  This particular file is the full
+#  demo, with all of the moving parts
+#
+#  If you want to run the whole demo
+#  1. copy this file into ~/.portcullis/gate.yaml  
+#  2. make demo-start      # in the main PortcullisMCP directory
+#  3. set up the configuration for your agent to be aware of PortcullisMCP
+#  4. Start up your agent
+#  5. Tell your agent that you'd like to log in to Portcullis.  It should be able to figure out the rest
+#
+#
+
+# portcullis-gate minimal config — for local development/evaluation
+# MCP client config: { "command": "portcullis-gate", "args": ["-config", "~/.portcullis/gate.yaml"] }
+
+keep:
+  endpoint: "http://localhost:8080"
+  auth:
+    type: "bearer"
+    token: "dev-secret-token"   # must match keep's bearer_token setting
+
+
+
+
+
+
+
+
+
+
+#identity:
+#  source: "os"                  # uses your OS login; switch to "oidc" in production
+
+
+#identity:
+#  source: "oidc-file"                # oidc token issued by mock-idp.dev
+#  oidc:
+#    token_file: ~/.portcullis/oidc-token        # change this if you like
+
+
+
+
+
+identity:
+  source: "oidc-login"
+
+  oidc_login:
+    issuer_url: "http://localhost:5556/dex" # Use your Dex or other OIDC provider URL
+    client_id: "portcullis-gate"
+    client_secret: "portcullis-gate-secret"
+    scopes: ["openid", "profile", "email", "groups", "audience:server:client_id:portcullis-keep"]
+    flow: "authorization_code"
+  
+  login_callback_timeout_seconds: 300
+
+
+
+management_api:
+  port: 7777                  
+
+
+sandbox:
+  directory: "~"                # files under home dir are fast-pathed (no Keep round-trip)
+
+
+
+
+# Guard endpoint for automatic escalation token collection.
+# When configured, Gate will automatically claim tokens approved via the Guard
+# without the user needing to paste tokens manually.
+guard:
+  escalation_approval_endpoint: "http://localhost:8444"
+  # bearer_token: "dev-guard-bearer-token" # not needed if guard has no bearer_token set
+
+  approval_management_strategy: "proactive"
+  
+
+
+
+agent:
+   require_approval:
+     instructions: |
+       Action required: {reason}
+ 
+       Ask the user to open the following link to approve this request:
+       {url}  
+
+       Make sure you copy the URL exactly. A single missed character can make it invalid.
+
+       Once approved, retry the operation.
+  
+
+
+
+
+# protected_paths:              # always denied, regardless of sandbox; defaults to ~/.ssh and ~/.portcullis
+#   - "~/.ssh"
+#   - "~/.portcullis"
+
+# token_store: "~/.portcullis/tokens.json"   # where escalation tokens are persisted
+
+
+# decision_logs:
+#   flush_interval: 30          # seconds between batched sends to Keep (default: 30)
+#   max_batch_size: 100         # max entries per batch (default: 100)

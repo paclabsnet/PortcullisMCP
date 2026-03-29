@@ -20,9 +20,24 @@ pdp:
 identity:
   normalizer: "oidc-verify"
   oidc_verify:
-    issuer: "https://mock-idp.dev"             # Must match the 'iss' claim in your token
-    jwks_url: "https://mock-idp.dev/jwt/.well-known/jwks.json" # URL where Keep fetches public keys
-    audiences: ["portcullis-mcp"]              # Optional: must match the 'aud' claim  
+    issuer: "http://localhost:5556/dex"
+    
+    jwks_url: "http://portcullis-dex:5556/dex/keys"
+   
+    audiences:
+      - "portcullis-keep"
+      - "portcullis-gate"
+   
+    # Since we are using http:// for local dev, we must explicitly allow it
+    allow_insecure_jwks_url: true
+   
+    # 6. Optional: Reject tokens older than 1 hour (iat claim)
+    max_token_age_secs: 3600
+    
+
+#    issuer: "https://mock-idp.dev"             # Must match the 'iss' claim in your token
+#    jwks_url: "https://mock-idp.dev/jwt/.well-known/jwks.json" # URL where Keep fetches public keys
+#    audiences: ["portcullis-mcp"]              # Optional: must match the 'aud' claim  
 
 backends:
   mock-enterprise-api:
