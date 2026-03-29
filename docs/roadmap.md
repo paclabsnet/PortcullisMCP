@@ -97,3 +97,27 @@ a login interface
 
 
 
+
+### Task: Reload Secrets at Keep and Guard
+Full config reload via admin API — extend Keep's `POST /admin/reload` and add an equivalent Guard endpoint to re-resolve all secrets (including `vault://` URIs) without a process restart, enabling zero-downtime secret rotation
+
+
+
+
+### Task: Improve policy messaging for denials
+Right now, the denial reason is fairly generic.  But in the tabular model, we could include a reason as part of the response, which could then 
+be echoed to the user.
+
+
+
+### Task: Allow a managed-device signal (device cert, workload identity, or attestation) in addition to user token
+Keep should be configured to validate the additional proof-of-identity information.
+Policy should require both: trusted user identity and trusted device posture for privileged tool usage.
+
+
+### Task: Add a login page at Portcullis-Gate
+This way, the OIDC-token acquired and used by Gate can have a shorter lifetime and include more security capabilties.
+
+
+### Task: Modify Keep to endorce a system-defined maximum TTL for OIDC-Tokens
+To reduce the chance of replay attacks.

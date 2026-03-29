@@ -39,7 +39,8 @@ func TestConfig_Validate_IdentitySource(t *testing.T) {
 	}{
 		{"", false},
 		{"os", false},
-		{"oidc", true}, // token_file not set
+		{"oidc-file", true}, // token_file not set
+		{"oidc-login", true}, // issuer_url not set
 		{"ldap", true},
 	}
 	for _, tc := range tests {
@@ -54,12 +55,34 @@ func TestConfig_Validate_IdentitySource(t *testing.T) {
 	}
 }
 
-func TestConfig_Validate_OIDCTokenFileRequired(t *testing.T) {
+func TestConfig_Validate_OIDCFileTokenFileRequired(t *testing.T) {
 	cfg := validBaseConfig()
-	cfg.Identity.Source = "oidc"
-	cfg.Identity.OIDC.TokenFile = "/path/to/token"
+	cfg.Identity.Source = "oidc-file"
+	cfg.Identity.OIDCFile.TokenFile = "/path/to/token"
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("expected no error with token_file set; got: %v", err)
+	}
+}
+
+func TestConfig_Validate_OIDCLoginRequired(t *testing.T) {
+	cfg := validBaseConfig()
+	cfg.Identity.Source = "oidc-login"
+	cfg.Identity.OIDCLogin.IssuerURL = "https://idp.example.com"
+	cfg.Identity.OIDCLogin.ClientID = "client-id"
+	cfg.ManagementAPI.Port = 7777
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("expected no error with issuer_url, client_id, and mgmt port set; got: %v", err)
+	}
+}
+
+func TestConfig_Validate_OIDCLoginRequiresManagementAPI(t *testing.T) {
+	cfg := validBaseConfig()
+	cfg.Identity.Source = "oidc-login"
+	cfg.Identity.OIDCLogin.IssuerURL = "https://idp.example.com"
+	cfg.Identity.OIDCLogin.ClientID = "client-id"
+	cfg.ManagementAPI.Port = 0 // Explicitly disabled
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error when oidc-login is used but management_api.port is 0")
 	}
 }
 

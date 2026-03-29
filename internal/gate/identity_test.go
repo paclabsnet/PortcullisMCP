@@ -278,8 +278,8 @@ func TestIdentityCache_OIDCSource(t *testing.T) {
 	}
 
 	cfg := IdentityConfig{
-		Source: "oidc",
-		OIDC:   OIDCConfig{TokenFile: tokenFile},
+		Source: "oidc-file",
+		OIDCFile: OIDCFileConfig{TokenFile: tokenFile},
 	}
 	cache, err := NewIdentityCache(context.Background(), cfg)
 	if err != nil {
@@ -303,9 +303,9 @@ func TestIdentityCache_OIDCSource(t *testing.T) {
 func TestIdentityCache_OIDCFailsWithoutTokenFile(t *testing.T) {
 	// OIDC source with a missing token file — must return an error, not fall back to OS.
 	cfg := IdentityConfig{
-		Source: "oidc",
-		OIDC:   OIDCConfig{TokenFile: "/does/not/exist/token"},
-		UserID: "fallback@example.com",
+		Source:   "oidc-file",
+		OIDCFile: OIDCFileConfig{TokenFile: "/does/not/exist/token"},
+		UserID:   "fallback@example.com",
 	}
 	_, err := NewIdentityCache(context.Background(), cfg)
 	if err == nil {
@@ -321,8 +321,8 @@ func TestIdentityCache_OIDCFailsWithEmptyTokenFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := IdentityConfig{
-		Source: "oidc",
-		OIDC:   OIDCConfig{TokenFile: tokenFile},
+		Source: "oidc-file",
+		OIDCFile: OIDCFileConfig{TokenFile: tokenFile},
 	}
 	_, err := NewIdentityCache(context.Background(), cfg)
 	if err == nil {
@@ -341,8 +341,8 @@ func TestIdentityCache_UpdateToken(t *testing.T) {
 	os.WriteFile(tokenFile, []byte(initial), 0600)
 
 	cfg := IdentityConfig{
-		Source: "oidc",
-		OIDC:   OIDCConfig{TokenFile: tokenFile},
+		Source: "oidc-file",
+		OIDCFile: OIDCFileConfig{TokenFile: tokenFile},
 	}
 	cache, _ := NewIdentityCache(context.Background(), cfg)
 

@@ -23,14 +23,20 @@ import (
 )
 
 // newGateForStatusTests builds a minimal *Gate with Keep and Guard endpoints
-// configured, and optionally a degradedReason.
+// configured, and optionally a degradedReason (translated to state machine).
 func newGateForStatusTests(keepURL, guardURL, degradedReason string) *Gate {
+	sm := NewStateMachine()
+	if degradedReason != "" {
+		sm.SetSystemError(SubstateInvalid, degradedReason, "")
+	} else {
+		sm.SetAuthenticated()
+	}
 	return &Gate{
 		cfg: Config{
 			Keep:  KeepConfig{Endpoint: keepURL},
 			Guard: GuardConfig{EscalationApprovalEndpoint: guardURL},
 		},
-		degradedReason: degradedReason,
+		stateMachine: sm,
 	}
 }
 

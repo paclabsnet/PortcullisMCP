@@ -273,10 +273,8 @@ See `docs/policy/opa-examples.md` for detailed policy examples and testing guida
 - Bearer auth — shared secret authentication between Portcullis-Gate and Portcullis-Keep, Portcullis-Guard
 
 ### Roadmap
-- Distributed Caching at Portcullis-Guard
-- additional credentials when Portcullis-Keep interacts with MCP Servers
-- Organization Workflows (such as ServiceNow)
-- Additional vaults (AWS, Azure and GCP)
+
+see `docs/roadmap.md`
 
 
 ## Testing
@@ -363,20 +361,67 @@ You can use sticky sessions to help with this.  In addition, we are already plan
 **I can't have MCP servers in my network**
 Portcullis-Keep does not care where the MCP servers are. And it doesn't send any extra information to the MCP server.
 
+
+**I don't want to have to write custom policy for every tool**
+As a reference implementation, we have created a table-based policy lookup model that should make policy setup much easier. And this reference implementation has the ability to delegate to custom Rego logic.
+
+**We would need helpdesk support to implement this**
+PAC.Labs provides helpdesk and consulting support for PortcullisMCP, with several tiers of support available, including 24/7, if required.
+
+
+**This will add latency to the MCP calls**
+Yes, just like any other system that enforces fine-grained policy.  Having said that, the additional latency is on the order of 100 milliseconds.
+
+**I already have MCPs deployed and I don't want to move them yet**
+You aren't required to put all of your MCPs behind Portcullis. You can migrate your tools into the Portcullis security framework over time.
+
+
+**Policies will get complex**
+From a compliance and security perspective, a complex-but-correct Agent MCP policy is better than a simple-but-wrong Agent MCP policy. We have done what we can to make the policy approach as simple as possible for common use-cases. [PAC.Labs](https://paclabs.io) can help with policy architecture and authoring, if that would be helpful.
+
+
+
+
+
+
+
+
+
+## Frequently Asked Questions
+
+**Will this work with our existing IdP (Okta/Azure AD/Ping)**
+Yes. Gate sends an oidc-token to Keep, and Keep validates and parses it. As long as it follows the JWT model and Keep can reach the public key for signature validation, it should work fine.
+
+**What happens if the PDP is unavailable**
+We fail closed, returning an error to the Agent and User. Portcullis-Keep never forwards an MCP Request to an MCP server unless the PDP responds with 'allow'.
+
+**Can an Agent exfiltrate data through an authorized tool**
+Yes. We are only monitoring user access to tools, not the security of the tools themselves.
+
+**What happens if Portcullis-Gate is unavailable**
+The Agent will not be able to access any of the MCPs that are protected by Portcullis.  This would typically be addressed by restarting.
+
+**Do my MCP tool authors need to know about Portcullis**
+Portcullis should be transparent to the MCP tool implementations. Although arguably, knowing that Portcullis will be responsible for enforcing fine-grained user-access policy should make the MCP tool author's job easier.
+
+**Does Gate store the user's OIDC token anywhere**
+Gate pulls it from the hard drive, presumably from a location managed by the organization. It sends the OIDC Token to Keep, as proof of identity of the user.  Providing a login page at Portcullis-Gate is on the roadmap.
+
+
+**If a blackhat user gets access to the OIDC token, can they abuse it?**
+It depends on the type of token. DPoP (Demonstrating Proof of Possession) or mTLS-bound tokens would be much less vulnerable than normal bearer tokens. Portcullis should work with a variety of different token types.
+a mitigation mechanism would be to have the policy return escalate for every high-privilege call, and to protect the Guard behind an SSO Proxy.  Even stronger mitigation would be to enable login at Portcullis-Guard (currently on the roadmap)
+
+
 **My MCP Servers require additional security information with each call**
 We are planning on adding ways for the Portcullis-Keep to send extra information with each request, to address this need.  Having said that, if you can put the MCP servers into a private zone where they are inaccessable from the employee network, perhaps you no longer need that capability.
 
 **Is the policy managed by groups, roles, userids or something else**
 Portcullis-Keep pulls claims from the oidc-token and sends them as part of the Principal to the policy engine. Most common claims are already supported. You control the policy, so you can enforce on any criteria (or combination of criteria) that you like. Other claims can be added if necessary.
 
-**I don't want to have to write custom policy for every tool**
-As a reference implementation, we have created a table-based policy lookup model that should make policy setup much easier. And this reference implementation has the ability to delegate to custom Rego logic.
-
-**I would need helpdesk support to implement this**
-PAC.Labs provides helpdesk and consulting support for PortcullisMCP, with several tiers of support available, including 24/7, if required.
 
 **My users have several agents on their desktop, how would this work?**
-Right now, Portcullis-Gate is designed to be a stdio MCP tool interface for one Agent. So you would need to have multiple Portcullis-Gate instances running, listening on different ports for web traffic.   
+Right now, Portcullis-Gate is designed to be a stdio MCP tool interface for one Agent. So you would need to have multiple Portcullis-Gate instances running, listening on different ports for web traffic (or disabling the web page for Portcullis-Gate altogether to eliminate the need to listen on a port).  
 
 We are planning on implementing a streamable-http interface for Portcullis-Gate, so that one gate can support multiple agents in parallel.
 
@@ -395,10 +440,36 @@ Every decision by OPA is logged in SIEM-friendly ways
 **How do I change my policies**
 If you use the OPA-based implementation, you can manage the policy like any other codebase, and build policy bundles, which can then be deployed to the OPAs.   Explaining OPA's capabilities are beyond the scope of this document, but PACLabs has extensive experience helping organizations use Policy as Code with OPA and Rego to implement policy solutions.
 
+**What happens if Portcullis-Keep is unavailable**
+You won't be able to use any of the MCPs that are protected by the Keep. Setting up Keep in a high-availability model is recommended.
+
+**What happens if Portcullis-Guard is unavailable**
+Users/Agents will be able to use the MCPs for work that is allowed by policy, but there will be no escalation path until Guard has recovered.
+
+**How do we rotate secrets**
+Right now, you'll need to restart Keep and Guard instances to get them to load new secrets. If they're in a cluster, you can do a rolling
+restart.  We have a roadmap item for allowing remote reloads of the configuration on-demand, to refresh secrets.
+
+Gate is tied to the User and Agent, and is likely to restart frequently. In any case, adding an API to an end-user device seems to cause more problems than it would solve.
+
+**Can I test my policies before deploying them**
+for OPA:
+
+* OPA Control Plane systems, such as [EnforceAuth.com](https://enforceauth.com) allow for multiple environments for testing.
+* The open source Raygun testing tool can be used to exercise the policy as well
+* Finally, opa test allows policies to be tested directly
+
+Other systems have their own testing regimes, and can and should be developed with an SDLC mindset.
 
 
 
+**What is the most secure Portcullis setup available**
 
-
+- Portcullis-Gate requires interactive OIDC login (Authorization Code + PKCE).
+- Gate stores short-lived oidc token in memory only
+- Portcullis-Keep validates issuer/audience/expiry and enforces short TTL.
+- Gate to Keep uses mTLS 
+- High-privilege actions still require escalation by policy
+- Escalation is protected via Portcullis-Guard SSO proxy to prevent direct agent approval.
 
 

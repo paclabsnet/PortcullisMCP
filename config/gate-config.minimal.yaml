@@ -30,7 +30,7 @@ keep:
     token: "dev-secret-token"   # must match keep's bearer_token setting
 
 identity:
-  source: "os"                  # uses your OS login; switch to "oidc" in production
+  source: "os"                  # uses your OS login; switch to "oidc-file" or "oidc-login" in production
 
 # Guard endpoint for automatic escalation token collection.
 # When configured, Gate will automatically claim tokens approved via the Guard

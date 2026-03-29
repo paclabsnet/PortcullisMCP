@@ -80,10 +80,11 @@ type Gate struct {
 	logDone       chan struct{}
 	logWg         sync.WaitGroup
 
-	// degradedReason is non-empty when Gate started but could not fully
-	// initialize (e.g. Keep unreachable at startup). portcullis_status reports
-	// this to the agent. Empty means Gate is functioning normally.
-	degradedReason string
+	// stateMachine tracks authentication state for the oidc-login flow.
+	stateMachine *StateMachine
+
+	// oidcLogin manages the interactive OIDC login flow. nil unless source is "oidc-login".
+	oidcLogin *OIDCLoginManager
 
 	// pendingEscalations tracks escalation requests awaiting user approval.
 	// Key: serverName+"/"+toolName. Protected by pendingMu.
@@ -95,6 +96,8 @@ type Gate struct {
 // cfg must already have secrets resolved (use LoadConfig, which calls the
 // shared config loader, for file-based startup).
 func New(ctx context.Context, cfg Config) (*Gate, error) {
+	sm := NewStateMachine()
+
 	identity, err := NewIdentityCache(ctx, cfg.Identity)
 	if err != nil {
 		return nil, fmt.Errorf("resolve identity: %w", err)
@@ -136,6 +139,17 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 		return nil, err
 	}
 
+	// Set up oidc-login manager if applicable, otherwise move to authenticated state.
+	var oidcLoginMgr *OIDCLoginManager
+	if cfg.Identity.Source == "oidc-login" {
+		// State machine starts in StateUnauthenticated (the default).
+		// The manager will transition states as login progresses.
+		oidcLoginMgr = nil // placeholder; we need the Gate struct first
+	} else {
+		// For os and oidc-file sources, identity is already resolved.
+		sm.SetAuthenticated()
+	}
+
 	g := &Gate{
 		cfg:                cfg,
 		identity:           identity,
@@ -149,6 +163,41 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 		logChan:            make(chan DecisionLogEntry, 1000),
 		logDone:            make(chan struct{}),
 		pendingEscalations: make(map[string]pendingEscalation),
+		stateMachine:       sm,
+	}
+
+	// Create oidc-login manager now that we have the Gate struct (for callbacks).
+	if cfg.Identity.Source == "oidc-login" {
+		mgmtPort := cfg.ManagementAPI.Port
+		if mgmtPort == 0 {
+			mgmtPort = 7777
+		}
+		oidcLoginMgr = NewOIDCLoginManager(
+			cfg.Identity.OIDCLogin,
+			mgmtPort,
+			cfg.Identity.LoginCallbackTimeoutSecs,
+			sm,
+			func(rawIDToken string) {
+				if err := g.identity.SetToken(rawIDToken); err != nil {
+					slog.Warn("oidc-login: failed to update identity cache", "error", err)
+				}
+				// Re-fetch tools from Keep now that we are authenticated.
+				// This ensures backend tools are discovered even if discovery
+				// failed at startup because the user wasn't logged in yet.
+				go func() {
+					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cancel()
+					g.refreshKeepTools(ctx)
+				}()
+			},
+			func() {
+				slog.Info("oidc-login: session expired; agent must log in again")
+			},
+			func(err error) {
+				slog.Error("oidc-login: refresh failed", "error", err)
+			},
+		)
+		g.oidcLogin = oidcLoginMgr
 	}
 
 	// Start decision log worker
@@ -176,6 +225,19 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 		},
 	)
 
+	mcp.AddTool(g.server,
+		&mcp.Tool{
+			Name:        "portcullis_login",
+			Description: "Starts or checks the Portcullis login process. For oidc-login configurations, returns the URL to open in a browser to authenticate. For os and oidc-file configurations, reports that login is not necessary.",
+		},
+		func(ctx context.Context, _ *mcp.CallToolRequest, _ any) (*mcp.CallToolResult, any, error) {
+			msg := g.handleLoginTool(ctx)
+			return &mcp.CallToolResult{
+				Content: []mcp.Content{&mcp.TextContent{Text: msg}},
+			}, nil, nil
+		},
+	)
+
 	if localFSSession != nil {
 		localTools, err := localFSSession.ListTools(ctx, &mcp.ListToolsParams{})
 		if err != nil {
@@ -188,26 +250,67 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 		slog.Info("registered local filesystem tools", "count", len(localTools.Tools))
 	}
 
-	keepTools, err := fwd.ListTools(ctx, identity.Get(ctx), store.All())
+	g.refreshKeepTools(ctx)
+
+	return g, nil
+}
+
+// refreshKeepTools fetches tool schemas from Keep and registers them with the
+// MCP server. It is called at startup and after successful oidc-login.
+func (g *Gate) refreshKeepTools(ctx context.Context) {
+	keepTools, err := g.forwarder.ListTools(ctx, g.identity.Get(ctx), g.store.All())
 	if err != nil {
 		// Non-fatal: gate can still serve local filesystem tools if Keep is
-		// temporarily unavailable at startup.
+		// temporarily unavailable or user is not yet authenticated.
 		slog.Warn("fetch tool list from keep failed", "error", err)
-		g.degradedReason = "Keep is unreachable — tool list may be incomplete. Error: " + err.Error()
+		if g.cfg.Identity.Source != "oidc-login" {
+			// For os/oidc-file: record system error for status reporting, but tool
+			// calls still proceed (state check only applies to oidc-login source).
+			g.stateMachine.SetSystemError(SubstateInvalid, "Keep is unreachable — tool list may be incomplete", err.Error())
+		}
+		// For oidc-login: tool list will be fetched after login completes. Log only.
+		return
 	}
+
 	for _, at := range keepTools {
 		g.toolServerMap[at.Tool.Name] = at.ServerName
 		g.registerTool(at.Tool)
 	}
 	slog.Info("registered keep tools", "count", len(keepTools))
+}
 
-	return g, nil
+// handleLoginTool handles calls to the portcullis_login tool.
+func (g *Gate) handleLoginTool(ctx context.Context) string {
+	switch g.cfg.Identity.Source {
+	case "os", "oidc-file":
+		return "Login is not necessary."
+	case "oidc-login":
+		if g.stateMachine.State() == StateAuthenticated {
+			return "You are already successfully logged in."
+		}
+		if g.oidcLogin == nil {
+			return "Login manager is not configured."
+		}
+		loginURL, err := g.oidcLogin.StartLogin(ctx)
+		if err != nil {
+			return "Failed to start login: " + err.Error()
+		}
+		port := g.cfg.ManagementAPI.Port
+		if port == 0 {
+			port = 7777
+		}
+		return fmt.Sprintf("Please open the following URL in your browser to log in:\n%s\n\nThe login URL is also available at: http://localhost:%d/auth/login", loginURL, port)
+	}
+	return "Login is not necessary."
 }
 
 // Run starts the MCP server on stdio transport and blocks until ctx is
 // cancelled or the transport closes.
 func (g *Gate) Run(ctx context.Context) error {
-	mgmt := NewManagementServer(g.store, g.identity, g.cfg.ManagementAPI)
+	mgmt, err := NewManagementServer(g.store, g.identity, g.cfg.ManagementAPI, g.oidcLogin, g.cfg.Identity.LoginCallbackPageFile)
+	if err != nil {
+		return fmt.Errorf("init management api: %w", err)
+	}
 	if err := mgmt.Start(ctx); err != nil {
 		return fmt.Errorf("start management api: %w", err)
 	}
@@ -269,6 +372,33 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 		attribute.String("tool.name", toolName),
 		attribute.String("session.id", g.sessionID),
 	)
+
+	// State machine check: block tool calls unless authenticated (oidc-login source only).
+	// portcullis_status and portcullis_login are always allowed through so the agent
+	// can report status and start the login flow.
+	if g.cfg.Identity.Source == "oidc-login" && toolName != "portcullis_status" && toolName != "portcullis_login" {
+		state := g.stateMachine.State()
+		switch state {
+		case StateUnauthenticated:
+			loginMsg := g.handleLoginTool(ctx)
+			return &mcp.CallToolResult{
+				IsError: true,
+				Content: []mcp.Content{&mcp.TextContent{Text: "Authentication required. " + loginMsg}},
+			}, nil
+		case StateAuthenticating:
+			return &mcp.CallToolResult{
+				IsError: true,
+				Content: []mcp.Content{&mcp.TextContent{Text: "Please complete the login process. Use the `portcullis_login` tool to start over."}},
+			}, nil
+		case StateSystemError:
+			summary, detail := g.stateMachine.SystemError()
+			return &mcp.CallToolResult{
+				IsError: true,
+				Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("Portcullis Gate is having trouble: %s\n\nUse `portcullis_status` tool for more details, or use `portcullis_login` to reset the system and log in again.\n\nDetail: %s", summary, detail)}},
+			}, nil
+		}
+		// StateAuthenticated: proceed normally
+	}
 
 	// TraceID is the single correlation identifier. Use the OTel trace ID when
 	// telemetry is active; fall back to a UUID so logs are always correlatable.

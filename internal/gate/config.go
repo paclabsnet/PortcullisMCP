@@ -29,6 +29,7 @@ var SecretAllowlist = []string{
 	"keep.auth.key",
 	"guard.bearer_token",
 	"management_api.shared_secret",
+	"identity.oidc_login.client_secret",
 }
 
 // LoadConfig reads, parses, resolves secrets in, and validates a gate config file.
@@ -67,11 +68,14 @@ type KeepAuth struct {
 }
 
 type IdentityConfig struct {
-	Source      string     `yaml:"source"` // "oidc" | "os"
-	OIDC        OIDCConfig `yaml:"oidc"`
-	UserID      string     `yaml:"user_id"`      // optional: override user ID when source is "os" (for testing)
-	DisplayName string     `yaml:"display_name"` // optional: override display name when source is "os" (for testing)
-	Groups      []string   `yaml:"groups"`       // optional: groups to assign when source is "os" (for testing)
+	Source                   string          `yaml:"source"` // "oidc-file" | "oidc-login" | "os"
+	OIDCFile                 OIDCFileConfig  `yaml:"oidc_file"`
+	OIDCLogin                OIDCLoginConfig `yaml:"oidc_login"`
+	LoginCallbackTimeoutSecs int    `yaml:"login_callback_timeout_seconds"` // seconds user has to complete login after StartLogin; default 600
+	LoginCallbackPageFile    string `yaml:"login_callback_page_file"`       // default: embedded
+	UserID                string   `yaml:"user_id"`                  // optional: override user ID when source is "os" (for testing)
+	DisplayName              string          `yaml:"display_name"`                   // optional: override display name when source is "os" (for testing)
+	Groups                   []string        `yaml:"groups"`                         // optional: groups to assign when source is "os" (for testing)
 }
 
 // Validate returns an error if the identity config contains invalid values.
@@ -79,18 +83,39 @@ func (c IdentityConfig) Validate() error {
 	switch c.Source {
 	case "", "os":
 		// valid
-	case "oidc":
-		if c.OIDC.TokenFile == "" {
-			return fmt.Errorf("identity.oidc.token_file is required when identity.source is \"oidc\"")
+	case "oidc-file":
+		if c.OIDCFile.TokenFile == "" {
+			return fmt.Errorf("identity.oidc_file.token_file is required when identity.source is \"oidc-file\"")
+		}
+	case "oidc-login":
+		if c.OIDCLogin.IssuerURL == "" {
+			return fmt.Errorf("identity.oidc_login.issuer_url is required when identity.source is \"oidc-login\"")
+		}
+		if c.OIDCLogin.ClientID == "" {
+			return fmt.Errorf("identity.oidc_login.client_id is required when identity.source is \"oidc-login\"")
+		}
+		if c.OIDCLogin.Flow != "" && c.OIDCLogin.Flow != "authorization_code" {
+			return fmt.Errorf("identity.oidc_login.flow %q is not supported; only \"authorization_code\" is valid", c.OIDCLogin.Flow)
 		}
 	default:
-		return fmt.Errorf("invalid identity.source %q: must be \"oidc\" or \"os\"", c.Source)
+		return fmt.Errorf("invalid identity.source %q: must be \"oidc-file\", \"oidc-login\", or \"os\"", c.Source)
 	}
 	return nil
 }
 
-type OIDCConfig struct {
+// OIDCFileConfig holds settings for the oidc-file identity source.
+type OIDCFileConfig struct {
 	TokenFile string `yaml:"token_file"`
+}
+
+// OIDCLoginConfig holds settings for the oidc-login interactive login flow.
+type OIDCLoginConfig struct {
+	IssuerURL    string   `yaml:"issuer_url"`
+	RedirectURI  string   `yaml:"redirect_uri"`  // if blank: http://localhost:{mgmt_port}/auth/callback
+	ClientID     string   `yaml:"client_id"`
+	ClientSecret string   `yaml:"client_secret"` // supports envvar:// etc
+	Scopes       []string `yaml:"scopes"`
+	Flow         string   `yaml:"flow"` // must be "authorization_code"
 }
 
 type SandboxConfig struct {
@@ -186,6 +211,9 @@ func (c Config) Validate() error {
 	}
 	if err := c.Identity.Validate(); err != nil {
 		return err
+	}
+	if c.Identity.Source == "oidc-login" && c.ManagementAPI.Port == 0 {
+		return fmt.Errorf("management_api.port must be non-zero (enabled) when identity.source is \"oidc-login\" to receive the OIDC callback")
 	}
 	return c.Guard.Validate()
 }

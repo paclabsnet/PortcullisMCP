@@ -8,9 +8,16 @@ keep:
     # server_ca: ""       # path to CA cert for verifying Keep's TLS certificate (required for private/enterprise CAs)
 
 identity:
-  source: "oidc"          # or "os" (testing/evaluation only)
-  oidc:
+  source: "oidc-file"     # "oidc-file" (SSO-managed token file), "oidc-login" (interactive browser flow), or "os" (testing/evaluation only)
+  oidc_file:
     token_file: "~/.portcullis/oidc-token"  # refreshed by enterprise SSO tooling
+  # For oidc-login (interactive browser flow):
+  # oidc_login:
+  #   issuer_url: "https://login.microsoftonline.com/<tenant-id>/v2.0"
+  #   client_id: "your-client-id"
+  #   client_secret: "envvar://OIDC_CLIENT_SECRET"  # optional for public clients
+  #   scopes: ["openid", "profile", "email"]
+  #   flow: "authorization_code"
   # When source is "os", these optional fields allow testing different user scenarios:
   # user_id: "alice@example.com"      # override OS username
   # display_name: "Alice Developer"   # override display name

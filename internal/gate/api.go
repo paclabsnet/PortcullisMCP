@@ -24,8 +24,12 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"time"
 )
+
+//go:embed web/callback.html
+var callbackHTMLSrc string
 
 //go:embed web/index.html
 var uiHTMLSrc string
@@ -35,15 +39,19 @@ var uiHTMLSrc string
 // By default no authentication is required; set cfg.SharedSecret to require
 // a bearer token on all API requests (the UI itself is always served without auth).
 type ManagementServer struct {
-	store    *TokenStore
-	identity *IdentityCache
-	cfg      MgmtAPIConfig
-	server   *http.Server
-	uiTmpl   *template.Template
+	store        *TokenStore
+	identity     *IdentityCache
+	cfg          MgmtAPIConfig
+	server       *http.Server
+	uiTmpl       *template.Template
+	oidcLogin    *OIDCLoginManager // nil if not oidc-login source
+	callbackTmpl *template.Template
 }
 
 // NewManagementServer creates a ManagementServer but does not start it.
-func NewManagementServer(store *TokenStore, identity *IdentityCache, cfg MgmtAPIConfig) *ManagementServer {
+// callbackPageFile is the path to an optional HTML override for the post-login
+// callback page; if empty the embedded web/callback.html is used.
+func NewManagementServer(store *TokenStore, identity *IdentityCache, cfg MgmtAPIConfig, oidcLogin *OIDCLoginManager, callbackPageFile string) (*ManagementServer, error) {
 	if cfg.Port == 0 {
 		cfg.Port = 7777
 	}
@@ -51,10 +59,30 @@ func NewManagementServer(store *TokenStore, identity *IdentityCache, cfg MgmtAPI
 		slog.Warn("gate: management_api.allow_manual_tokens is enabled; users can inject arbitrary escalation tokens via the management UI — disable in production")
 	}
 	ms := &ManagementServer{
-		store:    store,
-		identity: identity,
-		cfg:      cfg,
-		uiTmpl:   template.Must(template.New("index.html").Parse(uiHTMLSrc)),
+		store:     store,
+		identity:  identity,
+		cfg:       cfg,
+		oidcLogin: oidcLogin,
+		uiTmpl:    template.Must(template.New("index.html").Parse(uiHTMLSrc)),
+	}
+	if oidcLogin != nil {
+		src := callbackHTMLSrc
+		if callbackPageFile != "" {
+			expanded, err := expandHome(callbackPageFile)
+			if err != nil {
+				return nil, fmt.Errorf("expand login_callback_page_file path: %w", err)
+			}
+			data, err := os.ReadFile(expanded)
+			if err != nil {
+				return nil, fmt.Errorf("read login_callback_page_file %q: %w", expanded, err)
+			}
+			src = string(data)
+		}
+		tmpl, err := template.New("callback.html").Parse(src)
+		if err != nil {
+			return nil, fmt.Errorf("parse login_callback_page_file template: %w", err)
+		}
+		ms.callbackTmpl = tmpl
 	}
 	mux := http.NewServeMux()
 
@@ -62,6 +90,13 @@ func NewManagementServer(store *TokenStore, identity *IdentityCache, cfg MgmtAPI
 	// Use "GET /{$}" (Go 1.22+ exact-root match) to avoid conflicting
 	// with the method-agnostic "/tokens" and "/identity" registrations below.
 	mux.HandleFunc("GET /{$}", ms.handleUI)
+
+	// Auth routes — only registered when oidc-login source is configured.
+	// These are unauthenticated because they are part of the browser redirect flow.
+	if oidcLogin != nil {
+		mux.HandleFunc("GET /auth/login", ms.handleAuthLogin)
+		mux.HandleFunc("GET /auth/callback", ms.handleAuthCallback)
+	}
 
 	// API — optionally protected by shared secret.
 	apiMux := http.NewServeMux()
@@ -84,7 +119,7 @@ func NewManagementServer(store *TokenStore, identity *IdentityCache, cfg MgmtAPI
 		Addr:    fmt.Sprintf("127.0.0.1:%d", cfg.Port),
 		Handler: mux,
 	}
-	return ms
+	return ms, nil
 }
 
 // Start begins listening on both IPv4 and IPv6 loopback addresses so that
@@ -235,6 +270,35 @@ func (ms *ManagementServer) handleIdentityTokenUpdate(w http.ResponseWriter, r *
 		"user_id":     id.UserID,
 		"source_type": id.SourceType,
 	})
+}
+
+func (ms *ManagementServer) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
+	authURL, err := ms.oidcLogin.StartLogin(r.Context())
+	if err != nil {
+		slog.Error("gate: oidc-login StartLogin failed", "err", err)
+		http.Error(w, "Login initialization failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, authURL, http.StatusFound)
+}
+
+func (ms *ManagementServer) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	callbackErr := ms.oidcLogin.HandleCallback(
+		r.Context(),
+		q.Get("state"),
+		q.Get("code"),
+		q.Get("error"),
+		q.Get("error_description"),
+	)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	data := struct{ Error string }{}
+	if callbackErr != nil {
+		data.Error = callbackErr.Error()
+	}
+	if err := ms.callbackTmpl.Execute(w, data); err != nil {
+		slog.Error("gate: callback page render error", "err", err)
+	}
 }
 
 func (ms *ManagementServer) requireSecret(next http.Handler) http.Handler {

@@ -52,8 +52,14 @@ type IdentityCache struct {
 
 // NewIdentityCache creates an IdentityCache and performs the initial identity
 // resolution. Returns an error if the initial resolution fails.
+// For oidc-login source, no initial resolution is performed — the identity
+// will be set when login completes via SetToken.
 func NewIdentityCache(ctx context.Context, cfg IdentityConfig) (*IdentityCache, error) {
 	c := &IdentityCache{cfg: cfg}
+	if cfg.Source == "oidc-login" {
+		// Token is not yet available; identity will be set when login completes.
+		return c, nil
+	}
 	if err := c.refresh(ctx); err != nil {
 		return nil, err
 	}
@@ -93,18 +99,18 @@ func (c *IdentityCache) Info() IdentityInfo {
 
 // UpdateToken validates a raw OIDC JWT, writes it to the configured token file,
 // and immediately updates the cache. Returns the new identity on success.
-// Returns an error if the identity source is not "oidc", the token is invalid,
+// Returns an error if the identity source is not "oidc-file", the token is invalid,
 // or the file cannot be written.
 func (c *IdentityCache) UpdateToken(rawJWT string) (shared.UserIdentity, error) {
-	if c.cfg.Source != "oidc" {
-		return shared.UserIdentity{}, fmt.Errorf("identity source is %q, not oidc; token update not applicable", c.cfg.Source)
+	if c.cfg.Source != "oidc-file" {
+		return shared.UserIdentity{}, fmt.Errorf("identity source is %q, not oidc-file; token update not applicable", c.cfg.Source)
 	}
 	rawJWT = strings.TrimSpace(rawJWT)
 	id, expiry, err := identityFromJWT(rawJWT)
 	if err != nil {
 		return shared.UserIdentity{}, fmt.Errorf("invalid token: %w", err)
 	}
-	tokenFile, err := expandHome(c.cfg.OIDC.TokenFile)
+	tokenFile, err := expandHome(c.cfg.OIDCFile.TokenFile)
 	if err != nil {
 		return shared.UserIdentity{}, fmt.Errorf("expand token file path: %w", err)
 	}
@@ -118,6 +124,24 @@ func (c *IdentityCache) UpdateToken(rawJWT string) (shared.UserIdentity, error) 
 	c.mu.Unlock()
 	slog.Info("OIDC token updated via management API", "user_id", id.UserID)
 	return id, nil
+}
+
+// SetToken updates the identity cache directly from a raw JWT string, without
+// writing to disk. Used by the oidc-login flow to update the cache when a new
+// token is received from the IdP.
+func (c *IdentityCache) SetToken(rawJWT string) error {
+	rawJWT = strings.TrimSpace(rawJWT)
+	id, expiry, err := identityFromJWT(rawJWT)
+	if err != nil {
+		return fmt.Errorf("invalid token: %w", err)
+	}
+	c.mu.Lock()
+	c.identity = id
+	c.tokenExpiry = expiry
+	c.refreshAt = time.Now().Add(identityRefreshTTL)
+	c.mu.Unlock()
+	slog.Info("oidc identity updated from login flow", "user_id", id.UserID)
+	return nil
 }
 
 // refresh re-resolves the identity from the configured source.
@@ -136,13 +160,13 @@ func (c *IdentityCache) refresh(ctx context.Context) error {
 // resolveIdentityWithExpiry resolves the identity and returns the JWT expiry
 // time (zero if not OIDC or exp claim absent).
 //
-// When source is "oidc", the token file must exist and contain a valid JWT.
+// When source is "oidc-file", the token file must exist and contain a valid JWT.
 // If it does not, an error is returned — there is no fallback to OS identity.
 // This ensures that an enterprise deployment that requires OIDC credentials
 // cannot silently degrade to a weaker identity source.
 func resolveIdentityWithExpiry(ctx context.Context, cfg IdentityConfig) (shared.UserIdentity, time.Time, error) {
-	if cfg.Source == "oidc" {
-		tokenFile, err := expandHome(cfg.OIDC.TokenFile)
+	if cfg.Source == "oidc-file" {
+		tokenFile, err := expandHome(cfg.OIDCFile.TokenFile)
 		if err != nil {
 			return shared.UserIdentity{}, time.Time{}, fmt.Errorf("expand oidc token file path: %w", err)
 		}
@@ -193,8 +217,11 @@ func identityFromJWT(token string) (shared.UserIdentity, time.Time, error) {
 	if v, ok := claims["upn"].(string); ok && id.UserID == "" {
 		id.UserID = v
 	}
-	if v, ok := claims["email"].(string); ok && id.UserID == "" {
-		id.UserID = v
+	if v, ok := claims["email"].(string); ok {
+		id.Email = v
+		if id.UserID == "" {
+			id.UserID = v
+		}
 	}
 	if v, ok := claims["name"].(string); ok {
 		id.DisplayName = v
@@ -208,6 +235,24 @@ func identityFromJWT(token string) (shared.UserIdentity, time.Time, error) {
 			}
 		}
 	}
+	if roles, ok := claims["roles"].([]any); ok {
+		for _, r := range roles {
+			if s, ok := r.(string); ok {
+				id.Roles = append(id.Roles, s)
+			}
+		}
+	}
+	if v, ok := claims["department"].(string); ok {
+		id.Department = v
+	}
+	if amr, ok := claims["amr"].([]any); ok {
+		for _, a := range amr {
+			if s, ok := a.(string); ok {
+				id.AuthMethod = append(id.AuthMethod, s)
+			}
+		}
+	}
+
 	if id.UserID == "" {
 		return shared.UserIdentity{}, time.Time{}, fmt.Errorf("oidc token missing subject claim")
 	}
@@ -216,6 +261,7 @@ func identityFromJWT(token string) (shared.UserIdentity, time.Time, error) {
 	var expiry time.Time
 	if exp, ok := claims["exp"].(float64); ok {
 		expiry = time.Unix(int64(exp), 0)
+		id.TokenExpiry = expiry.Unix()
 		remaining := time.Until(expiry)
 		switch {
 		case remaining < 0:
@@ -232,7 +278,7 @@ func identityFromJWT(token string) (shared.UserIdentity, time.Time, error) {
 
 // resolveOIDCIdentity reads the OIDC token from the configured file.
 // Kept for use by tests; production code should use identityFromJWT or IdentityCache.
-func resolveOIDCIdentity(_ context.Context, cfg OIDCConfig) (shared.UserIdentity, error) {
+func resolveOIDCIdentity(_ context.Context, cfg OIDCFileConfig) (shared.UserIdentity, error) {
 	raw, err := os.ReadFile(cfg.TokenFile)
 	if err != nil {
 		return shared.UserIdentity{}, fmt.Errorf("read oidc token file: %w", err)

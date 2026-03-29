@@ -40,8 +40,8 @@ keep:
 
 
 identity:
-  source: "oidc"                # oidc token issued by mock-idp.dev
-  oidc:
+  source: "oidc-file"           # oidc-file: token read from disk; oidc-login: interactive browser flow; os: OS identity
+  oidc_file:
     token_file: ~/.portcullis/oidc-token        # change this if you like
 
 

@@ -46,9 +46,24 @@ func pingHealth(ctx context.Context, endpoint string) string {
 // in an error state. It performs live /healthz checks against Keep and Guard.
 func (g *Gate) buildStatusReport(ctx context.Context) (msg string, isErr bool) {
 	gateStatus := "operating normally"
-	if g.degradedReason != "" {
-		gateStatus = "degraded — " + g.degradedReason
-		isErr = true
+	if g.stateMachine != nil {
+		switch g.stateMachine.State() {
+		case StateAuthenticated:
+			gateStatus = "operating normally"
+		case StateUnauthenticated:
+			if g.cfg.Identity.Source == "oidc-login" {
+				gateStatus = "unauthenticated — use portcullis_login to log in"
+				isErr = true
+			} else {
+				gateStatus = "operating normally"
+			}
+		case StateAuthenticating:
+			gateStatus = "authenticating — login in progress"
+		case StateSystemError:
+			summary, _ := g.stateMachine.SystemError()
+			gateStatus = "degraded — " + summary
+			isErr = true
+		}
 	}
 
 	keepStatus := pingHealth(ctx, g.cfg.Keep.Endpoint)
