@@ -6,8 +6,8 @@ PortcullisMCP is a security gateway for MCP: it sits between AI agents and an or
 
    * Fine-Grained Policy Control: Use Policy-as-Code to define exactly which tools an agent can use,
      on which resources, and under what conditions.
-   * Human-in-the-Loop Escalation: Automatically pause sensitive operations and request one-time human approval before the agent
-     can proceed.
+   * Human-in-the-Loop Escalation: Automatically pause sensitive operations and request human approval before   
+     the agent can proceed.
    * Audit & Visibility: Centrally log every tool call, decision, and identity for full compliance and troubleshooting.
 
 ## What problem does it solve?
@@ -25,8 +25,7 @@ PortcullisMCP is a security gateway for MCP: it sits between AI agents and an or
 
   2. Lack of Human-in-the-Loop for Sensitive Actions
   Autonomous agents are notorious for making high-stakes decisions (like deleting a database or moving funds) without a "check-and-balance" step.
-   * The Portcullis Solution: It implements Policy-Driven Escalation. If an agent tries to perform a sensitive action, Portcullis automatically pauses the request and generates a secure approval URL 
-   for a human to review and authorize before the agent can proceed. 
+   * The Portcullis Solution: It implements Policy-Driven Escalation. If an agent tries to perform a sensitive action, Portcullis automatically pauses the request and provides a mechanism for a human to review and authorize before the agent can proceed. 
 
   3. The Audit and Compliance "Black Box"
   In most setups, when an agent performs an action, the logs only show that the user performed it. There is no clear record of why the agent did it or if it was permitted by policy.
@@ -44,7 +43,7 @@ PortcullisMCP is a security gateway for MCP: it sits between AI agents and an or
 
   ---
 
-  In summary: PortcullisMCP solves the problem of trusting autonomous agents in the enterprise. It moves AI from a unmanageable security risk to a governed, auditable, and safe corporate resource.
+In summary: PortcullisMCP solves the problem of trusting autonomous agents in the enterprise. It moves AI from a unmanageable security risk to a governed, auditable, and safe corporate resource.
 
 
 ## How does it work?
@@ -64,7 +63,7 @@ Portcullis is a system with three parts:
   - It securely provides user credentials to the Keep
 
 - Portcullis-Guard: the 'escalation' service
-  - It works with Keep and Gate to allow users to give their Agents temporarily escalated access to 
+  - It works with Keep and Gate to allow users to grant their Agents temporarily escalated access to 
     MCP tools
 
 
@@ -85,34 +84,36 @@ Agent <--> portcullis-gate <--> portcullis-keep <--> PDP (OPA or custom)
 ### Explain 'escalation'
 
 Imagine you have a database MCP.  That MCP might have a mechanism to allow Agents to drop tables. You can use the policy at Portcullis-Keep to govern how that drop action is used:
-- If the Agent wishes to drop a temp table: the PDP returns "allow"
-- If the Agent wishes to drop a normal table: the PDP returns "escalate"
+- If the Agent wishes to drop a temp table: the PDP returns `allow`
+- If the Agent wishes to drop a normal table: the PDP returns `escalate`
 
-When the PDP returns "escalate", it also returns the exact set of arguments that the Agent sent along with the request.
+When the PDP returns `escalate`, it also returns the exact set of arguments that the Agent sent along with the request.
 
-Portcullis-Keep will bundle the escalate response along with those arguments, and create a "Pending JWT" back to the Portcullis-Gate.
+Portcullis-Keep will bundle the `escalate` response along with those arguments, and create a "Pending JWT" back to the Portcullis-Gate.
 
-Portcullis-Gate will create a URL that allows the user to view the arguments and optionally approve the request.  Gate sends this URL to the Agent, along with instructions which tell the Agent that the user needs to approve this escalated privilege.  The Agent should (there are no guarantees with AI Agents) provide the link to the User.
+Portcullis-Gate will create a URL that links to Portcullis-Guard and includes information about that "Pending JWT". Gate sends this URL to the Agent, along with instructions which tell the Agent that the user needs to approve this escalated privilege.  The Agent should (there are no guarantees with AI Agents) provide the link to the User.
 
-Assuming the User clicks on the link, they open up a page on Portcullis-Guard that shows the arguments that the Agent attempted to use.  The user can look at the arguments, and then decide
-whether or not to approve the escalated privilege.
+Assuming the User clicks on the link, they open up a page on Portcullis-Guard that shows the arguments that the Agent attempted to use.  The user can look at the details (which MCP server, which tool, the specific arguments used by the Agent), and then decide whether or not to temporarily grant the escalated privilege to the Agent.
 
-Assuming the user approves the escalated privilege, Portcullis-Guard creates a signed JWT that is trusted by the PDP. This signed JWT (which we call an escalation token) contains the arguments that the PDP viewed as requiring escalation.
+Assuming the user approves the escalated privilege, Portcullis-Guard creates a signed JWT that will be trusted by the PDP. This signed JWT (which we call an escalation-token) contains the arguments that the PDP viewed as requiring escalation.  In essence, the fact that there's a JWT signed by Guard, that only exists because the User approved it, is a clear indication that the User has taken responsibility for a specific action by the Agent.
 
-The user can then ask the Agent to try the action again.  This time, when Portcullis-Gate sees the request, it can acquire the escalation token from Portcullis-Guard, and add it to the wrapper around the MCP request that comes from the agent.
+The user can then ask the Agent to try the action again.  This time, when Portcullis-Gate sees the request, it acquires the escalation-token from Portcullis-Guard, and adds it to the wrapper around the retry MCP request.
 
-When Portcullis-Keep gets this second request, it passes it on to the PDP, but it also automatically passes along any attached escalation tokens
+When Portcullis-Keep gets this second request, it passes it on to the PDP, and it also automatically passes along any attached escalation-tokens
 
-When the PDP receives the request, it validates the escalation token, and if it finds one that includes claims that properly matches the arguments that the PDP originally viewed as requiring escalation, it considers this proof that the User approves this action. Now, the PDP returns "allow".
+When the PDP receives the request, it validates the escalation-token, and if it finds one that includes claims that properly matches the arguments that the PDP originally viewed as requiring escalation, it considers this proof that the User approves this action. Now, the PDP returns `allow`.
 
-When the Portcullis-Keep receives "allow", it passes the request on to the database MCP, which can now perform the action.
+When the Portcullis-Keep receives `allow`, it passes the request on to the database MCP, which can now perform the action.
 
-The escalation token expires after an IT-configured time.  And the escalation token only grants a narrow set of privileges, so the Agent couldn't abuse the existence of this escalation token to perform other acts.  (For example, if the escalation token specifically allows `DROP TABLE HALIBUT`, it couldn't use the token to, say `DROP TABLE SALMON`)
+Meanwhile, the PDP has delivered the details of the `allow` decision to the decision log, which can easily be directed to the appropriate SIEM or other system for archiving and future review.
 
-The User can also visit the Portcullis-Gate web page to delete any active escalation tokens, which prevents the agent from taking advantage of it again.
+The escalation-token expires after a configured time.  And the escalation-token only grants a narrow set of privileges, so the Agent can't exploit the this escalation-token to perform other acts.  (For example, if the escalation token specifically allows `DROP TABLE HALIBUT`, the Agent can't use the token to `DROP TABLE SALMON`)
 
-Note that the PDP will create decision logs, both for the original 'escalate' request, and then another one for the 'allow'.  And the second decision log will contain the JWT (unless redacted) which will show that the user approved the request, and exactly which arguments were approved.
+The User can also visit the Portcullis-Gate web page to revoke any active escalation-tokens, which prevents the agent from using it again.
 
+Note again that the PDP creates decision logs, both for the original `escalate` request, and then another one for the `allow`.  This second decision log entry will also contain the signed JWT (unless redacted) which will demonstrate that the User approved the request, exactly which arguments were approved, and when this occurred.
+
+An auditor can look at the policies captured in the PDP and compare them to the decision logs to verify that the both the Agents and Users are in compliance with corporate policy.  
 
 
 ## Quick Start
@@ -405,13 +406,13 @@ The Agent will not be able to access any of the MCPs that are protected by Portc
 Portcullis should be transparent to the MCP tool implementations. Although arguably, knowing that Portcullis will be responsible for enforcing fine-grained user-access policy should make the MCP tool author's job easier.
 
 **Does Gate store the user's OIDC token anywhere**
-Gate pulls it from the hard drive, presumably from a location managed by the organization. It sends the OIDC Token to Keep, as proof of identity of the user.  Providing a login page at Portcullis-Gate is on the roadmap.
+You have options here. We allow configurations that pull the oidc-token from storage, and also using an OIDC login system to fetch the credentials from the IdP and keeping them in-memory. 
+
 
 
 **If a blackhat user gets access to the OIDC token, can they abuse it?**
-It depends on the type of token. DPoP (Demonstrating Proof of Possession) or mTLS-bound tokens would be much less vulnerable than normal bearer tokens. Portcullis should work with a variety of different token types.
-a mitigation mechanism would be to have the policy return escalate for every high-privilege call, and to protect the Guard behind an SSO Proxy.  Even stronger mitigation would be to enable login at Portcullis-Guard (currently on the roadmap)
-
+Assuming the token is pulled from the hard-drive: It depends on the type of token. DPoP (Demonstrating Proof of Possession) or mTLS-bound tokens would be much less vulnerable than normal bearer tokens. Portcullis should work with a variety of different token types.
+Mitigation mechanisms would include: having the PDP (Policy Decision Point) return `escalate` for every high-privilege call, and to protect the Guard behind an SSO Proxy.
 
 **My MCP Servers require additional security information with each call**
 We are planning on adding ways for the Portcullis-Keep to send extra information with each request, to address this need.  Having said that, if you can put the MCP servers into a private zone where they are inaccessable from the employee network, perhaps you no longer need that capability.
@@ -429,47 +430,54 @@ We are planning on implementing a streamable-http interface for Portcullis-Gate,
 OpenTelemetry is embedded into all three elements of the system.  
 
 **What about monitoring**
-Portcullis-Keep includes `/healthz` and `/readyz` endpoints for monitoring
+Portcullis-Keep and Portcullis-Guard include `/healthz` and `/readyz` endpoints for monitoring.  
 
 **Users are complaining about policy denials**
-When we deny a request, the error message back to the user will include a `trace_id` from the telemetry. This will be mapped from Gate to Keep to PDP and back, and should provide very detailed tracing of exactly why a particular call was denied.  We also include the `trace_id` on the escalate response, although typically it is not used.
+When Portcullis-Keep (and the PDP) deny a request, the error message back to the user will include a `trace_id` from the telemetry. This will be mapped from Gate to Keep to PDP and back, and should provide very detailed tracing of exactly what path the call took, which will allow a reviewer to understand why a particular call was denied.  We also include the `trace_id` on the escalate response, although typically it is not used.
 
 **Auditors want to know that this is capturing everything**
-Every decision by OPA is logged in SIEM-friendly ways
+Every decision by OPA is logged in SIEM-friendly ways.  The only thing not captured are Agent-driven reads of the approved areas of the user's local storage. Capturing decision logs from those actions are on the roadmap.
 
 **How do I change my policies**
-If you use the OPA-based implementation, you can manage the policy like any other codebase, and build policy bundles, which can then be deployed to the OPAs.   Explaining OPA's capabilities are beyond the scope of this document, but PACLabs has extensive experience helping organizations use Policy as Code with OPA and Rego to implement policy solutions.
+If you use the OPA-based implementation, you can manage the policy like any other codebase, and build policy bundles, which can then be deployed to the OPAs.  Explaining OPA's capabilities are beyond the scope of this document, but PACLabs has extensive experience helping organizations use Policy as Code with OPA and Rego to implement policy solutions.
 
 **What happens if Portcullis-Keep is unavailable**
-You won't be able to use any of the MCPs that are protected by the Keep. Setting up Keep in a high-availability model is recommended.
+You won't be able to use any of the MCPs that are protected by the Keep. Setting up Keep in a high-availability cluster is recommended.
 
 **What happens if Portcullis-Guard is unavailable**
 Users/Agents will be able to use the MCPs for work that is allowed by policy, but there will be no escalation path until Guard has recovered.
 
 **How do we rotate secrets**
-Right now, you'll need to restart Keep and Guard instances to get them to load new secrets. If they're in a cluster, you can do a rolling
-restart.  We have a roadmap item for allowing remote reloads of the configuration on-demand, to refresh secrets.
+Right now, you'll need to restart Keep and Guard instances to get them to load new secrets. If they're in a cluster, you can do a rolling restart.  We have a roadmap item for allowing remote reloads of the configuration on-demand, to refresh secrets.
 
 Gate is tied to the User and Agent, and is likely to restart frequently. In any case, adding an API to an end-user device seems to cause more problems than it would solve.
 
 **Can I test my policies before deploying them**
 for OPA:
 
-* OPA Control Plane systems, such as [EnforceAuth.com](https://enforceauth.com) allow for multiple environments for testing.
-* The open source Raygun testing tool can be used to exercise the policy as well
+* OPA Control Plane systems, such as [EnforceAuth.com](https://enforceauth.com) allow for multiple environments for testing, and code promotion.
+* The open source Raygun testing tool can be used to exercise the policy bundles against known inputs
 * Finally, opa test allows policies to be tested directly
 
-Other systems have their own testing regimes, and can and should be developed with an SDLC mindset.
+Other policy systems, such as [Permit.io](https://permit.io) have their own testing regimes, and can and should be developed with a Policy as Code / SDLC mindset.
 
 
 
 **What is the most secure Portcullis setup available**
-
 - Portcullis-Gate requires interactive OIDC login (Authorization Code + PKCE).
 - Gate stores short-lived oidc token in memory only
 - Portcullis-Keep validates issuer/audience/expiry and enforces short TTL.
 - Gate to Keep uses mTLS 
 - High-privilege actions still require escalation by policy
 - Escalation is protected via Portcullis-Guard SSO proxy to prevent direct agent approval.
+
+
+**What about users that approve escalations without looking at them closely**
+Fixing alert fatigue in humans is beyond the scope of our remit. In theory, you could have a second AI Agent that looked at the "Pending JWT" to see if the claims embedded within it seemed reasonable, and provide a warning to the User when the request seemed suspiciously broad or dangerous. But to some degree, that would create a new compliance challenge, instead of resolving one.
+
+
+**Can we make the approval page details more user friendly?**
+That's on the roadmap.
+
 
 
