@@ -69,7 +69,7 @@ func TestConfig_Validate_OIDCLoginRequired(t *testing.T) {
 	cfg.Identity.Source = "oidc-login"
 	cfg.Identity.OIDCLogin.IssuerURL = "https://idp.example.com"
 	cfg.Identity.OIDCLogin.ClientID = "client-id"
-	cfg.ManagementAPI.Port = 7777
+	cfg.ManagementAPI.Port = DefaultManagementAPIPort
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("expected no error with issuer_url, client_id, and mgmt port set; got: %v", err)
 	}

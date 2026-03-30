@@ -170,7 +170,7 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 	if cfg.Identity.Source == "oidc-login" {
 		mgmtPort := cfg.ManagementAPI.Port
 		if mgmtPort == 0 {
-			mgmtPort = 7777
+			mgmtPort = DefaultManagementAPIPort
 		}
 		oidcLoginMgr = NewOIDCLoginManager(
 			cfg.Identity.OIDCLogin,
@@ -297,7 +297,7 @@ func (g *Gate) handleLoginTool(ctx context.Context) string {
 		}
 		port := g.cfg.ManagementAPI.Port
 		if port == 0 {
-			port = 7777
+			port = DefaultManagementAPIPort
 		}
 		return fmt.Sprintf("Please open the following URL in your browser to log in:\n%s\n\nThe login URL is also available at: http://localhost:%d/auth/login", loginURL, port)
 	}

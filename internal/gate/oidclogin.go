@@ -296,7 +296,7 @@ func (m *OIDCLoginManager) redirectURI() string {
 	}
 	port := m.mgmtPort
 	if port == 0 {
-		port = 7777
+		port = DefaultManagementAPIPort
 	}
 	return fmt.Sprintf("http://localhost:%d/auth/callback", port)
 }

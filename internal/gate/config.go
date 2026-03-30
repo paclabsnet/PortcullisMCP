@@ -26,7 +26,9 @@ import (
 // restricted secret URI schemes. envvar:// and filevar:// may be used on any field.
 var SecretAllowlist = []string{
 	"keep.auth.token",
+	"keep.auth.cert",
 	"keep.auth.key",
+	"keep.auth.server_ca",
 	"guard.bearer_token",
 	"management_api.shared_secret",
 	"identity.oidc_login.client_secret",
@@ -121,6 +123,10 @@ type OIDCLoginConfig struct {
 type SandboxConfig struct {
 	Directory string `yaml:"directory"`
 }
+
+// DefaultManagementAPIPort is the port used for the Gate management API when
+// management_api.port is not set in the config.
+const DefaultManagementAPIPort = 7777
 
 type MgmtAPIConfig struct {
 	Port              int    `yaml:"port"`

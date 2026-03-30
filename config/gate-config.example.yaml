@@ -1,3 +1,7 @@
+#
+#  This is a full example with all the major components included
+#
+
 keep:
   endpoint: "https://portcullis.internal.example.com"
   auth:
@@ -11,35 +15,43 @@ identity:
   source: "oidc-file"     # "oidc-file" (SSO-managed token file), "oidc-login" (interactive browser flow), or "os" (testing/evaluation only)
   oidc_file:
     token_file: "~/.portcullis/oidc-token"  # refreshed by enterprise SSO tooling
-  # For oidc-login (interactive browser flow):
-  # oidc_login:
-  #   issuer_url: "https://login.microsoftonline.com/<tenant-id>/v2.0"
-  #   client_id: "your-client-id"
-  #   client_secret: "envvar://OIDC_CLIENT_SECRET"  # optional for public clients
-  #   scopes: ["openid", "profile", "email"]
-  #   flow: "authorization_code"
-  # When source is "os", these optional fields allow testing different user scenarios:
-  # user_id: "alice@example.com"      # override OS username
-  # display_name: "Alice Developer"   # override display name
-  # groups: ["developers", "admin"]   # assign groups for policy testing
+
+
+# For oidc-login (interactive browser flow):
+#  source: "oidc-login"
+#
+#  oidc_login:
+#    issuer_url: "http://localhost:5556/dex" # Use your Dex or other OIDC provider URL
+#    client_id: "portcullis-gate"
+#    client_secret: "portcullis-gate-secret"
+#    scopes: ["openid", "profile", "email", "groups", "audience:server:client_id:portcullis-keep"]
+#    flow: "authorization_code"
+#  
+#  login_callback_timeout_seconds: 300
+
 
 sandbox:
-  directory: "~/.portcullis/sandbox"
+  directory: "~/sandbox"
 
 protected_paths:
   - "~/.ssh"
   - "~/.portcullis"
   - "/etc"
 
+
+#
+# if you change this port, you'll want to change the reference to this port
+# in the portcullis-guard config. 
+#
 management_api:
   port: 7777              # localhost only
   # shared_secret: ""    # optional; leave empty to disable auth on management API
 
 token_store: "~/.portcullis/tokens.json"
 
-decision_logs:
-  flush_interval: 30  # seconds between sending logs to Keep (default: 30)
-  max_batch_size: 100 # max entries per batch (default: 100)
+#decision_logs:
+#  flush_interval: 30  # seconds between sending logs to Keep (default: 30)
+#  max_batch_size: 100 # max entries per batch (default: 100)
 
 # Guard endpoint for automatic escalation token collection.
 # When configured, Gate will automatically claim tokens approved via the Guard

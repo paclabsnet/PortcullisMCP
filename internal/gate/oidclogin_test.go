@@ -74,7 +74,7 @@ func newTestLoginManager(t *testing.T, issuerURL string) (*OIDCLoginManager, *St
 		ClientID:  "test-client",
 		Scopes:    []string{"openid"},
 	}
-	m := NewOIDCLoginManager(cfg, 7777, 0, sm, nil, nil, nil)
+	m := NewOIDCLoginManager(cfg, DefaultManagementAPIPort, 0, sm, nil, nil, nil)
 	return m, sm
 }
 
@@ -247,7 +247,7 @@ func TestHandleCallback_Success(t *testing.T) {
 		ClientID:  "test-client",
 		Scopes:    []string{"openid"},
 	}
-	m := NewOIDCLoginManager(cfg, 7777, 0, sm,
+	m := NewOIDCLoginManager(cfg, DefaultManagementAPIPort, 0, sm,
 		func(raw string) { authedToken = raw },
 		nil, nil,
 	)
@@ -360,7 +360,7 @@ func TestStartLogin_CallbackTimeout_ConfiguredExpiry(t *testing.T) {
 	sm := NewStateMachine()
 	cfg := OIDCLoginConfig{IssuerURL: srv.URL, ClientID: "test-client"}
 	timeoutSecs := 120
-	m := NewOIDCLoginManager(cfg, 7777, timeoutSecs, sm, nil, nil, nil)
+	m := NewOIDCLoginManager(cfg, DefaultManagementAPIPort, timeoutSecs, sm, nil, nil, nil)
 
 	authURL, err := m.StartLogin(context.Background())
 	if err != nil {
@@ -453,7 +453,7 @@ func TestRedirectURI(t *testing.T) {
 		cfgRedirect string
 		want        string
 	}{
-		{0, "", "http://localhost:7777/auth/callback"},
+		{0, "", fmt.Sprintf("http://localhost:%d/auth/callback", DefaultManagementAPIPort)},
 		{8888, "", "http://localhost:8888/auth/callback"},
 		{0, "http://custom.example.com/callback", "http://custom.example.com/callback"},
 	}

@@ -53,7 +53,7 @@ type ManagementServer struct {
 // callback page; if empty the embedded web/callback.html is used.
 func NewManagementServer(store *TokenStore, identity *IdentityCache, cfg MgmtAPIConfig, oidcLogin *OIDCLoginManager, callbackPageFile string) (*ManagementServer, error) {
 	if cfg.Port == 0 {
-		cfg.Port = 7777
+		cfg.Port = DefaultManagementAPIPort
 	}
 	if cfg.AllowManualTokens {
 		slog.Warn("gate: management_api.allow_manual_tokens is enabled; users can inject arbitrary escalation tokens via the management UI — disable in production")

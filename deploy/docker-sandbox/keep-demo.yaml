@@ -14,8 +14,6 @@ pdp:
 #   normalizer: "passthrough"
 #   accept_forged_identities: true  # suppress per-request warnings
 
-# oidc mode (demo), using a mock iDp for testing purposes.  visit https://mock-idp.dev 
-# if you want to mint new tokens with different attributes
 #
 identity:
   normalizer: "oidc-verify"
@@ -35,6 +33,11 @@ identity:
     max_token_age_secs: 3600
     
 
+#
+# this is for  identity.normalizer: "oidc-file" 
+# visit https://mock-idp.dev 
+# if you want to mint new tokens with different attributes
+#
 #    issuer: "https://mock-idp.dev"             # Must match the 'iss' claim in your token
 #    jwks_url: "https://mock-idp.dev/jwt/.well-known/jwks.json" # URL where Keep fetches public keys
 #    audiences: ["portcullis-mcp"]              # Optional: must match the 'aud' claim  

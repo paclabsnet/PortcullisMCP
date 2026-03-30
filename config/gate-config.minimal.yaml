@@ -1,5 +1,7 @@
 # portcullis-gate minimal config — for local development/evaluation
 #
+# No security on 
+#
 # AGENT CONFIGURATION
 # portcullis-gate is launched automatically by your AI agent as an MCP server.
 # Do not run it manually. Configure your agent as follows:

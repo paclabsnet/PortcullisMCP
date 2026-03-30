@@ -17,6 +17,9 @@ escalation_token_signing:
 templates:
   dir: "/etc/portcullis/guard/templates"
 
+#
+# 
+#
 portcullis_gate_management_port: 7777   # gate management API port, shown in post-approval instructions
 
 # Authentication for the /token/unclaimed/list and /token/deposit endpoints.

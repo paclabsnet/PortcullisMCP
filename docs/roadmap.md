@@ -5,6 +5,23 @@
 Some of these tasks were deferred from Phase 2 because they are complicated and involve access to potentially expensive cloud resources
 
 
+### Task: Allow multiple sandbox directories in Gate config
+
+Currently `sandbox.directory` accepts a single path. Users with multiple unrelated
+working trees (e.g. `~/projects/client-a`, `~/projects/client-b`, `/var/data/exports`)
+have no clean way to fast-path all of them without opening up a broad common ancestor.
+
+Change `sandbox.directory` (string) to `sandbox.directories` (list of strings), keeping
+`sandbox.directory` as a backward-compatible alias for a single entry. All listed
+directories are equally trusted for fast-path; protected paths continue to take
+precedence over all of them. No per-directory policy — keep it simple.
+
+Affected code: `gate/config.go`, `gate/fastpath.go`, `gate/localfs/server.go`
+(`NewServer` takes `[]string`), and the `list_allowed_directories` tool response.
+
+- priority: medium
+
+
 ### Task: Support Cloud Vaults (Phase 3)
 These require importing heavy cloud-provider SDKs (AWS/GCP/Azure) and setting up complex test environments. By deferring them, we
 keep the scope of the first release a little more manageable
@@ -107,8 +124,34 @@ Full config reload via admin API — extend Keep's `POST /admin/reload` and add 
 
 
 
+### Task: mTLS test coverage for Gate-Keep transport
+
+Add test coverage for the mTLS authentication path between Gate and Keep.
+
+**Docker sandbox certs** — generate a self-signed CA, a Keep server cert, and a Gate client cert
+(all with 10-year expiry) and commit them under `docker/tls/` as test fixtures. Update
+`docker/keep-demo.yaml` and `docker/gate-config.yaml` (or equivalent) to mount and reference
+these certs so the full Docker Compose demo stack exercises real mTLS end-to-end.
+
+**Go unit tests** — add an in-memory test helper (using `crypto/x509` + `crypto/tls`) that
+generates a CA + server cert + client cert at test time. Use it to cover:
+- Keep server: rejects connections with no client cert
+- Keep server: rejects connections with a client cert signed by an untrusted CA
+- Keep server: accepts connections with a valid client cert signed by the configured `client_ca`
+- Gate client: `server_ca` is used to verify Keep's certificate
+- Gate client: connection fails when Keep presents a cert signed by an untrusted CA
+
+These two approaches complement each other: the Docker certs prove the real file-based config
+works end-to-end; the in-memory tests cover edge cases quickly without file dependencies.
+
+- priority: medium
+- comment: the Gate-side mTLS client setup already has basic validation tests in `forwarder_test.go`;
+  the Keep-side server setup and end-to-end handshake are the gaps
+
+
 ### Task: Improve policy messaging for denials
-Right now, the denial reason is fairly generic.  But in the Rego reference implementation, we could include a reason as part of the response, which could then be echoed to the user.
+Right now, the denial reason is fairly generic.  But in the Rego reference implementation, we could include a reason as part of the response,
+potentially customized to each rule, which could then be echoed to the user.
 - priority: low
 
 
@@ -117,3 +160,27 @@ Keep should be configured to validate the additional proof-of-identity informati
 Policy should require both: trusted user identity and trusted device posture for privileged tool usage.
 - priority: low
 
+
+
+### Task: If portcullis_gate_management_port is not set in Guard, do not show the link
+With Portcullis-Gate now fetching tokens from Guard, the back-link from Guard to Gate
+in the post-approval web page template is superfluous . We can modify the template
+to remove the part that includes the back-link 
+- priority: medium-low
+
+
+### Task: consider renaming 'requires_approval' to 'escalation' in gate config Agent messaging
+This is a config consistency issue - Gate has configuration that lets IT customize
+the messages delivered to the User for escalation and deny results.  But instead of
+calling it `escalate`, we're calling it `requires_approval`.  Which is simultaneously
+more informative and less consistent. 
+- priority: low
+
+
+
+### Task: Add an 'any' arg_restriction to the Rego reference implementation
+Functionally `{"type":"any", "key_path":"customer_id"}` is equivalent to
+`{"type":"prefix","key_path":"customer_id","data":""}` but the `any` tag 
+is a little more clear that this will match any argument supplied.  Also,
+the `any` type works better for non-string arguments
+- priority: medium-low

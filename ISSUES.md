@@ -6,3 +6,6 @@
 2. Portcullis-Gate - YAML - management_api.port should default to 7777 if it isn't specified
 
 
+3. Portcullis-Gate - FastPath - `resolvePath` in `internal/gate/fastpath.go` only handles one level of non-existent path (resolves parent + base). For a write target like `/sandbox/newdir/subdir/file.txt` where neither `newdir/` nor `subdir/` exist yet, `EvalSymlinks` on the parent fails and `resolvePath` returns an error. FastPath treats any resolve error as a deny, so writes to deeply nested new paths inside the sandbox are incorrectly denied rather than fast-pathed. The fix is to replace `resolvePath` with the same full ancestor-walking logic used in `internal/gate/localfs/server.go:fsServer.resolve`, or extract that logic into a shared helper used by both.
+
+

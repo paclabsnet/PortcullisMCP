@@ -1,9 +1,10 @@
 #
 #  OIDC Login Version
 #
-#  This is the version of gate.yaml that is properly wired to use Docker. It will
-#  require a login with the portcullis-dex container, collect an oidc-token from
-#  Dex, and then send that token along with requests to portcullis-keep.
+#  This is the version of gate.yaml that is compatible with the docker-sandbox deployment. 
+#  It will require a login to the portcullis-dex container, collect an oidc-token from
+#  Dex, and then send that token along with requests to portcullis-keep.  Keep will be
+#  able to validate that Dex created the token, and trust it.
 #
 #  And if there are escalations, the configuration below will also interact
 #  with Portcullis-Guard for escalations.  This particular file is the full
@@ -26,26 +27,6 @@ keep:
   auth:
     type: "bearer"
     token: "dev-secret-token"   # must match keep's bearer_token setting
-
-
-
-
-
-
-
-
-
-
-#identity:
-#  source: "os"                  # uses your OS login; switch to "oidc" in production
-
-
-#identity:
-#  source: "oidc-file"                # oidc token issued by mock-idp.dev
-#  oidc:
-#    token_file: ~/.portcullis/oidc-token        # change this if you like
-
-
 
 
 
@@ -80,11 +61,19 @@ guard:
   escalation_approval_endpoint: "http://localhost:8444"
   # bearer_token: "dev-guard-bearer-token" # not needed if guard has no bearer_token set
 
+  # in the proactive strategy, when Portcullis-Gate receives an escalation response from Keep
+  # it immediately sends the Pending JWT associated with that response to Guard. Why? Because
+  # it shortens the URL that the Agent has to provide to the User to include just the JTI of said JWT.
+  #
+  # We tried sending the entire Pending JWT as part of the URL to the Agent to give to the User,
+  # but the Agent would mangle the URL about 20% of the time, destroying the escalation flow.
   approval_management_strategy: "proactive"
   
 
 
-
+#
+# These messages can be customized to your preference
+#
 agent:
    require_approval:
      instructions: |
@@ -98,6 +87,10 @@ agent:
        Once approved, retry the operation.
   
 
+   deny:                       # message shown when a request is denied by policy
+     instructions: |
+       This action is not permitted: {reason}
+       Reference trace ID {trace_id} when contacting your security team.
 
 
 
