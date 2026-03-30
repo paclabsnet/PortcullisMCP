@@ -58,16 +58,16 @@ type AnnotatedTool struct {
 // SourceType indicates how the identity was obtained; "os" is provided for
 // testing/evaluation only — portcullis-keep may be configured to reject it.
 type UserIdentity struct {
-	UserID      string   `json:"user_id"`      // stable enterprise identifier (UPN, email, etc.)
+	UserID      string   `json:"user_id"` // stable enterprise identifier (UPN, email, etc.)
 	Email       string   `json:"email,omitempty"`
 	DisplayName string   `json:"display_name"`
-	Groups      []string `json:"groups"`       // directory groups
-	Roles       []string `json:"roles,omitempty"`      // RBAC roles, distinct from directory groups
-	Department  string   `json:"department,omitempty"` // org unit / department for ABAC
-	AuthMethod  []string `json:"auth_method,omitempty"` // OIDC AMR claim, e.g. ["pwd","mfa"]
+	Groups      []string `json:"groups"`                 // directory groups
+	Roles       []string `json:"roles,omitempty"`        // RBAC roles, distinct from directory groups
+	Department  string   `json:"department,omitempty"`   // org unit / department for ABAC
+	AuthMethod  []string `json:"auth_method,omitempty"`  // OIDC AMR claim, e.g. ["pwd","mfa"]
 	TokenExpiry int64    `json:"token_expiry,omitempty"` // Unix timestamp; 0 means unknown
-	SourceType  string   `json:"source_type"`  // "oidc" | "os"
-	RawToken    string   `json:"raw_token"`    // original OIDC token for PDP verification
+	SourceType  string   `json:"source_type"`            // "oidc" | "os"
+	RawToken    string   `json:"raw_token"`              // original OIDC token for PDP verification
 }
 
 // Principal represents the verified facts about a user after Keep has performed
@@ -116,8 +116,8 @@ type EnrichedMCPRequest struct {
 
 // PDPResponse is the decision returned by the Policy Decision Point.
 type PDPResponse struct {
-	Decision        string         `json:"decision"`                   // "allow" | "deny" | "escalate" | "workflow"
-	Reason          string         `json:"reason"`
+	Decision        string           `json:"decision"` // "allow" | "deny" | "escalate" | "workflow"
+	Reason          string           `json:"reason"`
 	EscalationScope []map[string]any `json:"escalation_scope,omitempty"` // claims required for escalation token
 }
 
@@ -153,6 +153,23 @@ type SessionUnknownError struct {
 	Reason    string
 }
 
+// IdentityVerificationError is returned when token verification fails, typically because
+// the identity token is invalid or has expired (e.g., JWKS kid mismatch after IdP restart).
+// Gate can use this error to prompt the user to provide a new identity rather than
+// treating it as a PDP unavailability.
+type IdentityVerificationError struct {
+	Reason string
+}
+
+func (e *IdentityVerificationError) Error() string {
+	if e.Reason != "" {
+		return e.Reason
+	}
+	return ErrIdentityVerificationFailed.Error()
+}
+
+func (e *IdentityVerificationError) Unwrap() error { return ErrIdentityVerificationFailed }
+
 func (e *DenyError) Error() string {
 	if e.Reason != "" {
 		return "portcullis: request denied by policy: " + e.Reason
@@ -183,8 +200,9 @@ func (e *EscalationPendingError) Unwrap() error { return ErrEscalationPending }
 
 // Sentinel errors for known failure modes.
 var (
-	ErrDenied            = errors.New("portcullis: request denied by policy")
-	ErrEscalationPending = errors.New("portcullis: escalation pending approval")
-	ErrPDPUnavailable    = errors.New("portcullis: policy decision point unavailable")
-	ErrSessionUnknown    = errors.New("portcullis: keep session unknown")
+	ErrDenied                     = errors.New("portcullis: request denied by policy")
+	ErrEscalationPending          = errors.New("portcullis: escalation pending approval")
+	ErrPDPUnavailable             = errors.New("portcullis: policy decision point unavailable")
+	ErrSessionUnknown             = errors.New("portcullis: keep session unknown")
+	ErrIdentityVerificationFailed = errors.New("portcullis: identity verification failed")
 )

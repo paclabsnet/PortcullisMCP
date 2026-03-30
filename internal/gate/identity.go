@@ -144,6 +144,16 @@ func (c *IdentityCache) SetToken(rawJWT string) error {
 	return nil
 }
 
+// Clear resets the cached identity to empty state. Used when the identity token
+// is found to be invalid (e.g., due to IdP restart). Only applicable to oidc-login source.
+func (c *IdentityCache) Clear() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.identity = shared.UserIdentity{}
+	c.tokenExpiry = time.Time{}
+	c.refreshAt = time.Now()
+}
+
 // refresh re-resolves the identity from the configured source.
 // Must be called with c.mu held.
 // For oidc-login, the identity is set externally via SetToken (the IdP callback

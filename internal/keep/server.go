@@ -20,6 +20,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -203,6 +204,16 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 	if normErr != nil {
 		span.SetStatus(codes.Error, normErr.Error())
 		slog.ErrorContext(ctx, "identity normalization failed", "error", normErr, "trace_id", traceID)
+
+		// If the error is specifically an identity verification failure (e.g., JWKS kid mismatch),
+		// return 401 Unauthorized so Gate knows this is a token/identity issue (not PDP unavailability).
+		// This allows Gate to prompt the user to re-authenticate rather than treating it as a PDP outage.
+		if verifyErr := (*shared.IdentityVerificationError)(nil); errors.As(normErr, &verifyErr) {
+			writeError(w, http.StatusUnauthorized, normErr.Error())
+			return
+		}
+
+		// Other normalization errors are treated as transient PDP unavailability.
 		writeError(w, http.StatusServiceUnavailable, "identity normalization failed")
 		return
 	}
@@ -422,6 +433,16 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	if normErr != nil {
 		span.SetStatus(codes.Error, normErr.Error())
 		slog.ErrorContext(ctx, "identity normalization failed", "error", normErr, "trace_id", traceID)
+
+		// If the error is specifically an identity verification failure (e.g., JWKS kid mismatch),
+		// return 401 Unauthorized so Gate knows this is a token/identity issue (not PDP unavailability).
+		// This allows Gate to prompt the user to re-authenticate rather than treating it as a PDP outage.
+		if verifyErr := (*shared.IdentityVerificationError)(nil); errors.As(normErr, &verifyErr) {
+			writeError(w, http.StatusUnauthorized, normErr.Error())
+			return
+		}
+
+		// Other normalization errors are treated as transient PDP unavailability.
 		writeError(w, http.StatusServiceUnavailable, "identity normalization failed")
 		return
 	}

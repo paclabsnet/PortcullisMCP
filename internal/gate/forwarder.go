@@ -128,6 +128,14 @@ func (f *Forwarder) post(ctx context.Context, path string, body, out any) error 
 	switch resp.StatusCode {
 	case http.StatusOK, http.StatusCreated:
 		return json.NewDecoder(resp.Body).Decode(out)
+	case http.StatusUnauthorized:
+		// Identity verification failed (e.g., JWKS kid mismatch after IdP restart).
+		// Gate should prompt the user to re-authenticate rather than treating this as PDP unavailability.
+		var body struct {
+			Error string `json:"error"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&body)
+		return &shared.IdentityVerificationError{Reason: body.Error}
 	case http.StatusForbidden:
 		var body struct {
 			Error   string `json:"error"`

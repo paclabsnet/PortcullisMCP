@@ -228,10 +228,16 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 	mcp.AddTool(g.server,
 		&mcp.Tool{
 			Name:        "portcullis_login",
-			Description: "Starts or checks the Portcullis login process. For oidc-login configurations, returns the URL to open in a browser to authenticate. For os and oidc-file configurations, reports that login is not necessary.",
+			Description: "Starts or checks the Portcullis login process. For oidc-login configurations, returns the URL to open in a browser to authenticate. For os and oidc-file configurations, reports that login is not necessary. Optional 'force' argument (boolean) forces a new login URL even if already authenticated, useful to get a new token from the IdP after it has restarted.",
 		},
-		func(ctx context.Context, _ *mcp.CallToolRequest, _ any) (*mcp.CallToolResult, any, error) {
-			msg := g.handleLoginTool(ctx)
+		func(ctx context.Context, _ *mcp.CallToolRequest, in any) (*mcp.CallToolResult, any, error) {
+			force := false
+			if inMap, ok := in.(map[string]any); ok {
+				if forceVal, ok := inMap["force"].(bool); ok {
+					force = forceVal
+				}
+			}
+			msg := g.handleLoginTool(ctx, force)
 			return &mcp.CallToolResult{
 				Content: []mcp.Content{&mcp.TextContent{Text: msg}},
 			}, nil, nil
@@ -280,16 +286,20 @@ func (g *Gate) refreshKeepTools(ctx context.Context) {
 }
 
 // handleLoginTool handles calls to the portcullis_login tool.
-func (g *Gate) handleLoginTool(ctx context.Context) string {
+// If force is true, it bypasses the "already authenticated" check and forces a new login URL.
+func (g *Gate) handleLoginTool(ctx context.Context, force bool) string {
 	switch g.cfg.Identity.Source {
 	case "os", "oidc-file":
 		return "Login is not necessary."
 	case "oidc-login":
-		if g.stateMachine.State() == StateAuthenticated {
-			return "You are already successfully logged in."
+		if !force && g.stateMachine.State() == StateAuthenticated {
+			return "You are already successfully logged in. Use 'force: true' to get a new login URL (e.g., after IdP restart)."
 		}
 		if g.oidcLogin == nil {
 			return "Login manager is not configured."
+		}
+		if force {
+			slog.Info("forcing new login URL", "source", "portcullis_login force=true")
 		}
 		loginURL, err := g.oidcLogin.StartLogin(ctx)
 		if err != nil {
@@ -380,7 +390,7 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 		state := g.stateMachine.State()
 		switch state {
 		case StateUnauthenticated:
-			loginMsg := g.handleLoginTool(ctx)
+			loginMsg := g.handleLoginTool(ctx, false)
 			return &mcp.CallToolResult{
 				IsError: true,
 				Content: []mcp.Content{&mcp.TextContent{Text: "Authentication required. " + loginMsg}},
@@ -792,6 +802,7 @@ func (g *Gate) claimAllUnclaimedTokens(ctx context.Context) {
 func (g *Gate) policyErrToResult(err error, toolName, traceID string) (*mcp.CallToolResult, error) {
 	var escalationErr *shared.EscalationPendingError
 	var denyErr *shared.DenyError
+	var identityErr *shared.IdentityVerificationError
 	switch {
 	case errors.As(err, &escalationErr):
 		// Prefer the trace ID Keep sent back — it matches Keep's OTel spans and
@@ -826,6 +837,22 @@ func (g *Gate) policyErrToResult(err error, toolName, traceID string) (*mcp.Call
 			IsError: true,
 			Content: []mcp.Content{&mcp.TextContent{Text: g.buildDenyMessage(denyErr.Reason, effectiveTraceID)}},
 		}, nil
+	case errors.As(err, &identityErr):
+		// Identity token is invalid (e.g., JWKS kid mismatch after IdP restart).
+		// Reset to unauthenticated state and prompt user to log in again.
+		slog.Warn("identity verification failed, resetting to unauthenticated", 
+			"error", identityErr.Reason, "trace_id", traceID)
+		if g.cfg.Identity.Source == "oidc-login" {
+			g.stateMachine.SetUnauthenticated()
+			g.identity.Clear()
+			loginMsg := g.handleLoginTool(context.Background(), false)
+			return &mcp.CallToolResult{
+				IsError: true,
+				Content: []mcp.Content{&mcp.TextContent{Text: "Your authentication has expired. " + loginMsg}},
+			}, nil
+		}
+		// For non-oidc-login sources, return the error as-is
+		return nil, err
 	case errors.Is(err, shared.ErrDenied):
 		// Fallback for bare sentinel (e.g. fast-path deny reaching this code path).
 		return &mcp.CallToolResult{

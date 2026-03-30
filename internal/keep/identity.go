@@ -312,7 +312,10 @@ func (n *oidcVerifyingNormalizer) keyFuncCtx(ctx context.Context, token *jwt.Tok
 		}
 	}
 
-	return nil, fmt.Errorf("kid %q not found in JWKS after refresh", kid)
+	// Kid not found after refresh: wrap as IdentityVerificationError so Gate
+	// knows this is a token/identity issue (401), not a PDP unavailability (503).
+	reason := fmt.Sprintf("kid %q not found in JWKS after refresh; token may be expired or issued by a restarted IdP", kid)
+	return nil, &shared.IdentityVerificationError{Reason: reason}
 }
 
 func (n *oidcVerifyingNormalizer) buildRSAPublicKey(k jwk) (*rsa.PublicKey, error) {
