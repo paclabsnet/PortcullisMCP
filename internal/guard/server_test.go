@@ -716,9 +716,10 @@ func TestHandlePending_Valid(t *testing.T) {
 	}
 
 	// Verify the pending request was stored.
-	s.pendingMu.Lock()
-	pr, ok := s.pendingRequests[jti]
-	s.pendingMu.Unlock()
+	pr, ok, err := s.pending.GetPending(context.Background(), jti)
+	if err != nil {
+		t.Fatalf("GetPending: %v", err)
+	}
 	if !ok {
 		t.Fatal("pending request not stored after handlePending")
 	}
@@ -903,27 +904,33 @@ func TestHandleGet_TokenQueryParamStillWorks(t *testing.T) {
 
 func TestCleanupExpired_RemovesExpiredPendingRequests(t *testing.T) {
 	s := makeServer(t)
+	ctx := context.Background()
 
-	// Insert one expired and one valid pending request.
-	s.pendingMu.Lock()
-	s.pendingRequests["expired-jti"] = pendingRequest{
+	// Insert one expired and one valid pending request directly via the store.
+	if err := s.pending.StorePending(ctx, PendingRequest{
 		JTI:       "expired-jti",
 		JWT:       "jwt",
 		ExpiresAt: time.Now().Add(-time.Hour),
+	}); err != nil {
+		t.Fatalf("StorePending expired: %v", err)
 	}
-	s.pendingRequests["valid-jti"] = pendingRequest{
+	if err := s.pending.StorePending(ctx, PendingRequest{
 		JTI:       "valid-jti",
 		JWT:       "jwt",
 		ExpiresAt: time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("StorePending valid: %v", err)
 	}
-	s.pendingMu.Unlock()
 
 	s.cleanupExpired()
 
-	s.pendingMu.Lock()
-	_, expiredExists := s.pendingRequests["expired-jti"]
-	_, validExists := s.pendingRequests["valid-jti"]
-	s.pendingMu.Unlock()
+	// Inspect the in-memory store's internal map directly to confirm the
+	// expired entry was physically removed (not just filtered on read).
+	memStore := s.pending.(*MemPendingStore)
+	memStore.mu.Lock()
+	_, expiredExists := memStore.entries["expired-jti"]
+	_, validExists := memStore.entries["valid-jti"]
+	memStore.mu.Unlock()
 
 	if expiredExists {
 		t.Error("expired pending request should have been removed")

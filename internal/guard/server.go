@@ -18,13 +18,13 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"log/slog"
 	"net/http"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -63,24 +63,6 @@ type escalationTokenClaims struct {
 	Portcullis portcullisClaims `json:"portcullis,omitempty"`
 }
 
-// unclaimedToken is a Guard-issued escalation token that has been approved but
-// not yet collected by Gate. Keyed by JTI in the unclaimedTokens map.
-type unclaimedToken struct {
-	UserID    string
-	JTI       string
-	Raw       string
-	ExpiresAt time.Time
-}
-
-// pendingRequest is a Keep-signed escalation request JWT that Gate has pushed
-// to Guard proactively (via POST /pending). Stored so that handleGet can look
-// up the JWT by JTI and serve the approval page via a short ?jti= URL.
-type pendingRequest struct {
-	JTI       string
-	JWT       string
-	ExpiresAt time.Time
-}
-
 // Server is the portcullis-guard HTTP server.
 type Server struct {
 	cfg        Config
@@ -89,15 +71,12 @@ type Server struct {
 	ttl        time.Duration
 	templates  *template.Template
 
-	// unclaimedTokens holds approved escalation tokens not yet claimed by Gate.
-	// Outer key: UserID. Inner key: JTI.
-	unclaimedMu     sync.Mutex
-	unclaimedTokens map[string]map[string]unclaimedToken
+	// pending holds Keep-signed escalation request JWTs registered by Gate
+	// before it presents the approval URL.  Keyed by JTI.
+	pending PendingStore
 
-	// pendingRequests holds Keep-signed escalation request JWTs pushed by Gate
-	// in proactive mode. Keyed by JTI. Cleaned up after expiry.
-	pendingMu       sync.Mutex
-	pendingRequests map[string]pendingRequest
+	// unclaimed holds approved escalation tokens not yet collected by Gate.
+	unclaimed UnclaimedStore
 }
 
 // NewServer creates a Guard server from config.
@@ -127,13 +106,13 @@ func NewServer(ctx context.Context, cfg Config) (*Server, error) {
 	}
 
 	return &Server{
-		cfg:             cfg,
-		keepKey:         []byte(cfg.Keep.PendingEscalationRequestSigningKey),
-		signingKey:      []byte(cfg.EscalationTokenSigning.Key),
-		ttl:             ttl,
-		templates:       tmpl,
-		unclaimedTokens: make(map[string]map[string]unclaimedToken),
-		pendingRequests: make(map[string]pendingRequest),
+		cfg:        cfg,
+		keepKey:    []byte(cfg.Keep.PendingEscalationRequestSigningKey),
+		signingKey: []byte(cfg.EscalationTokenSigning.Key),
+		ttl:        ttl,
+		templates:  tmpl,
+		pending:    NewMemPendingStore(cfg.Limits.MaxPendingRequests),
+		unclaimed:  NewMemUnclaimedStore(cfg.Limits.MaxUnclaimedPerUser, cfg.Limits.MaxUnclaimedTotal),
 	}, nil
 }
 
@@ -267,9 +246,12 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "missing token or jti", http.StatusBadRequest)
 			return
 		}
-		s.pendingMu.Lock()
-		pr, ok := s.pendingRequests[jti]
-		s.pendingMu.Unlock()
+		pr, ok, err := s.pending.GetPending(r.Context(), jti)
+		if err != nil {
+			slog.Error("pending store lookup", "error", err, "jti", jti)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
 		if !ok {
 			slog.Warn("approval page: pending request not found for jti", "jti", jti, "remote", r.RemoteAddr)
 			http.Error(w, "escalation request not found or expired", http.StatusNotFound)
@@ -352,7 +334,16 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request) {
 
 	// Add the issued token to the unclaimed list so Gate can collect it
 	// automatically without the user needing to paste it manually.
-	s.addUnclaimed(claims.UserID, claims.ID, escalationToken, expiry)
+	if err := s.unclaimed.AddUnclaimed(r.Context(), UnclaimedToken{
+		UserID:    claims.UserID,
+		JTI:       claims.ID,
+		Raw:       escalationToken,
+		ExpiresAt: expiry,
+	}); err != nil {
+		// Non-fatal: the token is shown on screen so the user can paste it
+		// manually, but Gate-side polling won't find it.
+		slog.Warn("add unclaimed token after approval", "error", err, "jti", claims.ID)
+	}
 
 	scopeJSON, _ := json.Marshal(scope)
 	slog.Info("escalation token issued",
@@ -444,20 +435,20 @@ func (s *Server) handlePending(w http.ResponseWriter, r *http.Request) {
 		expiry = claims.ExpiresAt.Time
 	}
 
-	// Cap applies to in-memory storage only; replace with cache-side enforcement when switching to distributed token store.
-	s.pendingMu.Lock()
-	if s.cfg.Limits.MaxPendingRequests > 0 && len(s.pendingRequests) >= s.cfg.Limits.MaxPendingRequests {
-		s.pendingMu.Unlock()
-		slog.ErrorContext(r.Context(), "pending requests at capacity", "limit", s.cfg.Limits.MaxPendingRequests)
-		http.Error(w, "server at capacity", http.StatusServiceUnavailable)
-		return
-	}
-	s.pendingRequests[body.JTI] = pendingRequest{
+	if err := s.pending.StorePending(r.Context(), PendingRequest{
 		JTI:       body.JTI,
 		JWT:       body.JWT,
 		ExpiresAt: expiry,
+	}); err != nil {
+		if errors.Is(err, ErrCapacityExceeded) {
+			slog.ErrorContext(r.Context(), "pending requests at capacity", "jti", body.JTI)
+			http.Error(w, "server at capacity", http.StatusServiceUnavailable)
+			return
+		}
+		slog.Error("store pending request", "error", err, "jti", body.JTI)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
 	}
-	s.pendingMu.Unlock()
 
 	slog.Info("escalation request registered via proactive push",
 		"jti", body.JTI,
@@ -470,24 +461,6 @@ func (s *Server) handlePending(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "registered", "jti": body.JTI})
-}
-
-// ---- unclaimed token store -------------------------------------------------
-
-// addUnclaimed adds an approved escalation token to the unclaimed list for userID.
-func (s *Server) addUnclaimed(userID, jti, raw string, expiresAt time.Time) {
-	s.unclaimedMu.Lock()
-	defer s.unclaimedMu.Unlock()
-
-	if s.unclaimedTokens[userID] == nil {
-		s.unclaimedTokens[userID] = make(map[string]unclaimedToken)
-	}
-	s.unclaimedTokens[userID][jti] = unclaimedToken{
-		UserID:    userID,
-		JTI:       jti,
-		Raw:       raw,
-		ExpiresAt: expiresAt,
-	}
 }
 
 // cleanupWorker periodically removes expired unclaimed tokens.
@@ -511,28 +484,13 @@ func (s *Server) cleanupWorker(ctx context.Context) {
 }
 
 func (s *Server) cleanupExpired() {
-	now := time.Now()
-
-	s.unclaimedMu.Lock()
-	for userID, tokens := range s.unclaimedTokens {
-		for jti, tok := range tokens {
-			if tok.ExpiresAt.Before(now) {
-				delete(tokens, jti)
-			}
-		}
-		if len(tokens) == 0 {
-			delete(s.unclaimedTokens, userID)
-		}
+	ctx := context.Background()
+	if err := s.pending.PurgeExpired(ctx); err != nil {
+		slog.Warn("purge expired pending requests", "error", err)
 	}
-	s.unclaimedMu.Unlock()
-
-	s.pendingMu.Lock()
-	for jti, pr := range s.pendingRequests {
-		if pr.ExpiresAt.Before(now) {
-			delete(s.pendingRequests, jti)
-		}
+	if err := s.unclaimed.PurgeExpired(ctx); err != nil {
+		slog.Warn("purge expired unclaimed tokens", "error", err)
 	}
-	s.pendingMu.Unlock()
 }
 
 // handleHealthz is the liveness probe. Returns 200 as long as the HTTP server
@@ -591,21 +549,24 @@ func (s *Server) handleTokenUnclaimedList(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	s.unclaimedMu.Lock()
-	userTokens := s.unclaimedTokens[userID]
+	tokens, err := s.unclaimed.ListUnclaimed(r.Context(), userID)
+	if err != nil {
+		slog.Error("list unclaimed tokens", "error", err, "user_id", userID)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	result := make([]struct {
 		JTI       string    `json:"jti"`
 		Raw       string    `json:"raw"`
 		ExpiresAt time.Time `json:"expires_at"`
-	}, 0, len(userTokens))
-	for _, tok := range userTokens {
+	}, 0, len(tokens))
+	for _, tok := range tokens {
 		result = append(result, struct {
 			JTI       string    `json:"jti"`
 			Raw       string    `json:"raw"`
 			ExpiresAt time.Time `json:"expires_at"`
 		}{JTI: tok.JTI, Raw: tok.Raw, ExpiresAt: tok.ExpiresAt})
 	}
-	s.unclaimedMu.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(result)
@@ -662,38 +623,22 @@ func (s *Server) handleTokenDeposit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID := claims.UserID
-
-	// Cap applies to in-memory storage only; replace with cache-side enforcement when switching to distributed token store.
-	s.unclaimedMu.Lock()
-	if s.cfg.Limits.MaxUnclaimedPerUser > 0 && len(s.unclaimedTokens[userID]) >= s.cfg.Limits.MaxUnclaimedPerUser {
-		s.unclaimedMu.Unlock()
-		slog.ErrorContext(r.Context(), "unclaimed tokens at per-user capacity", "user_id", userID, "limit", s.cfg.Limits.MaxUnclaimedPerUser)
-		http.Error(w, "server at capacity", http.StatusServiceUnavailable)
-		return
-	}
-	if s.cfg.Limits.MaxUnclaimedTotal > 0 {
-		total := 0
-		for _, m := range s.unclaimedTokens {
-			total += len(m)
-		}
-		if total >= s.cfg.Limits.MaxUnclaimedTotal {
-			s.unclaimedMu.Unlock()
-			slog.ErrorContext(r.Context(), "unclaimed tokens at total capacity", "limit", s.cfg.Limits.MaxUnclaimedTotal)
-			http.Error(w, "server at capacity", http.StatusServiceUnavailable)
-			return
-		}
-	}
-	if s.unclaimedTokens[userID] == nil {
-		s.unclaimedTokens[userID] = make(map[string]unclaimedToken)
-	}
-	s.unclaimedTokens[userID][claims.ID] = unclaimedToken{
-		UserID:    userID,
+	if err := s.unclaimed.AddUnclaimed(r.Context(), UnclaimedToken{
+		UserID:    claims.UserID,
 		JTI:       claims.ID,
 		Raw:       escalationToken,
 		ExpiresAt: expiry,
+	}); err != nil {
+		if errors.Is(err, ErrCapacityExceeded) {
+			slog.ErrorContext(r.Context(), "unclaimed tokens at capacity",
+				"user_id", claims.UserID, "jti", claims.ID)
+			http.Error(w, "server at capacity", http.StatusServiceUnavailable)
+			return
+		}
+		slog.Error("add unclaimed token via deposit", "error", err, "jti", claims.ID)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
 	}
-	s.unclaimedMu.Unlock()
 
 	slog.Info("escalation token deposited via workflow",
 		"user_id", claims.UserID,
@@ -738,17 +683,12 @@ func (s *Server) handleTokenClaim(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.unclaimedMu.Lock()
-	var found *unclaimedToken
-	for _, userTokens := range s.unclaimedTokens {
-		if tok, ok := userTokens[body.JTI]; ok {
-			cp := tok
-			found = &cp
-			delete(userTokens, body.JTI)
-			break
-		}
+	found, err := s.unclaimed.ClaimToken(r.Context(), body.JTI)
+	if err != nil {
+		slog.Error("claim token", "error", err, "jti", body.JTI)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
 	}
-	s.unclaimedMu.Unlock()
 
 	if found == nil {
 		// Not yet approved, already claimed, or expired — not an error from

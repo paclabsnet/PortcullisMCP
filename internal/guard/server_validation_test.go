@@ -64,12 +64,12 @@ func makeServerDirect(auth AuthConfig, limits LimitsConfig) *Server {
 			Auth:   auth,
 			Limits: limits,
 		},
-		keepKey:         []byte(testKeepKey),
-		signingKey:      []byte(testSigningKey),
-		ttl:             24 * time.Hour,
-		templates:       tmpl,
-		unclaimedTokens: make(map[string]map[string]unclaimedToken),
-		pendingRequests: make(map[string]pendingRequest),
+		keepKey:    []byte(testKeepKey),
+		signingKey: []byte(testSigningKey),
+		ttl:        24 * time.Hour,
+		templates:  tmpl,
+		pending:    NewMemPendingStore(limits.MaxPendingRequests),
+		unclaimed:  NewMemUnclaimedStore(limits.MaxUnclaimedPerUser, limits.MaxUnclaimedTotal),
 	}
 }
 
@@ -269,7 +269,14 @@ func TestGuard_TokenClaim_LogsRemoteAddr(t *testing.T) {
 	s := makeLimitedServer(t)
 
 	// Seed an unclaimed token directly.
-	s.addUnclaimed("claim-addr-user", "claim-addr-jti", "raw-token", time.Now().Add(time.Hour))
+	if err := s.unclaimed.AddUnclaimed(context.Background(), UnclaimedToken{
+		UserID:    "claim-addr-user",
+		JTI:       "claim-addr-jti",
+		Raw:       "raw-token",
+		ExpiresAt: time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("AddUnclaimed: %v", err)
+	}
 
 	// Capture slog output.
 	capture := &slogCapture{}

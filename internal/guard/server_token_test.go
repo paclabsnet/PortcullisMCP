@@ -16,6 +16,7 @@ package guard
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -56,7 +57,14 @@ func TestHandleTokenUnclaimedList_EmptyForUnknownUser(t *testing.T) {
 func TestHandleTokenUnclaimedList_ReturnsTokensForUser(t *testing.T) {
 	s := makeServer(t)
 	// Directly seed an unclaimed token.
-	s.addUnclaimed("user@example.com", "jti-abc", "raw-token-value", time.Now().Add(time.Hour))
+	if err := s.unclaimed.AddUnclaimed(context.Background(), UnclaimedToken{
+		UserID:    "user@example.com",
+		JTI:       "jti-abc",
+		Raw:       "raw-token-value",
+		ExpiresAt: time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("AddUnclaimed: %v", err)
+	}
 
 	req := httptest.NewRequest(http.MethodGet, "/token/unclaimed/list?user_id=user@example.com", nil)
 	w := httptest.NewRecorder()
@@ -211,7 +219,14 @@ func TestHandleTokenClaim_NotFound(t *testing.T) {
 
 func TestHandleTokenClaim_Success_AndConsumed(t *testing.T) {
 	s := makeServer(t)
-	s.addUnclaimed("user@example.com", "claim-jti", "the-escalation-token", time.Now().Add(time.Hour))
+	if err := s.unclaimed.AddUnclaimed(context.Background(), UnclaimedToken{
+		UserID:    "user@example.com",
+		JTI:       "claim-jti",
+		Raw:       "the-escalation-token",
+		ExpiresAt: time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("AddUnclaimed: %v", err)
+	}
 
 	body, _ := json.Marshal(map[string]string{"jti": "claim-jti"})
 
