@@ -380,6 +380,8 @@ You aren't required to put all of your MCPs behind Portcullis. You can migrate y
 **Policies will get complex**
 From a compliance and security perspective, a complex-but-correct Agent MCP policy is better than a simple-but-wrong Agent MCP policy. We have done what we can to make the policy approach as simple as possible for common use-cases. [PAC.Labs](https://paclabs.io) can help with policy architecture and authoring, if that would be helpful.
 
+For a deeper treatment of enterprise objections and detailed technical responses, see [docs/enterprise-objections-responses.md](docs/enterprise-objections-responses.md).
+
 
 
 
@@ -477,7 +479,16 @@ Fixing alert fatigue in humans is beyond the scope of our remit. In theory, you 
 
 
 **Can we make the approval page details more user friendly?**
-That's on the roadmap.
+That's on the roadmap.  It's tricky to get right.
+
+
+**Will this solution run well in a multi-region enterprise**
+The workload of this solution is moderate on a per-call basis, and the major network latency in the workflow is the Agent crunching data. We have every reason
+to believe it will scale well with one central implementation.
+
+But there's no reason it would not work well with multiple regional instances of this solution, each running in isolation from the other. (Note: trying to have a hybrid model, with different Keep clusters but one common Guard cluster can work, but it would require the same keys across all instances)
+
+This is also true for different departments, divisions, business units, etc - if they have different IdPs, different requirements for certificate strength, etc - a different family of Gate/Keep/Guard servers can be configured for each. 
 
 
 

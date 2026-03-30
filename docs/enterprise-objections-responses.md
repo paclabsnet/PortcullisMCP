@@ -87,6 +87,8 @@ Portcullis provides traceable decision and escalation flows, with integration po
 - Decision and escalation events can be logged with request context.
 - Workflow interactions are observable and correlate with request IDs and token/session context.
 - Keep supports decision log integrations and structured output.
+- PDP may support comprehensive decision log management
+  - for example: Permit.IO, EnforceAuth and Enterprise OPA all provide auditable decision logs
 
 **Evidence to show**
 - Decision log configuration examples.
@@ -133,6 +135,7 @@ The architecture is composable, but enterprise rollout should include explicit l
 - Core components are separable and configurable.
 - Scale concerns to validate: policy evaluation latency, workflow round-trip behavior, token validation caching strategy, and distributed state assumptions.
 - For Guard/Keep clustering, document shared-state expectations (for example distributed cache and idempotent workflow handling).
+  - Note: the only interesting idempotency challenge is in delegating tasks to a workflow engine, which is not currently supported
 
 **Evidence to show**
 - Performance test plan and baseline metrics.
@@ -162,6 +165,7 @@ These are typically better received when stated up front:
 
 - Formal compliance artifacts (SOC2/ISO mappings) may need to be produced by the adopting organization or a commercial wrapper.
 - Some enterprise integrations may require adapter work.
+  - PAC.Labs provides technical & helpdesk support, and consulting services for integration support
 - Large-scale HA/performance claims should be validated with environment-specific testing.
 
 ## Appendix: mapping objections to artifacts
