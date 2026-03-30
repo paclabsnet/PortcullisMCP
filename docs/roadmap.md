@@ -77,7 +77,7 @@ keep the scope of the first release a little more manageable
   this solution
 
 
-### Task: Add distributed caching to the Portcullis-Guard
+### Task: Add distributed caching to the Portcullis-Guard (DONE)
 - [x] Redis token store — pending escalation requests and unclaimed tokens can be stored in Redis
   (`token_store.backend: "redis"`), enabling shared state across multiple Guard instances and
   survival across Guard restarts.  Sandbox docker-compose includes a Redis 7 container.
@@ -137,7 +137,6 @@ not sure if this is necessary. It might be helpful for troubleshooting
 This would potentially prevent a particularly nasty rogue agent from knowingly creating a request that would require
 escalation, waiting for the response, abusing some sort of direct HTTP mechanism to edit and approve the request, and
 then trying again, without the user being aware that it was happening.
-
 - priority: medium-low
 - comment: much of this is just a port of the equivalent work we've done for Portcullis-Gate login
 
@@ -230,7 +229,7 @@ more informative and less consistent.
 
 
 
-### Task: Add an 'any' arg_restriction to the Rego reference implementation
+### Task: Add an 'any' arg_restriction to the Rego reference implementation  (DONE)
 Functionally `{"type":"any", "key_path":"customer_id"}` is equivalent to
 `{"type":"prefix","key_path":"customer_id","data":""}` but the `any` tag
 is a little more clear that this will match any argument supplied.  Also,
