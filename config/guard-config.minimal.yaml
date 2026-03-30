@@ -8,10 +8,14 @@ escalation_token_signing:
   key: "dev-guard-signing-secret"   # PDP must be configured to trust tokens signed with this key; use ${ENV_VAR} in production
   ttl: 3600                         # short TTL for local testing
 
+#
+# the web pages provided for approval (and post-approval) are included by default, but
+# you can create new ones and reference them
+#
 templates:
   dir: "./internal/guard/templates"   # adjust to match your working directory
 
 portcullis_gate_management_port: 7777
 
 auth:
-  allow_unauthenticated_token_apis: true  # development only — remove in production
+  allow_unauthenticated: true  # development only — remove in production

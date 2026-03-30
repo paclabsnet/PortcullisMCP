@@ -15,11 +15,14 @@ Include as much of the following as you can:
 - Steps to reproduce or proof-of-concept code
 - Any suggested mitigations you are aware of
 
-You can expect an acknowledgement within 3 business days. We will work with you to understand the issue and coordinate a fix and disclosure timeline.
+You can expect an acknowledgement within 3 business days.
+We will work with you to understand the issue and coordinate a fix and disclosure timeline.
 
 ## Scope
 
-This project is a security gateway — vulnerabilities that allow policy bypass, identity spoofing, privilege escalation, or unauthorized access to backend MCP tools are considered critical and will be prioritized accordingly.
+This project is a security gateway.
+Vulnerabilities that allow policy bypass, identity spoofing, privilege escalation,
+or unauthorized access to backend MCP tools are considered critical and will be prioritized accordingly.
 
 ## Supported Versions
 

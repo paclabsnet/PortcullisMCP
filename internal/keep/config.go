@@ -27,6 +27,9 @@ import (
 // SecretAllowlist lists the config fields eligible for vault:// and other
 // restricted secret URI schemes. envvar:// and filevar:// may be used on any field.
 var SecretAllowlist = []string{
+	"listen.tls.cert",
+	"listen.tls.key",
+	"listen.tls.client_ca",
 	"listen.auth.bearer_token",
 	"admin.token",
 	"escalation_request_signing.key",

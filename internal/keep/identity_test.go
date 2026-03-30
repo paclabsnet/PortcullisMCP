@@ -549,6 +549,109 @@ func (c *capturingPDP) Evaluate(_ context.Context, req AuthorizedRequest) (share
 	return shared.PDPResponse{Decision: "allow"}, nil
 }
 
+// --- max_token_age_secs tests ---
+
+// newOIDCNormalizerWithJWKS is a test helper that creates an oidcVerifyingNormalizer
+// backed by a real JWKS server so we can exercise the full Normalize path.
+func newOIDCNormalizerWithJWKS(t *testing.T, maxAgeSecs int) (*oidcVerifyingNormalizer, *rsa.PrivateKey, string, string) {
+	t.Helper()
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kid := "test-kid"
+	issuer := "https://idp.example.com"
+
+	jwksSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := base64.RawURLEncoding.EncodeToString(privateKey.N.Bytes())
+		e := base64.RawURLEncoding.EncodeToString(bigIntToBytes(privateKey.E))
+		_ = json.NewEncoder(w).Encode(jwks{Keys: []jwk{{Kid: kid, Kty: "RSA", Alg: "RS256", N: n, E: e}}})
+	}))
+	t.Cleanup(jwksSrv.Close)
+
+	n := &oidcVerifyingNormalizer{
+		issuer:          issuer,
+		jwksURL:         jwksSrv.URL,
+		httpClient:      &http.Client{},
+		maxTokenAgeSecs: maxAgeSecs,
+	}
+	return n, privateKey, kid, issuer
+}
+
+func TestOIDCVerifyingNormalizer_MaxTokenAge_WithinLimit(t *testing.T) {
+	n, key, kid, issuer := newOIDCNormalizerWithJWKS(t, 300)
+
+	raw := signToken(t, key, kid, jwt.MapClaims{
+		"iss": issuer,
+		"sub": "alice",
+		"exp": time.Now().Add(1 * time.Hour).Unix(),
+		"iat": time.Now().Add(-30 * time.Second).Unix(), // 30s old, well within 300s limit
+	})
+	id := shared.UserIdentity{SourceType: "oidc", RawToken: raw}
+
+	if _, err := n.Normalize(context.Background(), id); err != nil {
+		t.Errorf("expected no error for token within max age, got: %v", err)
+	}
+}
+
+func TestOIDCVerifyingNormalizer_MaxTokenAge_Exceeded(t *testing.T) {
+	n, key, kid, issuer := newOIDCNormalizerWithJWKS(t, 60)
+
+	raw := signToken(t, key, kid, jwt.MapClaims{
+		"iss": issuer,
+		"sub": "alice",
+		"exp": time.Now().Add(1 * time.Hour).Unix(),
+		"iat": time.Now().Add(-5 * time.Minute).Unix(), // 5m old, exceeds 60s limit
+	})
+	id := shared.UserIdentity{SourceType: "oidc", RawToken: raw}
+
+	_, err := n.Normalize(context.Background(), id)
+	if err == nil {
+		t.Fatal("expected error for token exceeding max age, got nil")
+	}
+	if !strings.Contains(err.Error(), "exceeds max allowed age") {
+		t.Errorf("error should mention max allowed age, got: %v", err)
+	}
+}
+
+func TestOIDCVerifyingNormalizer_MaxTokenAge_MissingIAT_FailsClosed(t *testing.T) {
+	n, key, kid, issuer := newOIDCNormalizerWithJWKS(t, 300)
+
+	// No iat claim — must be rejected when max_token_age_secs is configured.
+	raw := signToken(t, key, kid, jwt.MapClaims{
+		"iss": issuer,
+		"sub": "alice",
+		"exp": time.Now().Add(1 * time.Hour).Unix(),
+		// iat intentionally absent
+	})
+	id := shared.UserIdentity{SourceType: "oidc", RawToken: raw}
+
+	_, err := n.Normalize(context.Background(), id)
+	if err == nil {
+		t.Fatal("expected error when iat is missing and max_token_age_secs is configured, got nil")
+	}
+	if !strings.Contains(err.Error(), "iat claim") {
+		t.Errorf("error should mention iat claim, got: %v", err)
+	}
+}
+
+func TestOIDCVerifyingNormalizer_MaxTokenAge_Zero_MissingIATAllowed(t *testing.T) {
+	// max_token_age_secs = 0 means no enforcement; missing iat must be silently accepted.
+	n, key, kid, issuer := newOIDCNormalizerWithJWKS(t, 0)
+
+	raw := signToken(t, key, kid, jwt.MapClaims{
+		"iss": issuer,
+		"sub": "alice",
+		"exp": time.Now().Add(1 * time.Hour).Unix(),
+		// iat intentionally absent
+	})
+	id := shared.UserIdentity{SourceType: "oidc", RawToken: raw}
+
+	if _, err := n.Normalize(context.Background(), id); err != nil {
+		t.Errorf("expected no error when max_token_age_secs is 0 and iat is absent, got: %v", err)
+	}
+}
+
 func TestRegisterNormalizer(t *testing.T) {
 	name := "custom-test"
 	RegisterNormalizer(name, func(cfg IdentityConfig) (IdentityNormalizer, error) {

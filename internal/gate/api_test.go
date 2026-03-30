@@ -42,7 +42,11 @@ func newTestManagementServer(t *testing.T, cfg MgmtAPIConfig) *ManagementServer 
 		t.Fatalf("NewIdentityCache: %v", err)
 	}
 
-	return NewManagementServer(store, identity, cfg)
+	ms, err := NewManagementServer(store, identity, cfg, nil, "")
+	if err != nil {
+		t.Fatalf("NewManagementServer: %v", err)
+	}
+	return ms
 }
 
 func TestManagementServer_ListTokens_Empty(t *testing.T) {
@@ -201,14 +205,17 @@ func TestManagementServer_UpdateIdentityToken(t *testing.T) {
 	os.WriteFile(tokenFile, []byte(initialRaw), 0600)
 
 	identityCfg := IdentityConfig{
-		Source: "oidc",
-		OIDC:   OIDCConfig{TokenFile: tokenFile},
+		Source:   "oidc-file",
+		OIDCFile: OIDCFileConfig{TokenFile: tokenFile},
 	}
 	identity, _ := NewIdentityCache(context.Background(), identityCfg)
 
 	storePath := filepath.Join(dir, "tokens.json")
 	store, _ := NewTokenStore(context.Background(), storePath)
-	ms := NewManagementServer(store, identity, MgmtAPIConfig{})
+	ms, err := NewManagementServer(store, identity, MgmtAPIConfig{}, nil, "")
+	if err != nil {
+		t.Fatalf("NewManagementServer: %v", err)
+	}
 
 	newRaw := makeTestJWT(map[string]any{"sub": "new@corp.com", "exp": futureExp()})
 	body, _ := json.Marshal(map[string]string{"token": newRaw})
@@ -341,6 +348,65 @@ func TestManagementServer_UI_HidesManualTokenSection(t *testing.T) {
 	body := w.Body.String()
 	if strings.Contains(body, "Add Escalation Token") {
 		t.Error("UI should not show 'Add Escalation Token' section when AllowManualTokens is false")
+	}
+}
+
+func TestNewManagementServer_CallbackPageFile_Override(t *testing.T) {
+	dir := t.TempDir()
+	customHTML := `<!DOCTYPE html><html><body>CUSTOM CALLBACK PAGE {{if .Error}}ERROR{{end}}</body></html>`
+	pageFile := filepath.Join(dir, "callback.html")
+	if err := os.WriteFile(pageFile, []byte(customHTML), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	store, _ := NewTokenStore(context.Background(), filepath.Join(dir, "tokens.json"))
+	identity, _ := NewIdentityCache(context.Background(), IdentityConfig{Source: "os", UserID: "test"})
+	sm := NewStateMachine()
+	oidcLogin := NewOIDCLoginManager(OIDCLoginConfig{IssuerURL: "https://idp.example.com", ClientID: "c"}, DefaultManagementAPIPort, 0, sm, nil, nil, nil)
+
+	ms, err := NewManagementServer(store, identity, MgmtAPIConfig{}, oidcLogin, pageFile)
+	if err != nil {
+		t.Fatalf("NewManagementServer with custom page file: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/auth/callback", nil)
+	w := httptest.NewRecorder()
+	ms.server.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("callback status = %d, want 200", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "CUSTOM CALLBACK PAGE") {
+		t.Errorf("response should use custom page file, got: %s", w.Body.String())
+	}
+}
+
+func TestNewManagementServer_CallbackPageFile_Missing(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := NewTokenStore(context.Background(), filepath.Join(dir, "tokens.json"))
+	identity, _ := NewIdentityCache(context.Background(), IdentityConfig{Source: "os", UserID: "test"})
+	sm := NewStateMachine()
+	oidcLogin := NewOIDCLoginManager(OIDCLoginConfig{IssuerURL: "https://idp.example.com", ClientID: "c"}, DefaultManagementAPIPort, 0, sm, nil, nil, nil)
+
+	_, err := NewManagementServer(store, identity, MgmtAPIConfig{}, oidcLogin, "/nonexistent/callback.html")
+	if err == nil {
+		t.Fatal("expected error for missing callback page file, got nil")
+	}
+}
+
+func TestNewManagementServer_CallbackPageFile_Empty_UsesEmbedded(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := NewTokenStore(context.Background(), filepath.Join(dir, "tokens.json"))
+	identity, _ := NewIdentityCache(context.Background(), IdentityConfig{Source: "os", UserID: "test"})
+	sm := NewStateMachine()
+	oidcLogin := NewOIDCLoginManager(OIDCLoginConfig{IssuerURL: "https://idp.example.com", ClientID: "c"}, DefaultManagementAPIPort, 0, sm, nil, nil, nil)
+
+	ms, err := NewManagementServer(store, identity, MgmtAPIConfig{}, oidcLogin, "")
+	if err != nil {
+		t.Fatalf("NewManagementServer with empty page file: %v", err)
+	}
+	if ms.callbackTmpl == nil {
+		t.Error("callbackTmpl should be set when oidcLogin is non-nil")
 	}
 }
 

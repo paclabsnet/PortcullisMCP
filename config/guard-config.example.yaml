@@ -17,13 +17,16 @@ escalation_token_signing:
 templates:
   dir: "/etc/portcullis/guard/templates"
 
+#
+# 
+#
 portcullis_gate_management_port: 7777   # gate management API port, shown in post-approval instructions
 
 # Authentication for the /token/unclaimed/list and /token/deposit endpoints.
-# bearer_token is required unless allow_unauthenticated_token_apis is explicitly set to true (development only).
+# bearer_token is required unless allow_unauthenticated is explicitly set to true (development only).
 auth:
   bearer_token: "envvar://GUARD_BEARER_TOKEN"
-  allow_unauthenticated_token_apis: false
+  allow_unauthenticated: false
 
 # Unclaimed token store settings.
 token_store:

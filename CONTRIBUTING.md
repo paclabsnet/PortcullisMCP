@@ -32,9 +32,20 @@ See `config/` for example configurations and `deploy/docker-sandbox/` for the Do
 - Errors are returned, not panicked.
 - Configuration is via YAML. Secrets are referenced via `${ENV_VAR}` expansion, never hardcoded.
 
+## Markdown style guide
+
+- Headings use ATX style (`#`, `##`, etc.) with one space after the hash markers.
+- Heading text uses sentence case. Capitalize only the first word and proper nouns/acronyms.
+- Use a single H1 (`#`) per file.
+- Use `-` for unordered list items.
+- Keep nested unordered lists indented by 2 spaces.
+
+The repository includes `.markdownlint.json` with these conventions.
+
 ## Security Issues
 
-Do not open a public issue for security vulnerabilities. See [SECURITY.md](SECURITY.md) for the responsible disclosure process.
+Do not open a public issue for security vulnerabilities. See [SECURITY.md](SECURITY.md) for the responsible disclosure
+process.
 
 ## License
 

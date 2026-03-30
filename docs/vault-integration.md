@@ -20,7 +20,8 @@ key: "vault://secret/portcullis/signing#key_value"
 ```
 
 Resolution:
-1. Fetch from Vault: `secret/data/portcullis/signing` (the `data/` prefix is automatically inserted by the SDK for KV v2)
+1. Fetch from Vault: `secret/data/portcullis/signing` (the `data/` prefix is automatically inserted by the SDK for KV
+   v2)
 2. Extract field: `key_value`
 
 ### Multiple keys from the same path
@@ -32,7 +33,8 @@ pass: "vault://secret/db#password"
 
 ### No anchor
 
-If the anchor is omitted (e.g., `vault://secret/my-secret`), Portcullis looks for a default key named `value`. If that key does not exist, it returns an error.
+If the anchor is omitted (e.g., `vault://secret/my-secret`), Portcullis looks for a default key named `value`. If that
+key does not exist, it returns an error.
 
 ### URL encoding
 

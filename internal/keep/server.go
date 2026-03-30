@@ -162,7 +162,7 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 
 	// Extract trace context propagated by Gate and create a child span.
 	ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
-	ctx, span := otel.Tracer("portcullis-keep").Start(ctx, "keep.evaluate")
+	ctx, span := otel.Tracer(shared.ServiceKeep).Start(ctx, "keep.evaluate")
 	defer span.End()
 
 	var rawReq shared.EnrichedMCPRequest
@@ -381,7 +381,7 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
-	ctx, span := otel.Tracer("portcullis-keep").Start(ctx, "keep.authorize")
+	ctx, span := otel.Tracer(shared.ServiceKeep).Start(ctx, "keep.authorize")
 	defer span.End()
 
 	var rawReq shared.EnrichedMCPRequest

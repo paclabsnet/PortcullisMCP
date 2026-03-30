@@ -1,5 +1,7 @@
 # portcullis-gate minimal config — for local development/evaluation
 #
+# No security on 
+#
 # AGENT CONFIGURATION
 # portcullis-gate is launched automatically by your AI agent as an MCP server.
 # Do not run it manually. Configure your agent as follows:
@@ -30,7 +32,7 @@ keep:
     token: "dev-secret-token"   # must match keep's bearer_token setting
 
 identity:
-  source: "os"                  # uses your OS login; switch to "oidc" in production
+  source: "os"                  # uses your OS login; switch to "oidc-file" or "oidc-login" in production
 
 # Guard endpoint for automatic escalation token collection.
 # When configured, Gate will automatically claim tokens approved via the Guard

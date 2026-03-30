@@ -3,14 +3,14 @@
 Portcullis enforces that every MCP tool call is evaluated by a Policy Decision
 Point (PDP) before execution. **How you write that policy is entirely up to your
 organization.** Portcullis ships two example Rego implementations to illustrate
-the options — operators are expected to write their own policy suited to their
+the options â€” operators are expected to write their own policy suited to their
 environment, groups, and tools.
 
 
 | Example file | Approach |
 |---|---|
-| `policies/rego/portcullis/custom/decision.rego` | Explicit Rego rules — readable, auditable, easily reviewed by security teams |
-| `policies/rego/portcullis/tabular/decision.rego` | Table-driven — rules read from `data.portcullis.mcp`; populate via Data API, S3 bundles, LDAP, or any OPA data source |
+| `policies/rego/portcullis/custom/decision.rego` | Explicit Rego rules â€” readable, auditable, easily reviewed by security teams |
+| `policies/rego/portcullis/tabular/decision.rego` | Table-driven â€” rules read from `data.portcullis.mcp`; populate via Data API, S3 bundles, LDAP, or any OPA data source |
 
 Neither is "the right answer." Most organizations will start with hand-written rules
 and migrate to table-driven as policy scope grows and an authoritative group/role
@@ -33,10 +33,10 @@ Portcullis-keep sends an AuthorizationRequest, along with some correlation data 
 
 The AuthorizationRequest uses the standard authorization elements:
 
-* Principal: Information about the user making the request
-* Action:  which MCP and tool is being used
-* Resource: the details of the request that the AI agent wishes to send to the MCP .  For convenience, the URL elements of these requests are disassembled for security and ease of use.
-* Context: any escalation tokens associated with the user session
+- Principal: Information about the user making the request
+- Action:  which MCP and tool is being used
+- Resource: the details of the request that the AI agent wishes to send to the MCP .  For convenience, the URL elements of these requests are disassembled for security and ease of use.
+- Context: any escalation tokens associated with the user session
 
 Basically, for each MCP request that arrives at Portcullis-Keep, the Keep forwards this request to the PDP to answer the following question: "on behalf of Principal, the AI agent wishes to send <Request> to MCP <X>, tool <Y>.  Is this allowed, denied, or does it require escalated privilege?" 
 
@@ -106,7 +106,7 @@ respond with a 0
 ## Example: Hand-written Rego Rules
 
 `policies/rego/portcullis/custom/decision.rego` shows policy written as explicit Rego rules.
-This approach is easy to read, diff, and audit — a security reviewer can read the
+This approach is easy to read, diff, and audit â€” a security reviewer can read the
 file and understand exactly what is permitted without knowing OPA internals.
 
 Snippet from the example:
@@ -114,30 +114,30 @@ Snippet from the example:
 ```rego
 
 response_list contains 
-				{ "decision":"deny", 
-				  "reason":"Denied - MCP is not in scope", 
-				  "request_id": request_id} if {
+                { "decision":"deny", 
+                  "reason":"Denied - MCP is not in scope", 
+                  "request_id": request_id} if {
 
    not input.service in ["portcullis-localfs", "mock-enterprise-api", "fetch"]
 }
 
 
 response_list contains 
-				{ "decision":"escalate", 
-				  "reason":"This request requires escalated privilege", 
-				  "request_id": request_id} if {
+                { "decision":"escalate", 
+                  "reason":"This request requires escalated privilege", 
+                  "request_id": request_id} if {
 
    action.service in ["portcullis-localfs"]
    action.tool_name in ["write_file"]
    some prefix in [ "C:\\Program Files", "C:\\Program Files (x86)" , "/var" ]
- 		 startswith(resource.arguments.path, prefix)
-	
+          startswith(resource.arguments.path, prefix)
+    
    not escalate.escalation_grant_matches_group_service_tool_and_request_args(
-			escalation_grant_list,
-			["*"],
-			action.service,
-			action.tool_name,
-			resource.arguments)
+            escalation_grant_list,
+            ["*"],
+            action.service,
+            action.tool_name,
+            resource.arguments)
 
 }
 
@@ -152,8 +152,8 @@ output documents in a consistent way.
 ## Example: Table-driven Policy
 
 `policies/rego/portcullis/tabular/decision.rego` shows policy written as a **generic table evaluator**.
-It reads policy rules from `data.portcullis.mcp` — an array of rule objects.
-The Rego itself never changes; only the data changes — which means policy can be
+It reads policy rules from `data.portcullis.mcp` â€” an array of rule objects.
+The Rego itself never changes; only the data changes â€” which means policy can be
 managed/changed by any system that can write the `data.json` file in a way that the OPA can retrieve
 (such as embedded, from a cloud bucket, from a database query, etc)
 
@@ -207,9 +207,9 @@ Portcullis-Gate only prunes expired tokens on load.
 
 | Claim | Description |
 |---|---|
-| `sub` | User the grant is for — must match `input.user_identity.user_id` |
-| `jti` | Unique token ID — enables revocation via OPA data |
-| `exp` | Hard expiry — enforced automatically by `io.jwt.decode_verify` |
+| `sub` | User the grant is for â€” must match `input.user_identity.user_id` |
+| `jti` | Unique token ID â€” enables revocation via OPA data |
+| `exp` | Hard expiry â€” enforced automatically by `io.jwt.decode_verify` |
 | `portcullis.tools` | Permitted tool names |
 | `portcullis.servers` | Permitted server names |
 | `portcullis.groups` | Granted group access |
@@ -226,7 +226,7 @@ for the PoC, the shared secret is under the `config.escalation_secret` path.
 
 If you wish to use Asymmetric keys, you will need to modify the logic to include the URL for the public key so OPA/Rego can validate the signature.  
 
-**Option B — Asymmetric keys via JWKS (RS256/ES256, production-recommended):**
+**Option B â€” Asymmetric keys via JWKS (RS256/ES256, production-recommended):**
 ```json
 { "config": { "escalation_jwks_url": "https://keys.internal.example.com/.well-known/jwks.json" } }
 ```
@@ -237,8 +237,9 @@ If you wish to use Asymmetric keys, you will need to modify the logic to include
 
 ### Running OPA locally
 
-In our example implementation, we use the open source Rego testing tool `raygun` (https://github.com/paclabsnet/raygun) for testing. It automatically handles firing up OPA, ending requests to it, and processing the results.
-
+In our example implementation, we use the open source Rego testing tool 
+[raygun](https://github.com/paclabsnet/raygun) for testing. It automatically handles firing up OPA, ending requests to it, and processing the results.
+w
 If you want to test by hand:
 
 ```bash
@@ -274,8 +275,8 @@ import rego.v1
 
 # non-business-hours request
 response_list contains { "decision" : "deny", 
-			"reason" : "no access during non-business hours: (Mon–Fri 08:00–18:00 UTC)", 
-			"request_id" : request_id } if {
+            "reason" : "no access during non-business hours: (Monâ€“Fri 08:00â€“18:00 UTC)", 
+            "request_id" : request_id } if {
    now := time.now_ns()
    day  := time.weekday(now)   # 0=Sunday, 6=Saturday
    hour := time.clock(now)[0]
@@ -287,4 +288,3 @@ response_list contains { "decision" : "deny",
 ```
 
 the file would automatically be included in the bundle after `./build.sh` is run
-

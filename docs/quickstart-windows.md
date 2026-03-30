@@ -1,6 +1,8 @@
 # PortcullisMCP Quick Start — Windows
 
-This guide walks you through getting the full PortcullisMCP demo running on a Windows machine. By the end you will have Keep, Guard, OPA, and two example MCP backends running in Docker, with Gate configured as an MCP server in your agent (Claude Desktop, VS Code, etc.).
+This guide walks you through getting the full PortcullisMCP demo running on a Windows machine. By the end you will have
+Keep, Guard, OPA, and two example MCP backends running in Docker, with Gate configured as an MCP server in your agent
+(Claude Desktop, VS Code, etc.).
 
 ## What you will need
 
@@ -31,7 +33,8 @@ scoop install make
 ```
 
 **Option D — Git for Windows (no extra install needed):**
-If you already have Git for Windows, `mingw32-make.exe` is in `C:\Program Files\Git\usr\bin`. You can either call it by that name, or add an alias in your PowerShell profile:
+If you already have Git for Windows, `mingw32-make.exe` is in `C:\Program Files\Git\usr\bin`. You can either call it by
+that name, or add an alias in your PowerShell profile:
 ```powershell
 Set-Alias make "C:\Program Files\Git\usr\bin\mingw32-make.exe"
 ```
@@ -64,7 +67,9 @@ This compiles three executables into the `bin\` folder:
 
 ## Step 3: Install Gate to your PATH
 
-Gate is launched automatically by your AI agent — it is not something you run in a terminal yourself. For that to work, the `portcullis-gate.exe` binary needs to be on your PATH.
+Gate is launched automatically by your AI agent — it is not something you run in
+a terminal yourself. For that to work, the `portcullis-gate.exe` binary needs to
+be on your PATH.
 
 The easiest way is:
 
@@ -72,7 +77,8 @@ The easiest way is:
 make install
 ```
 
-This copies `portcullis-gate.exe` to your Go bin directory (`%GOPATH%\bin`, usually `%USERPROFILE%\go\bin`), which `go install` already adds to your PATH.
+This copies `portcullis-gate.exe` to your Go bin directory (`%GOPATH%\bin`, usually `%USERPROFILE%\go\bin`), which `go
+install` already adds to your PATH.
 
 **Verify it worked:**
 ```powershell
@@ -97,7 +103,8 @@ New-Item -ItemType Directory -Force "$env:USERPROFILE\.portcullis"
 Copy-Item config\gate-config.minimal.yaml "$env:USERPROFILE\.portcullis\gate.yaml"
 ```
 
-The default config connects to Keep at `http://localhost:8080` and uses your Windows login as your identity — no changes needed for the demo.
+The default config connects to Keep at `http://localhost:8080` and uses your
+Windows login as your identity — no changes needed for the demo.
 
 ---
 
@@ -165,7 +172,8 @@ docker compose -f deploy/docker-sandbox/docker-compose.yml ps
 
 ## Step 7: Try it out
 
-Restart your agent (Claude Desktop, VS Code, etc.) so it picks up the new MCP server configuration. Then try these prompts:
+Restart your agent (Claude Desktop, VS Code, etc.) so it picks up the new MCP server configuration. Then try these
+prompts:
 
 ```
 What services are available from Portcullis MCP?
@@ -183,7 +191,9 @@ Please use Portcullis to query orders for customer C001
 Please use Portcullis to update customer C001's name to Bilbo Baggins
 ```
 
-The last prompt should trigger an escalation. Your agent will return a link — click it to open the Guard approval page at `http://localhost:8444`. Review the request details and approve it. Then ask the agent to try again; it should succeed this time. (It won't actually do anything on the back-end)
+The last prompt should trigger an escalation. Your agent will return a link — click it to open the Guard approval page
+at `http://localhost:8444`. Review the request details and approve it. Then ask the agent to try again; it should
+succeed this time. (It won't actually do anything on the back-end)
 
 ---
 
@@ -198,19 +208,24 @@ make demo-stop
 ## Troubleshooting
 
 **Gate is not found by my agent**
-Confirm `portcullis-gate.exe` is on your PATH: open a new PowerShell window and run `portcullis-gate --version`. If it fails, revisit Step 3.
+Confirm `portcullis-gate.exe` is on your PATH: open a new PowerShell window and run `portcullis-gate --version`. If it
+fails, revisit Step 3.
 
 **"Cannot connect to Keep" error from Gate**
-The demo stack may not be fully up yet. Wait a few seconds and restart your agent, or check `docker compose ps` to see if any container is still starting.
+The demo stack may not be fully up yet. Wait a few seconds and restart your agent, or check `docker compose ps` to see
+if any container is still starting.
 
 **Docker containers exit immediately**
-Run `docker compose -f deploy/docker-sandbox/docker-compose.yml logs` to see error output. The most common cause is a port conflict — check that ports 8080, 8181, and 8444 are not already in use.
+Run `docker compose -f deploy/docker-sandbox/docker-compose.yml logs` to see error output. The most common cause is a
+port conflict — check that ports 8080, 8181, and 8444 are not already in use.
 
 **Make says "missing separator"**
-This usually means the Makefile was opened and re-saved with spaces instead of tabs. Re-clone the repo and do not open the Makefile in Notepad.
+This usually means the Makefile was opened and re-saved with spaces instead of tabs. Re-clone the repo and do not open
+the Makefile in Notepad.
 
 **Policy is denying everything**
-The demo ships with a sample policy that allows most read operations. If you see unexpected denials, check the OPA decision log in the OPA docker container, or look at the Keep container logs.
+The demo ships with a sample policy that allows most read operations. If you see unexpected denials, check the OPA
+decision log in the OPA docker container, or look at the Keep container logs.
 
 ---
 
@@ -218,4 +233,5 @@ The demo ships with a sample policy that allows most read operations. If you see
 
 - Read [ARCHITECTURE.md](../ARCHITECTURE.md) to understand how Gate, Keep, Guard, and OPA fit together
 - Review the sample policy in `policies/` to see how to control access per tool and per user
-- See `config/keep-config.example.yaml` for the full set of Keep configuration options including OIDC identity verification and mTLS
+- See `config/keep-config.example.yaml` for the full set of Keep configuration options including OIDC identity
+  verification and mTLS

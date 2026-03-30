@@ -13,5 +13,9 @@ templates:
 
 portcullis_gate_management_port: 7777
 
+#
+# Whether Gate instances can call the API to get token lists, etc 
+# without a bearer token shared secret
+#
 auth:
-  allow_unauthenticated_token_apis: true  # sandbox only
+  allow_unauthenticated: true  # sandbox only

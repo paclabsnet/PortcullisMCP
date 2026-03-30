@@ -20,6 +20,20 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// ServiceGate is the canonical name for the portcullis-gate component.
+// Used as the MCP implementation name, OTel tracer name, and log identifier.
+const ServiceGate = "portcullis-gate"
+
+// ServiceKeep is the canonical name for the portcullis-keep component.
+// Used as the JWT issuer for escalation request JWTs, the MCP implementation
+// name, OTel tracer name, and log identifier.
+const ServiceKeep = "portcullis-keep"
+
+// ServiceGuard is the canonical name for the portcullis-guard component.
+// Used as the JWT issuer for escalation token JWTs, the OTel tracer name,
+// and log identifier.
+const ServiceGuard = "portcullis-guard"
+
 // LocalFSServerName is the agreed server name used when gate sends local filesystem
 // tool calls to Keep for policy authorization. Keep evaluates the PDP but does not
 // execute the tool — gate executes it locally via its in-process filesystem session.

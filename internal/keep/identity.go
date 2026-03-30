@@ -50,6 +50,9 @@ func init() {
 	RegisterNormalizer("passthrough", func(cfg IdentityConfig) (IdentityNormalizer, error) {
 		return &passthroughNormalizer{silenced: cfg.AcceptForgedIdentities}, nil
 	})
+
+	// both oidc-login and oidc-file use this verification path
+	//
 	RegisterNormalizer("oidc-verify", func(cfg IdentityConfig) (IdentityNormalizer, error) {
 		if cfg.OIDCVerify.Issuer == "" {
 			return nil, fmt.Errorf("normalizer oidc-verify requires identity.oidc_verify.issuer to be set")
@@ -62,6 +65,7 @@ func init() {
 			jwksURL:            cfg.OIDCVerify.JWKSURL,
 			audiences:          cfg.OIDCVerify.Audiences,
 			allowMissingExpiry: cfg.OIDCVerify.AllowMissingExpiry,
+			maxTokenAgeSecs:    cfg.OIDCVerify.MaxTokenAgeSecs,
 			httpClient:         &http.Client{Timeout: 10 * time.Second},
 		}, nil
 	})
@@ -103,6 +107,7 @@ type oidcVerifyingNormalizer struct {
 	jwksURL            string
 	audiences          []string
 	allowMissingExpiry bool
+	maxTokenAgeSecs    int
 	httpClient         *http.Client // used for JWKS fetches; must have Timeout set
 
 	jwksMu sync.RWMutex
@@ -202,10 +207,29 @@ func (n *oidcVerifyingNormalizer) Normalize(ctx context.Context, id shared.UserI
 		return shared.Principal{}, fmt.Errorf("oidc token is expired (exp=%v)", exp.Time)
 	}
 
+	// 6. Enforce max token age (measured from iat claim).
+	// Fails closed: if max_token_age_secs is configured and iat is absent or
+	// unparsable, the token is rejected. Silently skipping enforcement when iat
+	// is missing would allow an attacker to bypass the control by stripping the claim.
+	if n.maxTokenAgeSecs > 0 {
+		iat, iatErr := claims.GetIssuedAt()
+		if iatErr != nil {
+			return shared.Principal{}, fmt.Errorf("oidc token iat claim invalid (required when max_token_age_secs is set): %w", iatErr)
+		}
+		if iat == nil {
+			return shared.Principal{}, fmt.Errorf("oidc token missing iat claim (required when max_token_age_secs is set)")
+		}
+		age := time.Since(iat.Time)
+		maxAge := time.Duration(n.maxTokenAgeSecs) * time.Second
+		if age > maxAge {
+			return shared.Principal{}, fmt.Errorf("oidc token age %v exceeds max allowed age %v", age.Round(time.Second), maxAge)
+		}
+	}
+
 	// Use claims from the verified token
 	email, _ := claims["email"].(string)
 	displayName, _ := claims["name"].(string)
-	
+
 	var groups []string
 	if g, ok := claims["groups"].([]any); ok {
 		for _, v := range g {
@@ -225,7 +249,7 @@ func (n *oidcVerifyingNormalizer) Normalize(ctx context.Context, id shared.UserI
 	}
 
 	dept, _ := claims["department"].(string)
-	
+
 	var amr []string
 	if a, ok := claims["amr"].([]any); ok {
 		for _, v := range a {

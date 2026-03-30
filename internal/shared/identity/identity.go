@@ -96,6 +96,11 @@ type OIDCVerifyConfig struct {
 	// production — a plaintext JWKS endpoint allows MITM key substitution,
 	// which undermines the entire token verification chain.
 	AllowInsecureJWKSURL bool `yaml:"allow_insecure_jwks_url"`
+
+	// MaxTokenAgeSecs is the maximum allowed age of the OIDC token in seconds,
+	// measured from the iat (issued-at) claim. 0 means no enforcement.
+	// Use this to enforce a short TTL regardless of the token's exp claim.
+	MaxTokenAgeSecs int `yaml:"max_token_age_secs"`
 }
 
 // Normalizer transforms a raw UserIdentity received from portcullis-gate into

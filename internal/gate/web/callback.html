@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Portcullis Login</title>
+<style>
+body { font-family: sans-serif; max-width: 480px; margin: 80px auto; padding: 0 16px; }
+.success { color: #1a7a2a; }
+.error   { color: #c0392b; }
+</style>
+</head>
+<body>
+{{if .Error}}
+<h2 class="error">Login failed</h2>
+<p>{{.Error}}</p>
+<p>Use the <code>portcullis_login</code> tool in your AI assistant to start the login process again.</p>
+{{else}}
+<h2 class="success">Login successful</h2>
+<p>You are now authenticated. You can close this tab and return to your AI assistant.</p>
+{{end}}
+</body>
+</html>

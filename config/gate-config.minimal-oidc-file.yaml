@@ -24,10 +24,10 @@
 # command = portcullis-gate, args = [-config, /path/to/gate.yaml]
 
 #
-# THIS IS THE OIDC TOKEN variant, using mock-idp.dev as the issuer.  You will need to do the following:
+# THIS IS THE OIDC TOKEN file variant, using mock-idp.dev as the issuer.  You will need to do the following:
 # 1) create your own static JWT at https://mock-idp.dev   (free!)  OR copy the one in docs/demo-oidc-token.md
 # 2) put this token in ~/.portcullis/oidc-token      (by default, you can configure below)
-# 3) make sure that you use the oidc version of the Portcullis-Keep config as well
+# 3) make sure that you use the matching identity.source: oidc-file config for Portcullis-Keep
 #
 #
 
@@ -40,8 +40,8 @@ keep:
 
 
 identity:
-  source: "oidc"                # oidc token issued by mock-idp.dev
-  oidc:
+  source: "oidc-file"           # oidc-file: token read from disk; oidc-login: interactive browser flow; os: OS identity
+  oidc_file:
     token_file: ~/.portcullis/oidc-token        # change this if you like
 
 

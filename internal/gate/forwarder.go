@@ -101,6 +101,8 @@ func (f *Forwarder) SendLogs(ctx context.Context, entries []DecisionLogEntry) er
 	return f.post(ctx, "/log", batch, &result)
 }
 
+// the core mechanism for sending messages to Keep, both the
+// enriched MCP requests, and the locally-generated decision logs
 func (f *Forwarder) post(ctx context.Context, path string, body, out any) error {
 	data, err := json.Marshal(body)
 	if err != nil {

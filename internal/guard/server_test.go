@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 )
 
 const (
@@ -43,7 +44,7 @@ func makeServer(t *testing.T) *Server {
 		Keep:                   KeepConfig{PendingEscalationRequestSigningKey: testKeepKey},
 		EscalationTokenSigning: SigningConfig{Key: testSigningKey, TTL: 3600},
 		Templates:              TemplatesConfig{Dir: "templates"},
-		Auth:                   AuthConfig{AllowUnauthenticatedTokenAPIs: true},
+		Auth:                   AuthConfig{AllowUnauthenticated: true},
 	})
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
@@ -55,7 +56,7 @@ func makeServer(t *testing.T) *Server {
 func signKeepJWT(t *testing.T, claims escalationRequestClaims, expiry time.Time) string {
 	t.Helper()
 	if claims.RegisteredClaims.Issuer == "" {
-		claims.RegisteredClaims.Issuer = "portcullis-keep"
+		claims.RegisteredClaims.Issuer = shared.ServiceKeep
 	}
 	claims.RegisteredClaims.IssuedAt = jwt.NewNumericDate(time.Now())
 	claims.RegisteredClaims.ExpiresAt = jwt.NewNumericDate(expiry)
@@ -140,7 +141,7 @@ func TestNewServer_DefaultTTL(t *testing.T) {
 		Keep:                   KeepConfig{PendingEscalationRequestSigningKey: testKeepKey},
 		EscalationTokenSigning: SigningConfig{Key: testSigningKey, TTL: 0},
 		Templates:              TemplatesConfig{Dir: dir},
-		Auth:                   AuthConfig{AllowUnauthenticatedTokenAPIs: true},
+		Auth:                   AuthConfig{AllowUnauthenticated: true},
 	})
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
@@ -159,7 +160,7 @@ func TestNewServer_CustomTTL(t *testing.T) {
 		Keep:                   KeepConfig{PendingEscalationRequestSigningKey: testKeepKey},
 		EscalationTokenSigning: SigningConfig{Key: testSigningKey, TTL: 7200},
 		Templates:              TemplatesConfig{Dir: dir},
-		Auth:                   AuthConfig{AllowUnauthenticatedTokenAPIs: true},
+		Auth:                   AuthConfig{AllowUnauthenticated: true},
 	})
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
@@ -321,7 +322,7 @@ func TestIssueEscalationToken_Claims(t *testing.T) {
 	if !ok || !parsed.Valid {
 		t.Fatal("issued token has invalid claims")
 	}
-	if tc.Issuer != "portcullis-guard" {
+	if tc.Issuer != shared.ServiceGuard {
 		t.Errorf("Issuer = %q, want portcullis-guard", tc.Issuer)
 	}
 	if tc.Subject != "alice@corp.com" {
@@ -363,7 +364,7 @@ func TestIssueEscalationToken_TTL(t *testing.T) {
 		Keep:                   KeepConfig{PendingEscalationRequestSigningKey: testKeepKey},
 		EscalationTokenSigning: SigningConfig{Key: testSigningKey, TTL: 7200},
 		Templates:              TemplatesConfig{Dir: dir},
-		Auth:                   AuthConfig{AllowUnauthenticatedTokenAPIs: true},
+		Auth:                   AuthConfig{AllowUnauthenticated: true},
 	})
 
 	_, expiry, err := s.issueEscalationToken(&escalationRequestClaims{UserID: "u"}, "", nil)
@@ -579,7 +580,7 @@ func TestHandlePost_GatePortDefault(t *testing.T) {
 		EscalationTokenSigning:       SigningConfig{Key: testSigningKey, TTL: 60},
 		Templates:                    TemplatesConfig{Dir: dir},
 		PortcullisGateManagementPort: 0,
-		Auth:                         AuthConfig{AllowUnauthenticatedTokenAPIs: true},
+		Auth:                         AuthConfig{AllowUnauthenticated: true},
 	})
 
 	tokenStr := signKeepJWT(t, escalationRequestClaims{
@@ -597,8 +598,8 @@ func TestHandlePost_GatePortDefault(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), "7777") {
-		t.Errorf("response should mention default port 7777; body: %s", w.Body.String())
+	if strings.Contains(w.Body.String(), "localhost") {
+		t.Errorf("response should not include a gate URL when portcullis_gate_management_port is 0; body: %s", w.Body.String())
 	}
 }
 
@@ -611,7 +612,7 @@ func TestHandlePost_GatePortCustom(t *testing.T) {
 		EscalationTokenSigning:       SigningConfig{Key: testSigningKey, TTL: 60},
 		Templates:                    TemplatesConfig{Dir: dir},
 		PortcullisGateManagementPort: 9999,
-		Auth:                         AuthConfig{AllowUnauthenticatedTokenAPIs: true},
+		Auth:                         AuthConfig{AllowUnauthenticated: true},
 	})
 
 	tokenStr := signKeepJWT(t, escalationRequestClaims{

@@ -1,0 +1,35 @@
+issuer: http://localhost:5556/dex
+
+storage:
+  type: memory
+
+web:
+  http: 0.0.0.0:5556
+
+staticClients:
+
+  - id: portcullis-keep
+    name: Portcullis Keep
+    secret: portcullis-keep-secret
+    trustedPeers:
+      - portcullis-gate
+
+  - id: portcullis-gate
+    secret: portcullis-gate-secret
+    name: Portcullis Gate
+    redirectURIs:
+      - http://localhost:7777/auth/callback
+
+enablePasswordDB: true
+
+staticPasswords:
+  - email: "demo@paclabs.net"
+    hash: "$2y$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"  # bcrypt of "password"
+    username: "demo"
+    userID: "demo@paclabs.net"
+    name: "Joe Demo"
+    groups:
+      - "developer"
+
+oauth2:
+  skipApprovalScreen: true
