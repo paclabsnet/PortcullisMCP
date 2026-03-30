@@ -5,6 +5,25 @@
 Some of these tasks were deferred from Phase 2 because they are complicated and involve access to potentially expensive cloud resources
 
 
+### Task: Support vault:// secret resolution for map[string]string config fields
+
+The secret resolver walks named struct fields via dot-notation and resolves secret
+URIs (`vault://`, `envvar://`, etc.) in string values. It does not currently traverse
+`map[string]string` values, so fields like `decision_logs.headers` and
+`webhook.headers` cannot use vault:// or envvar:// for individual header values
+(e.g. `Authorization: "envvar://SIEM_TOKEN"`).
+
+The example configs document this limitation with a note directing operators to
+populate these fields from external secrets tooling before startup.
+
+The fix is to extend the resolver to walk map values and apply secret resolution
+to each entry, subject to the same allowlist rules. Both Keep's
+`decision_logs.headers` and `webhook.headers` (and any future map-valued fields)
+would benefit.
+
+- priority: medium-low
+
+
 ### Task: Allow multiple sandbox directories in Gate config
 
 Currently `sandbox.directory` accepts a single path. Users with multiple unrelated
@@ -162,11 +181,7 @@ Policy should require both: trusted user identity and trusted device posture for
 
 
 
-### Task: If portcullis_gate_management_port is not set in Guard, do not show the link
-With Portcullis-Gate now fetching tokens from Guard, the back-link from Guard to Gate
-in the post-approval web page template is superfluous . We can modify the template
-to remove the part that includes the back-link 
-- priority: medium-low
+
 
 
 ### Task: consider renaming 'requires_approval' to 'escalation' in gate config Agent messaging

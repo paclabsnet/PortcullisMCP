@@ -18,4 +18,4 @@ templates:
 portcullis_gate_management_port: 7777
 
 auth:
-  allow_unauthenticated_token_apis: true  # development only — remove in production
+  allow_unauthenticated: true  # development only — remove in production

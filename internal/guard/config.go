@@ -53,8 +53,8 @@ func (c Config) Validate() error {
 	if c.EscalationTokenSigning.Key == "" {
 		return fmt.Errorf("escalation_token_signing.key is required")
 	}
-	if c.Auth.BearerToken == "" && !c.Auth.AllowUnauthenticatedTokenAPIs {
-		return fmt.Errorf("auth.bearer_token is required; to allow unauthenticated token API access (development only) set auth.allow_unauthenticated_token_apis: true")
+	if c.Auth.BearerToken == "" && !c.Auth.AllowUnauthenticated {
+		return fmt.Errorf("auth.bearer_token is required; to allow unauthenticated token API access (development only) set auth.allow_unauthenticated: true")
 	}
 	return nil
 }
@@ -75,8 +75,8 @@ type Config struct {
 // /token/unclaimed/list and /token/deposit require a valid bearer token.
 // /token/claim does not require auth — the JTI is treated as a capability.
 type AuthConfig struct {
-	BearerToken                   string `yaml:"bearer_token"`
-	AllowUnauthenticatedTokenAPIs bool   `yaml:"allow_unauthenticated_token_apis"`
+	BearerToken        string `yaml:"bearer_token"`
+	AllowUnauthenticated bool `yaml:"allow_unauthenticated"`
 }
 
 // LimitsConfig controls request body, field length, and in-memory map size limits for Guard.

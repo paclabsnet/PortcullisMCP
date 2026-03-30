@@ -26,8 +26,8 @@
     <summary>Show raw escalation token (for manual use or troubleshooting)</summary>
     <textarea id="tok" readonly>{{.EscalationToken}}</textarea>
     <button class="btn" onclick="navigator.clipboard.writeText(document.getElementById('tok').value)">Copy to Clipboard</button>
-    <p style="font-size:13px;color:#666;">If Gate does not pick up the token automatically, you can paste it manually via
-      the management page at <a href="{{.GateURL}}">{{.GateURL}}</a>.</p>
+    {{if .GateURL}}<p style="font-size:13px;color:#666;">If Gate does not pick up the token automatically, you can paste it manually via
+      the management page at <a href="{{.GateURL}}">{{.GateURL}}</a>.</p>{{end}}
   </details>
 </body>
 </html>

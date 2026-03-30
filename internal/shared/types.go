@@ -20,6 +20,14 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// IssuerKeep is the JWT issuer claim set by portcullis-keep on escalation request JWTs.
+// portcullis-guard verifies this value when validating incoming escalation requests.
+const IssuerKeep = "portcullis-keep"
+
+// IssuerGuard is the JWT issuer claim set by portcullis-guard on escalation token JWTs.
+// The PDP verifies this value when evaluating escalation tokens presented by portcullis-gate.
+const IssuerGuard = "portcullis-guard"
+
 // LocalFSServerName is the agreed server name used when gate sends local filesystem
 // tool calls to Keep for policy authorization. Keep evaluates the PDP but does not
 // execute the tool — gate executes it locally via its in-process filesystem session.

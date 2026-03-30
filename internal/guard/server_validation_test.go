@@ -31,7 +31,7 @@ import (
 // makeLimitedServer creates a Guard server with limits fully populated via NewServer.
 func makeLimitedServer(t *testing.T) *Server {
 	t.Helper()
-	s, err := newServerWithLimits(t, AuthConfig{AllowUnauthenticatedTokenAPIs: true})
+	s, err := newServerWithLimits(t, AuthConfig{AllowUnauthenticated: true})
 	if err != nil {
 		t.Fatalf("newServerWithLimits: %v", err)
 	}
@@ -39,7 +39,7 @@ func makeLimitedServer(t *testing.T) *Server {
 }
 
 // newServerWithLimits creates a server with explicit limits. Limits default to
-// values that match NewServer defaults when AllowUnauthenticatedTokenAPIs is set.
+// values that match NewServer defaults when AllowUnauthenticated is set.
 func newServerWithLimits(t *testing.T, auth AuthConfig) (*Server, error) {
 	t.Helper()
 	dir := t.TempDir()
@@ -77,7 +77,7 @@ func makeServerDirect(auth AuthConfig, limits LimitsConfig) *Server {
 
 func TestGuard_Auth_NoTokenNoFlag_Returns401(t *testing.T) {
 	// Build a server directly with no bearer token and the flag explicitly false.
-	s := makeServerDirect(AuthConfig{BearerToken: "", AllowUnauthenticatedTokenAPIs: false}, LimitsConfig{
+	s := makeServerDirect(AuthConfig{BearerToken: "", AllowUnauthenticated: false}, LimitsConfig{
 		MaxRequestBodyBytes: 512 << 10,
 		MaxUserIDBytes:      512,
 		MaxJTIBytes:         128,
@@ -95,8 +95,8 @@ func TestGuard_Auth_NoTokenNoFlag_Returns401(t *testing.T) {
 }
 
 func TestGuard_Auth_NoTokenWithFlag_Allowed(t *testing.T) {
-	// Server with AllowUnauthenticatedTokenAPIs: true — /token/deposit should be reachable.
-	s, err := newServerWithLimits(t, AuthConfig{AllowUnauthenticatedTokenAPIs: true})
+	// Server with AllowUnauthenticated: true — /token/deposit should be reachable.
+	s, err := newServerWithLimits(t, AuthConfig{AllowUnauthenticated: true})
 	if err != nil {
 		t.Fatalf("newServerWithLimits: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestGuard_Auth_NoTokenWithFlag_Allowed(t *testing.T) {
 
 	// Should not be 401 — the flag allows unauthenticated access.
 	if w.Code == http.StatusUnauthorized {
-		t.Errorf("status = 401, want non-401 when AllowUnauthenticatedTokenAPIs is true")
+		t.Errorf("status = 401, want non-401 when AllowUnauthenticated is true")
 	}
 }
 

@@ -63,7 +63,7 @@ func TestGuardConfig_Validate_NoAuthToken_NoFlag_Error(t *testing.T) {
 	cfg.Auth = AuthConfig{} // no bearer token, no flag
 	err := cfg.Validate()
 	if err == nil {
-		t.Fatal("expected error when bearer_token is empty and allow_unauthenticated_token_apis is false")
+		t.Fatal("expected error when bearer_token is empty and allow_unauthenticated is false")
 	}
 	if !strings.Contains(err.Error(), "bearer_token") {
 		t.Errorf("error should mention bearer_token; got: %v", err)
@@ -72,8 +72,8 @@ func TestGuardConfig_Validate_NoAuthToken_NoFlag_Error(t *testing.T) {
 
 func TestGuardConfig_Validate_NoAuthToken_WithFlag_OK(t *testing.T) {
 	cfg := validGuardConfig()
-	cfg.Auth = AuthConfig{AllowUnauthenticatedTokenAPIs: true}
+	cfg.Auth = AuthConfig{AllowUnauthenticated: true}
 	if err := cfg.Validate(); err != nil {
-		t.Errorf("expected no error when allow_unauthenticated_token_apis is true; got: %v", err)
+		t.Errorf("expected no error when allow_unauthenticated is true; got: %v", err)
 	}
 }

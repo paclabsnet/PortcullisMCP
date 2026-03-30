@@ -97,7 +97,7 @@ func TestEscalationSigner_Sign(t *testing.T) {
 	if claims.Reason != "manager approval needed" {
 		t.Errorf("Reason = %q, want 'manager approval needed'", claims.Reason)
 	}
-	if claims.Issuer != "portcullis-keep" {
+	if claims.Issuer != shared.IssuerKeep {
 		t.Errorf("Issuer = %q, want portcullis-keep", claims.Issuer)
 	}
 	if claims.ExpiresAt == nil || claims.ExpiresAt.Before(time.Now()) {

@@ -111,7 +111,7 @@ func NewServer(ctx context.Context, cfg Config) (*Server, error) {
 	}
 
 	// Emit a startup warning when token APIs are explicitly left open for development.
-	if cfg.Auth.BearerToken == "" && cfg.Auth.AllowUnauthenticatedTokenAPIs {
+	if cfg.Auth.BearerToken == "" && cfg.Auth.AllowUnauthenticated {
 		slog.Warn("Guard token APIs are running without authentication — do not use in production",
 			"affected_endpoints", []string{"/token/unclaimed/list", "/token/deposit", "/pending"})
 	}
@@ -238,7 +238,7 @@ func (s *Server) issueEscalationToken(claims *escalationRequestClaims, requestJT
 	tokenClaims := escalationTokenClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			ID:        jti,
-			Issuer:    "portcullis-guard",
+			Issuer:    shared.IssuerGuard,
 			Subject:   claims.UserID,
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(expiry),
@@ -363,20 +363,22 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request) {
 		"reason", claims.Reason,
 		"escalation_scope", string(scopeJSON),
 		"jti", claims.ID,
-		"issuer", "portcullis-guard",
+		"issuer", shared.IssuerGuard,
 		"expires_at", expiry.UTC().Format(time.RFC3339),
 		"remote", r.RemoteAddr,
 	)
 
 	gatePort := s.cfg.PortcullisGateManagementPort
-	if gatePort == 0 {
-		gatePort = 7777
+	var gateURL string
+	if gatePort != 0 {
+		gateURL = fmt.Sprintf("http://localhost:%d", gatePort)
 	}
+
 	data := tokenPageData{
 		Server:          claims.Server,
 		Tool:            claims.Tool,
 		EscalationToken: escalationToken,
-		GateURL:         fmt.Sprintf("http://localhost:%d", gatePort),
+		GateURL:         gateURL,
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := s.templates.ExecuteTemplate(w, "token.html", data); err != nil {
@@ -561,7 +563,7 @@ func (s *Server) handleReadyz(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) requireTokenAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.cfg.Auth.BearerToken == "" {
-			if s.cfg.Auth.AllowUnauthenticatedTokenAPIs {
+			if s.cfg.Auth.AllowUnauthenticated {
 				next(w, r)
 				return
 			}
@@ -766,7 +768,6 @@ func (s *Server) handleTokenClaim(w http.ResponseWriter, r *http.Request) {
 		"raw": found.Raw,
 	})
 }
-
 
 // ---- template data types ---------------------------------------------------
 
