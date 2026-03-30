@@ -58,31 +58,35 @@ type AnnotatedTool struct {
 // SourceType indicates how the identity was obtained; "os" is provided for
 // testing/evaluation only — portcullis-keep may be configured to reject it.
 type UserIdentity struct {
-	UserID      string   `json:"user_id"` // stable enterprise identifier (UPN, email, etc.)
-	Email       string   `json:"email,omitempty"`
-	DisplayName string   `json:"display_name"`
-	Groups      []string `json:"groups"`                 // directory groups
-	Roles       []string `json:"roles,omitempty"`        // RBAC roles, distinct from directory groups
-	Department  string   `json:"department,omitempty"`   // org unit / department for ABAC
-	AuthMethod  []string `json:"auth_method,omitempty"`  // OIDC AMR claim, e.g. ["pwd","mfa"]
-	TokenExpiry int64    `json:"token_expiry,omitempty"` // Unix timestamp; 0 means unknown
-	SourceType  string   `json:"source_type"`            // "oidc" | "os"
-	RawToken    string   `json:"raw_token"`              // original OIDC token for PDP verification
+	UserID            string   `json:"user_id"` // stable enterprise identifier (UPN, email, etc.)
+	Email             string   `json:"email,omitempty"`
+	DisplayName       string   `json:"display_name"`
+	Groups            []string `json:"groups"`                       // directory groups
+	Roles             []string `json:"roles,omitempty"`              // RBAC roles, distinct from directory groups
+	Department        string   `json:"department,omitempty"`         // org unit / department for ABAC
+	AuthMethod        []string `json:"auth_method,omitempty"`        // OIDC AMR claim, e.g. ["pwd","mfa"]
+	PreferredUsername string   `json:"preferred_username,omitempty"` // human-readable login name (Azure AD / Okta UPN)
+	ACR               string   `json:"acr,omitempty"`                // OIDC ACR claim, e.g. "mfa"
+	TokenExpiry       int64    `json:"token_expiry,omitempty"`       // Unix timestamp; 0 means unknown
+	SourceType        string   `json:"source_type"`                  // "oidc" | "os"
+	RawToken          string   `json:"raw_token"`                    // original OIDC token for PDP verification
 }
 
 // Principal represents the verified facts about a user after Keep has performed
 // identity normalization and validation. The PDP evaluates policies against
 // the Principal, not the raw UserIdentity received from Gate.
 type Principal struct {
-	UserID      string   `json:"user_id"`
-	Email       string   `json:"email,omitempty"`
-	DisplayName string   `json:"display_name,omitempty"`
-	Groups      []string `json:"groups,omitempty"`
-	Roles       []string `json:"roles,omitempty"`
-	Department  string   `json:"department,omitempty"`
-	AuthMethod  []string `json:"auth_method,omitempty"`
-	TokenExpiry int64    `json:"token_expiry,omitempty"`
-	SourceType  string   `json:"source_type"`
+	UserID            string   `json:"user_id"`
+	Email             string   `json:"email,omitempty"`
+	DisplayName       string   `json:"display_name,omitempty"`
+	Groups            []string `json:"groups,omitempty"`
+	Roles             []string `json:"roles,omitempty"`
+	Department        string   `json:"department,omitempty"`
+	AuthMethod        []string `json:"auth_method,omitempty"`
+	PreferredUsername string   `json:"preferred_username,omitempty"` // human-readable login name (Azure AD / Okta UPN)
+	ACR               string   `json:"acr,omitempty"`                // OIDC ACR claim, e.g. "mfa"
+	TokenExpiry       int64    `json:"token_expiry,omitempty"`
+	SourceType        string   `json:"source_type"`
 }
 
 // EscalationToken is a pre-authorization JWT the user received out-of-band.

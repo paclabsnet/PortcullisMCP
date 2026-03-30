@@ -7,7 +7,7 @@
 2. Portcullis-Gate - YAML - management_api.port should default to 7777 if it isn't specified
 
 
-3. Portcullis-Gate - FastPath - `resolvePath` in `internal/gate/fastpath.go` only handles one level of non-existent path
+3. (FIXED) Portcullis-Gate - FastPath - `resolvePath` in `internal/gate/fastpath.go` only handles one level of non-existent path
    (resolves parent + base). For a write target like `/sandbox/newdir/subdir/file.txt` where neither `newdir/` nor
    `subdir/` exist yet, `EvalSymlinks` on the parent fails and `resolvePath` returns an error. FastPath treats any
    resolve error as a deny, so writes to deeply nested new paths inside the sandbox are incorrectly denied rather than
@@ -19,6 +19,8 @@
 4. (FIXED) Portcullis-Gate - portcullis_login MCP - need the ability to send a 'force' directive to the portcullis login tool, so even if Portcullis-Gate thinks that the user is logged in, they will start the process again.  This is necessary if the IdP  restarts, because the keyid "owned" by Portcullis-Gate is no longer recognized by the IdP
 
 
+
+5. Portcullis login should not be required for localfs calls, perhaps? Discuss!
 
 
 

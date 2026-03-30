@@ -117,13 +117,18 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 		return nil, fmt.Errorf("create forwarder: %w", err)
 	}
 
-	// Start the in-process local filesystem server if a sandbox is configured.
+	// Start the in-process local filesystem server if any sandbox dirs are configured.
 	var localFSSession *mcp.ClientSession
-	if cfg.Sandbox.Directory != "" {
-		expanded, err := expandHome(cfg.Sandbox.Directory)
-		if err != nil {
-			return nil, fmt.Errorf("expand sandbox dir: %w", err)
+	if rawDirs := cfg.Sandbox.EffectiveDirs(); len(rawDirs) > 0 {
+		expanded := make([]string, 0, len(rawDirs))
+		for _, d := range rawDirs {
+			exp, err := expandHome(d)
+			if err != nil {
+				return nil, fmt.Errorf("expand sandbox dir %q: %w", d, err)
+			}
+			expanded = append(expanded, exp)
 		}
+		var err error
 		localFSSession, err = localfs.Connect(ctx, expanded)
 		if err != nil {
 			return nil, fmt.Errorf("start local filesystem server: %w", err)

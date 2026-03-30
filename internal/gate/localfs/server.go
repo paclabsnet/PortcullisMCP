@@ -42,16 +42,24 @@ import (
 )
 
 // NewServer creates an MCP server that exposes filesystem tools for any path
-// on the local filesystem. sandboxDir is used only as the base for resolving
-// relative paths; access control is the caller's responsibility.
-// The caller is responsible for connecting a transport.
-func NewServer(sandboxDir string) (*mcp.Server, error) {
-	sandbox, err := filepath.EvalSymlinks(filepath.Clean(sandboxDir))
-	if err != nil {
-		return nil, fmt.Errorf("localfs: resolve sandbox dir: %w", err)
+// on the local filesystem. sandboxDirs lists the allowed sandbox directories;
+// the first entry is used as the base for resolving relative paths. At least
+// one directory must be provided. The caller is responsible for connecting a
+// transport.
+func NewServer(sandboxDirs []string) (*mcp.Server, error) {
+	if len(sandboxDirs) == 0 {
+		return nil, fmt.Errorf("localfs: at least one sandbox directory is required")
+	}
+	resolved := make([]string, 0, len(sandboxDirs))
+	for _, d := range sandboxDirs {
+		r, err := filepath.EvalSymlinks(filepath.Clean(d))
+		if err != nil {
+			return nil, fmt.Errorf("localfs: resolve sandbox dir %q: %w", d, err)
+		}
+		resolved = append(resolved, r)
 	}
 
-	s := &fsServer{sandbox: sandbox}
+	s := &fsServer{sandbox: resolved[0], sandboxDirs: resolved}
 
 	srv := mcp.NewServer(&mcp.Implementation{
 		Name:    "portcullis-localfs",
@@ -143,8 +151,10 @@ func NewServer(sandboxDir string) (*mcp.Server, error) {
 
 // Connect creates a connected in-memory client session to a new localfs server.
 // This is the primary entry point for gate to obtain a local filesystem client.
-func Connect(ctx context.Context, sandboxDir string) (*mcp.ClientSession, error) {
-	srv, err := NewServer(sandboxDir)
+// sandboxDirs must contain at least one directory; the first is used as the
+// base for resolving relative paths.
+func Connect(ctx context.Context, sandboxDirs []string) (*mcp.ClientSession, error) {
+	srv, err := NewServer(sandboxDirs)
 	if err != nil {
 		return nil, err
 	}
@@ -167,9 +177,10 @@ func Connect(ctx context.Context, sandboxDir string) (*mcp.ClientSession, error)
 	return session, nil
 }
 
-// fsServer holds the sandbox constraint and implements tool handlers.
+// fsServer holds the sandbox constraints and implements tool handlers.
 type fsServer struct {
-	sandbox string
+	sandbox     string   // primary sandbox dir; used for relative-path resolution
+	sandboxDirs []string // all configured sandbox dirs; resolve checks against each
 }
 
 // resolve returns an absolute, symlink-free path for the given input,
@@ -196,11 +207,13 @@ func (s *fsServer) resolve(path string) (string, error) {
 		resolved, err := filepath.EvalSymlinks(current)
 		if err == nil {
 			full := filepath.Join(append([]string{resolved}, missing...)...)
-			rel, relErr := filepath.Rel(s.sandbox, full)
-			if relErr != nil || strings.HasPrefix(rel, "..") {
-				return "", fmt.Errorf("path is outside the sandbox directory")
+			for _, sandboxDir := range s.sandboxDirs {
+				rel, relErr := filepath.Rel(sandboxDir, full)
+				if relErr == nil && !strings.HasPrefix(rel, "..") {
+					return full, nil
+				}
 			}
-			return full, nil
+			return "", fmt.Errorf("path is outside the sandbox directory")
 		}
 		if !os.IsNotExist(err) {
 			return "", fmt.Errorf("resolve path: %w", err)
@@ -758,9 +771,10 @@ func (s *fsServer) getFileInfo(_ context.Context, _ *mcp.CallToolRequest, in pat
 }
 
 func (s *fsServer) listAllowedDirectories(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
+	dirList := strings.Join(s.sandboxDirs, "\n  ")
 	text := "All directories on this computer are accessible, subject to Portcullis policy enforcement.\n\n" +
-		"Fast-path directory (no policy check required for reads):\n  " + s.sandbox + "\n\n" +
-		"Operations outside the fast-path directory are sent to portcullis-keep for policy evaluation. " +
+		"Fast-path directories (no policy check required):\n  " + dirList + "\n\n" +
+		"Operations outside the fast-path directories are sent to portcullis-keep for policy evaluation. " +
 		"Access may require escalation approval depending on the path and operation."
 	return textResult(text), nil, nil
 }

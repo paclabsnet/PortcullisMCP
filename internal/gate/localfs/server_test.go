@@ -60,7 +60,7 @@ func setup(t *testing.T) (session *mcp.ClientSession, sandbox string, outside st
 	outside = t.TempDir()
 	ctx := context.Background()
 	var err error
-	session, err = Connect(ctx, sandbox)
+	session, err = Connect(ctx, []string{sandbox})
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
@@ -546,7 +546,7 @@ func TestLocalFS_Symlinks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	session, err := Connect(context.Background(), sandbox)
+	session, err := Connect(context.Background(), []string{sandbox})
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
@@ -1139,6 +1139,100 @@ func TestListDirectoryWithSizes_ContainsDirectories(t *testing.T) {
 	if !strings.Contains(text, "1 dirs") {
 		t.Errorf("expected '1 dirs' in total line, got:\n%s", text)
 	}
+}
+
+// --- multi-sandbox directory tests ---
+
+func TestMultiSandbox_ReadsFromEitherDirectory(t *testing.T) {
+	sandboxA := t.TempDir()
+	sandboxB := t.TempDir()
+
+	fileA := filepath.Join(sandboxA, "a.txt")
+	fileB := filepath.Join(sandboxB, "b.txt")
+	if err := os.WriteFile(fileA, []byte("from-a"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fileB, []byte("from-b"), 0640); err != nil {
+		t.Fatal(err)
+	}
+
+	session, err := Connect(context.Background(), []string{sandboxA, sandboxB})
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	t.Run("reads file in sandbox A", func(t *testing.T) {
+		result := call(t, session, "read_text_file", map[string]any{"path": fileA})
+		assertAllowed(t, result)
+		if !strings.Contains(resultText(t, result), "from-a") {
+			t.Errorf("expected 'from-a', got: %s", resultText(t, result))
+		}
+	})
+
+	t.Run("reads file in sandbox B", func(t *testing.T) {
+		result := call(t, session, "read_text_file", map[string]any{"path": fileB})
+		assertAllowed(t, result)
+		if !strings.Contains(resultText(t, result), "from-b") {
+			t.Errorf("expected 'from-b', got: %s", resultText(t, result))
+		}
+	})
+
+	outside := t.TempDir()
+	t.Run("denies file outside all sandboxes", func(t *testing.T) {
+		assertDenied(t, call(t, session, "read_text_file", map[string]any{
+			"path": filepath.Join(outside, "secret.txt"),
+		}))
+	})
+}
+
+func TestMultiSandbox_ListAllowedDirectoriesShowsAll(t *testing.T) {
+	sandboxA := t.TempDir()
+	sandboxB := t.TempDir()
+
+	session, err := Connect(context.Background(), []string{sandboxA, sandboxB})
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	result := call(t, session, "list_allowed_directories", map[string]any{})
+	assertAllowed(t, result)
+	text := resultText(t, result)
+	if !strings.Contains(text, filepath.Base(sandboxA)) {
+		t.Errorf("expected sandbox A in response, got: %s", text)
+	}
+	if !strings.Contains(text, filepath.Base(sandboxB)) {
+		t.Errorf("expected sandbox B in response, got: %s", text)
+	}
+}
+
+func TestMultiSandbox_WriteToEitherDirectory(t *testing.T) {
+	sandboxA := t.TempDir()
+	sandboxB := t.TempDir()
+
+	session, err := Connect(context.Background(), []string{sandboxA, sandboxB})
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	t.Run("writes to sandbox A", func(t *testing.T) {
+		target := filepath.Join(sandboxA, "out.txt")
+		result := call(t, session, "write_file", map[string]any{"path": target, "content": "hello-a"})
+		assertAllowed(t, result)
+		data, _ := os.ReadFile(target)
+		if string(data) != "hello-a" {
+			t.Errorf("content = %q, want hello-a", data)
+		}
+	})
+
+	t.Run("writes to sandbox B", func(t *testing.T) {
+		target := filepath.Join(sandboxB, "out.txt")
+		result := call(t, session, "write_file", map[string]any{"path": target, "content": "hello-b"})
+		assertAllowed(t, result)
+		data, _ := os.ReadFile(target)
+		if string(data) != "hello-b" {
+			t.Errorf("content = %q, want hello-b", data)
+		}
+	})
 }
 
 func TestSearchWithinFiles_BinaryContentSkipped(t *testing.T) {

@@ -138,6 +138,8 @@ default decision := {
 #      "principal": {
 #        "user_id": "alice@example.com",
 #        "display_name": "Alice Developer",
+#        "preferred_username": "alice@corp.com",
+#        "acr": "mfa",
 #        "groups": ["developers", "team-backend"],
 #        "source_type": "oidc",
 #        "raw_token": "eyJhbGc..."

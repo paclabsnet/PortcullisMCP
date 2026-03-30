@@ -87,15 +87,17 @@ func (n *passthroughNormalizer) Normalize(_ context.Context, id shared.UserIdent
 		)
 	}
 	return shared.Principal{
-		UserID:      id.UserID,
-		Email:       id.Email,
-		DisplayName: id.DisplayName,
-		Groups:      id.Groups,
-		Roles:       id.Roles,
-		Department:  id.Department,
-		AuthMethod:  id.AuthMethod,
-		TokenExpiry: id.TokenExpiry,
-		SourceType:  id.SourceType,
+		UserID:            id.UserID,
+		Email:             id.Email,
+		DisplayName:       id.DisplayName,
+		Groups:            id.Groups,
+		Roles:             id.Roles,
+		Department:        id.Department,
+		AuthMethod:        id.AuthMethod,
+		PreferredUsername: id.PreferredUsername,
+		ACR:               id.ACR,
+		TokenExpiry:       id.TokenExpiry,
+		SourceType:        id.SourceType,
 	}, nil
 }
 
@@ -259,21 +261,26 @@ func (n *oidcVerifyingNormalizer) Normalize(ctx context.Context, id shared.UserI
 		}
 	}
 
+	preferredUsername, _ := claims["preferred_username"].(string)
+	acr, _ := claims["acr"].(string)
+
 	var expUnix int64
 	if exp != nil {
 		expUnix = exp.Unix()
 	}
 
 	return shared.Principal{
-		UserID:      sub, // Use verified subject from token
-		Email:       email,
-		DisplayName: displayName,
-		Groups:      groups,
-		Roles:       roles,
-		Department:  dept,
-		AuthMethod:  amr,
-		TokenExpiry: expUnix,
-		SourceType:  id.SourceType,
+		UserID:            sub, // Use verified subject from token
+		Email:             email,
+		DisplayName:       displayName,
+		Groups:            groups,
+		Roles:             roles,
+		Department:        dept,
+		AuthMethod:        amr,
+		PreferredUsername: preferredUsername,
+		ACR:               acr,
+		TokenExpiry:       expUnix,
+		SourceType:        id.SourceType,
 	}, nil
 }
 

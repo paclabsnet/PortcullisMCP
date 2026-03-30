@@ -16,6 +16,7 @@ package gate
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,20 +77,23 @@ func (g *Gate) FastPath(_ context.Context, toolName string, args map[string]any)
 		}
 	}
 
-	// Rule 2: all paths must be within the sandbox for a local allow.
-	if g.cfg.Sandbox.Directory != "" {
-		sandbox, err := resolvePath(g.cfg.Sandbox.Directory)
-		if err == nil {
-			allInSandbox := true
-			for _, r := range resolved {
-				if !isContainedIn(r, sandbox) {
-					allInSandbox = false
-					break
-				}
+	// Rule 2: all paths must be within a single sandbox directory for a local allow.
+	// Each configured directory is checked in order; a tool call is fast-pathed
+	// when every path argument falls within the same sandbox directory.
+	for _, dir := range g.cfg.Sandbox.EffectiveDirs() {
+		sandbox, err := resolvePath(dir)
+		if err != nil {
+			continue
+		}
+		allInSandbox := true
+		for _, r := range resolved {
+			if !isContainedIn(r, sandbox) {
+				allInSandbox = false
+				break
 			}
-			if allInSandbox {
-				return FastPathAllow, nil
-			}
+		}
+		if allInSandbox {
+			return FastPathAllow, nil
 		}
 	}
 
@@ -138,25 +142,31 @@ func extractPaths(args map[string]any) []string {
 
 // resolvePath cleans and evaluates symlinks on the given path.
 // It returns the absolute, symlink-free path.
-// For paths that do not yet exist (e.g. a write_file target), it resolves
-// the parent directory and reconstructs the final component, so that new
-// files inside the sandbox are correctly fast-pathed rather than denied.
+// For paths that do not yet exist (e.g. a write_file target), it walks up the
+// ancestor chain to find the deepest existing component, resolves symlinks
+// there, and reconstructs the full path. This correctly handles arbitrarily
+// deep new paths like /sandbox/a/b/c/file.txt where none of the intermediates
+// exist yet.
 func resolvePath(path string) (string, error) {
 	clean := filepath.Clean(path)
-	resolved, err := filepath.EvalSymlinks(clean)
-	if err == nil {
-		return resolved, nil
+
+	current := clean
+	var missing []string
+	for {
+		resolved, err := filepath.EvalSymlinks(current)
+		if err == nil {
+			return filepath.Join(append([]string{resolved}, missing...)...), nil
+		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", fmt.Errorf("resolvePath: no existing ancestor found for %q", path)
+		}
+		missing = append([]string{filepath.Base(current)}, missing...)
+		current = parent
 	}
-	if !os.IsNotExist(err) {
-		return "", err
-	}
-	// Path does not exist yet. Resolve the parent and reconstruct.
-	parent, base := filepath.Split(clean)
-	resolvedParent, err := filepath.EvalSymlinks(strings.TrimSuffix(parent, string(filepath.Separator)))
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(resolvedParent, base), nil
 }
 
 // isContainedIn reports whether target is equal to or a subdirectory of base.

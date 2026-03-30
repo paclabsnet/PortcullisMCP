@@ -121,7 +121,27 @@ type OIDCLoginConfig struct {
 }
 
 type SandboxConfig struct {
-	Directory string `yaml:"directory"`
+	Directory   string   `yaml:"directory"`   // backward-compatible single-entry alias
+	Directories []string `yaml:"directories"` // multi-directory list
+}
+
+// EffectiveDirs returns the deduplicated list of configured sandbox directories.
+// Directory is included as the first entry when set and not already present in
+// Directories. Paths are returned as-is; callers are responsible for ~ expansion.
+func (c SandboxConfig) EffectiveDirs() []string {
+	seen := make(map[string]bool)
+	var out []string
+	add := func(d string) {
+		if d != "" && !seen[d] {
+			seen[d] = true
+			out = append(out, d)
+		}
+	}
+	add(c.Directory)
+	for _, d := range c.Directories {
+		add(d)
+	}
+	return out
 }
 
 // DefaultManagementAPIPort is the port used for the Gate management API when

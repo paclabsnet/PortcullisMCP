@@ -652,6 +652,87 @@ func TestOIDCVerifyingNormalizer_MaxTokenAge_Zero_MissingIATAllowed(t *testing.T
 	}
 }
 
+// --- preferred_username / acr claim tests ---
+
+func TestOIDCVerifyingNormalizer_PreferredUsernameAndACR(t *testing.T) {
+	tests := []struct {
+		name              string
+		claims            jwt.MapClaims
+		wantPreferred     string
+		wantACR           string
+	}{
+		{
+			name: "both claims present",
+			claims: jwt.MapClaims{
+				"sub":                "00000000-0000-0000-0000-000000000001",
+				"preferred_username": "alice@corp.com",
+				"acr":                "mfa",
+			},
+			wantPreferred: "alice@corp.com",
+			wantACR:       "mfa",
+		},
+		{
+			name: "only preferred_username present",
+			claims: jwt.MapClaims{
+				"sub":                "00000000-0000-0000-0000-000000000002",
+				"preferred_username": "bob@corp.com",
+			},
+			wantPreferred: "bob@corp.com",
+			wantACR:       "",
+		},
+		{
+			name: "neither claim present",
+			claims: jwt.MapClaims{
+				"sub": "00000000-0000-0000-0000-000000000003",
+			},
+			wantPreferred: "",
+			wantACR:       "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			n, key, kid, issuer := newOIDCNormalizerWithJWKS(t, 0)
+
+			tc.claims["iss"] = issuer
+			tc.claims["exp"] = time.Now().Add(time.Hour).Unix()
+			raw := signToken(t, key, kid, tc.claims)
+
+			id := shared.UserIdentity{SourceType: "oidc", RawToken: raw}
+			got, err := n.Normalize(context.Background(), id)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got.PreferredUsername != tc.wantPreferred {
+				t.Errorf("PreferredUsername = %q, want %q", got.PreferredUsername, tc.wantPreferred)
+			}
+			if got.ACR != tc.wantACR {
+				t.Errorf("ACR = %q, want %q", got.ACR, tc.wantACR)
+			}
+		})
+	}
+}
+
+func TestPassthroughNormalizer_PreferredUsernameAndACR(t *testing.T) {
+	n := &passthroughNormalizer{silenced: true}
+	id := shared.UserIdentity{
+		UserID:            "alice",
+		SourceType:        "oidc",
+		PreferredUsername: "alice@corp.com",
+		ACR:               "mfa",
+	}
+	got, err := n.Normalize(context.Background(), id)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.PreferredUsername != "alice@corp.com" {
+		t.Errorf("PreferredUsername = %q, want alice@corp.com", got.PreferredUsername)
+	}
+	if got.ACR != "mfa" {
+		t.Errorf("ACR = %q, want mfa", got.ACR)
+	}
+}
+
 func TestRegisterNormalizer(t *testing.T) {
 	name := "custom-test"
 	RegisterNormalizer(name, func(cfg IdentityConfig) (IdentityNormalizer, error) {

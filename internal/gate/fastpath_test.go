@@ -92,6 +92,18 @@ func TestFastPath(t *testing.T) {
 			args:     map[string]any{"path": filepath.Join(sandbox, "subdir")},
 			want:     FastPathAllow,
 		},
+		{
+			name:     "deeply nested non-existent path inside sandbox",
+			toolName: "write_file",
+			args:     map[string]any{"path": filepath.Join(sandbox, "a", "b", "c", "new.txt")},
+			want:     FastPathAllow,
+		},
+		{
+			name:     "deeply nested non-existent path outside sandbox",
+			toolName: "write_file",
+			args:     map[string]any{"path": filepath.Join(outside, "a", "b", "c", "new.txt")},
+			want:     FastPathForward,
+		},
 
 		// --- Deny ---
 		{
@@ -254,4 +266,134 @@ func TestFastPath_NoSandbox(t *testing.T) {
 			t.Errorf("FastPath() = %s, want forward", got)
 		}
 	})
+}
+
+func TestFastPath_MultiSandbox(t *testing.T) {
+	parent := t.TempDir()
+	sandboxA := filepath.Join(parent, "sandbox-a")
+	sandboxB := filepath.Join(parent, "sandbox-b")
+	protected := filepath.Join(parent, "protected")
+	outside := filepath.Join(parent, "outside")
+	for _, d := range []string{sandboxA, sandboxB, protected, outside} {
+		if err := os.MkdirAll(d, 0750); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	fileA := filepath.Join(sandboxA, "a.txt")
+	fileB := filepath.Join(sandboxB, "b.txt")
+	fileProtected := filepath.Join(protected, "secret.txt")
+	fileOutside := filepath.Join(outside, "other.txt")
+	for _, f := range []string{fileA, fileB, fileProtected, fileOutside} {
+		if err := os.WriteFile(f, []byte("x"), 0640); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	g := &Gate{
+		cfg: Config{
+			Sandbox:        SandboxConfig{Directories: []string{sandboxA, sandboxB}},
+			ProtectedPaths: []string{protected},
+		},
+	}
+	ctx := context.Background()
+
+	tests := []struct {
+		name string
+		args map[string]any
+		want FastPathResult
+	}{
+		{
+			name: "file in sandbox A is allowed",
+			args: map[string]any{"path": fileA},
+			want: FastPathAllow,
+		},
+		{
+			name: "file in sandbox B is allowed",
+			args: map[string]any{"path": fileB},
+			want: FastPathAllow,
+		},
+		{
+			name: "file outside all sandboxes forwards to Keep",
+			args: map[string]any{"path": fileOutside},
+			want: FastPathForward,
+		},
+		{
+			name: "protected path is denied even when not in any sandbox",
+			args: map[string]any{"path": fileProtected},
+			want: FastPathDeny,
+		},
+		{
+			name: "copy spanning both sandboxes forwards to Keep (not all in one sandbox)",
+			args: map[string]any{"source": fileA, "destination": fileB},
+			want: FastPathForward,
+		},
+		{
+			name: "copy within sandbox A is allowed",
+			args: map[string]any{"source": fileA, "destination": filepath.Join(sandboxA, "copy.txt")},
+			want: FastPathAllow,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, _ := g.FastPath(ctx, "read_file", tt.args)
+			if got != tt.want {
+				t.Errorf("FastPath() = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSandboxConfig_EffectiveDirs(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  SandboxConfig
+		want []string
+	}{
+		{
+			name: "empty config returns empty slice",
+			cfg:  SandboxConfig{},
+			want: nil,
+		},
+		{
+			name: "only Directory set",
+			cfg:  SandboxConfig{Directory: "/a"},
+			want: []string{"/a"},
+		},
+		{
+			name: "only Directories set",
+			cfg:  SandboxConfig{Directories: []string{"/b", "/c"}},
+			want: []string{"/b", "/c"},
+		},
+		{
+			name: "both set, no overlap",
+			cfg:  SandboxConfig{Directory: "/a", Directories: []string{"/b", "/c"}},
+			want: []string{"/a", "/b", "/c"},
+		},
+		{
+			name: "Directory duplicated in Directories is deduplicated",
+			cfg:  SandboxConfig{Directory: "/a", Directories: []string{"/a", "/b"}},
+			want: []string{"/a", "/b"},
+		},
+		{
+			name: "duplicates within Directories are deduplicated",
+			cfg:  SandboxConfig{Directories: []string{"/a", "/b", "/a"}},
+			want: []string{"/a", "/b"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.cfg.EffectiveDirs()
+			if len(got) != len(tt.want) {
+				t.Fatalf("EffectiveDirs() = %v, want %v", got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("EffectiveDirs()[%d] = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
 }

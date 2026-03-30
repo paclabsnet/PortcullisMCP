@@ -1,176 +1,191 @@
-# Feature:  Secure Authorization Flow
+# Implementation Plan
 
+## Task 1: Add preferred_username and acr claims to Principal
 
+**Motivation:** In Azure AD and many enterprise IdPs, `sub` is an opaque per-application
+identifier — not the human-readable login name. `preferred_username` carries the UPN
+(e.g. `alice@corp.com`) that OPA policy rules are typically written against. `acr`
+(Authentication Context Class Reference) gives policies a single signal for authentication
+strength (e.g. `"mfa"`), complementing the existing `amr` array.
 
+### Step 1 — `internal/shared/types.go`
 
-0. Gate: create a new identity source for the config yaml, called: "oidc-login" . change the existing oidc source to
-   "oidc-file"
-1. Gate: Authorization Code + PKCE login flow using a standard OIDC config. localhost callback listener, short-lived
-   one-time session, CSRF-safe
-         - Keep the resulting `oidc-token` and `refresh-token` in memory
-2. Gate: automatically refresh the `oidc-token` as required
-3. Gate: return the login url (perhaps: http://localhost:7777/auth/login) to the Agent as a response to an Agent, when
-   the token is not in-memory.
-4. Gate: modify startup logic so that Gate sends the login URL to the Agent when necessary, and doesn't go into degraded
-   mode
-5. Keep: configurable max TTL enforcement on inbound OIDC tokens.
-6. Gate: We'll need a post-callback HTML page. Probably should be embedded by default, with an optional config override.
-7. Gate: we need an additional pseudo-MCP tool, called: `portcullis_login` . It is a local tool that will provide the
-   Agent and user with the URL for the login page to start the oidc login process.
+Add two fields to `UserIdentity`:
 
-## Architecture
-
-We're going to change Gate to be a state machine with the following states:
-  - unauthenticated
-  - authenticating (the user has been given a login url and are somewhere in the login flow)
-  - authenticated (the user has logged in, and Gate has received the appropriate token)
-  - system-error, which will have the following sub-states:
-    - refresh-failed (We tried to refresh a token and it did not work, perhaps a network error, or a revoked token)
-    - invalid (e.g. a config file problem, or a network problem (unable to talk to Keep, etc), or a bad token, or any
-      other failure)
-
-Gate starts up in `unauthenticated`, regardless of source.
-
-Gate reads and validates the config file. If there is any problem validating the config file, Gate transitions to:
-`system-error`:`invalid` . A `system_error_summary` string and `system_error_detail` string will be created, describing
-the issue that put us into this state.
-
-Based on source, different things will happen:
-
-source: "os"
-  - we perform whatever setup work we need, and immediately move to the `authenticated` state
-  - When we we are in the `authenticated` state
-     - when we received the `portcullis_login` tool request, we respond with "Login is not necessary."
-     - when we receive any other MCP request from the Agent, we process it normally.
-     - If there is an error while interacting with Keep or Guard, we move to the `system-error`:`invalid` state (and
-       substate)
-
-
-source: "oidc-file"
-  - we read in the oidc-token from the file. If it doesn't exist or is invalid, we immediately move to the
-    `system-error`:`invalid` state (and substate)
-    - otherwise, we move immediately to the `authenticated` state
-  - When we we are in the `authenticated` state
-     - when we received the `portcullis_login` tool request, we respond with "Login is not necessary."
-     - when we receive any other MCP request from the Agent, we process it normally.
-     - If there is an error while interacting with Keep or Guard, we move to the `system-error`:`invalid` state (and
-       substate)
-
-
-source: "oidc-login"
-  - we wait for the Agent to interact with us with an MCP request.
-  - if we are in the `unauthenticated` state, we act as if the user requested the `portcullis_login` tool, and invoke
-    that tool.
-     - one of the side effects of `portcullis_login` is to put us in the `authenticating` state.
-  - If we are in the `authenticating` state, and the user uses an MCP, we respond with something like: "please complete
-    the login process. Use the `portcullis_login` tool to start over"
-     - if we successfully receive an oidc-token at the callback address, we move to the `authenticated` state
-     - if we fail to receive an oidc-token in an appropriate time, we move to the state: `system-error`:`invalid`
-  - When we transition to the `authenticated` state
-     - we set up an asynchronous refresh cycle to update the token as required. If there is already an asynchronous
-       refresh cycle, we cancel it and create a new one.
-       - if the token refresh fails for any non-natural expiration reason, we move to the
-         `system-error`:`refresh-failed` state (and substate).
-       - when the refresh-token expires naturally, we move to the `unauthenticated` state
-     - after that, we should refresh the list of MCP tools from Portcullis-Keep
-  - When we we are in the `authenticated` state
-     - when we receive an MCP request from the Agent, we process it normally.
-     - If there is an error while interacting with Keep or Guard, we move to the `system-error`:`invalid` state (and
-       substate)
-  - when we are in the `system-error` state (and *any* substate)
-     - if the user requests the `portcullis_status` tool, we return that information
-     - if the user requests the `portcullis_login` tool, we invoke that tool
-     - any other MCP tool: we respond with text, pulled from the config YAML, something like: "Portcullis-Gate is having
-       trouble. Use `portcullis_status` tool for more details, or use `portcullis_login` to reset the system
-       and log in again."
-
-
-
-**portcullis_login tool**
-
-The behavior of this tool varies based on the identity source:
-
-- os:  respond with "Login is not necessary"
-- oidc_file: respond with "Login is not necessary"
-- oidc_login:
-   - if the state is NOT `authenticated`
-    - set the state to `authenticating`
-    - provide a message (pulled from config YAML) that will contain the login url, to the Agent (and thus the user) to
-      allow them to start the login process again
-   - if the state is `authenticated`
-     - respond with a message to the Agent (and thus the user) indicating that the user is already successfully logged
-       in
-
-
-**portcullis_status tool**
-Basically the same as it currently behaves, except that it uses the state `system-error` as the indicator that there's a
-problem, rather than `degraded mode`
-
-
-
-
-## Docker Changes
-
-We need to add an IdP provider container that we can use as a IdP for oidc-login . It will need to be configured with
-reasonable defaults and secrets, and those secrets
-will need to be mirrored in the gate oidc example YAML.
-
-Claude suggests `dex` : https://github.com/dexidp/dex
-
-  - the Dex realm/config file that needs to be committed alongside docker-compose.yml.
-  - Dex is configured via a single YAML file
-    - deploy/docker-sandbox/dex-config.yaml (or similar) needs to be created as part of that work, pre-configured with a
-      static user and a client matching the gate example YAML.
-    - a static password connector config in Dex is sufficient for testing
-
-
-## Portcullis-Gate YAML changes
-
-oidc-login config will look something like:
-
-```yaml
-identity:
-  oidc_login:
-    issuer_url: "https://login.example.com"   # for OIDC discovery
-    redirect_uri: ""   # if blank, use the default: http://localhost:{port}/auth/callback  , if not blank, use whatever is given.
-    client_id: "portcullis-gate"
-    client_secret: "envvar://GATE_CLIENT_SECRET"  # optional for public clients
-    scopes: ["openid", "profile", "email", "groups"]
-    flow: "authorization_code"  # other options reserved for future implementation
+```go
+PreferredUsername string `json:"preferred_username,omitempty"`
+ACR               string `json:"acr,omitempty"`
 ```
 
-- we will need a configuration YAML field `login_callback_timeout_seconds` with a sensible default
-- we will need a configuration YAML field: `login_callback_page_file`: ""  # default: embedded
+Add the same two fields to `Principal`:
 
+```go
+PreferredUsername string `json:"preferred_username,omitempty"`
+ACR               string `json:"acr,omitempty"`
+```
 
+### Step 2 — `internal/keep/identity.go`
 
-## Notes
+**`oidcVerifyingNormalizer.Normalize`** (after the existing claim extractions, before
+constructing `shared.Principal`):
 
--  We do not have to worry about backwards compatibility.
+```go
+preferredUsername, _ := claims["preferred_username"].(string)
+acr, _               := claims["acr"].(string)
+```
 
-- PKCE state parameter storage: The auth code callback needs to validate the state
-  parameter against what was sent in the authorization request (CSRF protection).
-  This needs a short-lived in-memory store keyed by state value — a map with
-  expiry cleanup.
-    - A nonce must be generated per-login, included in the authorization request, and verified against the nonce claim
-      in the returned ID token.
+Include both in the returned `Principal`.
 
-- Validation:
-  - Management API must be enabled for oidc-login: If management_api.port is 0 (disabled), there's no HTTP server to
-    receive the
-    /auth/callback redirect. Config.Validate() should reject `identity.source`: `oidc-login` when the management API is
-    disabled, with a
-    clear error.
-  - `client_secret` in SecretAllowlist: Gate's SecretAllowlist in config.go controls which fields can use `vault://` and
-    similar
-    resolvers. `identity.oidc_login.client_secret` needs to be added to it, otherwise vault-backed client secrets won't
-    work.
-  - "authorization_code" is the only valid option for `flow`
+**`passthroughNormalizer.Normalize`**: pass through `id.PreferredUsername` and `id.ACR`
+into the returned `Principal`.
 
-- If the IdP sends back an error=access_denied or error=invalid_request to the callback, we move to the state:
-  `system-error`:`invalid`,
+### Step 3 — Rego reference implementation
 
-- when the refresh-token expires, Gate needs to move back to the `unauthenticated` state
+In `policies/rego/portcullis/tabular/decision.rego`, update the example `principal`
+block in the large input-schema comment to document the two new fields:
 
-- refresh cycle timing: We recommend: refresh at expiry - max(60s, lifetime * 0.1)
+```
+"preferred_username": "alice@corp.com",   # human-readable login name (Azure AD / Okta)
+"acr": "mfa",                              # authentication strength signal
+```
 
+No Rego logic changes are required — the fields are passed through in `principal` and
+policy authors can reference them like any other field (e.g.
+`input.authorization_request.principal.acr == "mfa"`).
+
+### Step 4 — Tests (`internal/keep/identity_test.go`)
+
+Add table-driven test cases for:
+
+- `oidcVerifyingNormalizer`: token with `preferred_username` + `acr` claims → both
+  appear in the returned `Principal`.
+- `oidcVerifyingNormalizer`: token without those claims → fields are empty strings (no
+  panic, no error).
+- `passthroughNormalizer`: `UserIdentity` with `PreferredUsername` and `ACR` set →
+  both appear in `Principal`.
+
+---
+
+## Task 2: Allow multiple sandbox directories in Gate config
+
+**Motivation:** Users with multiple unrelated working trees
+(e.g. `~/projects/client-a`, `~/projects/client-b`, `/var/data/exports`) currently
+have no clean way to fast-path all of them without opening a broad common ancestor.
+
+The change extends `sandbox.directory` (singular string) to support
+`sandbox.directories` (list of strings) while keeping the old key as a
+backward-compatible single-entry alias. All listed directories are equally trusted
+for fast-path; protected paths continue to take precedence over all of them.
+There is intentionally no per-directory policy — keep it simple.
+
+### Step 1 — `internal/gate/config.go`
+
+Change `SandboxConfig`:
+
+```go
+type SandboxConfig struct {
+    Directory   string   `yaml:"directory"`   // backward-compatible single entry
+    Directories []string `yaml:"directories"` // multi-directory list
+}
+```
+
+Add an `EffectiveDirs() []string` helper that merges both fields (deduplicating),
+with `Directory` treated as a first entry if non-empty and not already in the list.
+Expand `~` in each path (matching the existing `expandHome` logic in `server.go`).
+
+```go
+// EffectiveDirs returns the deduplicated list of configured sandbox directories,
+// expanding ~ in each entry. Directory is included as a first entry when set and
+// not already present in Directories.
+func (c SandboxConfig) EffectiveDirs() []string { ... }
+```
+
+### Step 2 — `internal/gate/fastpath.go`
+
+Replace the single-directory Rule 2 with a loop over `g.cfg.Sandbox.EffectiveDirs()`:
+
+```go
+// Rule 2: all paths must be within at least one sandbox directory.
+for _, dir := range g.cfg.Sandbox.EffectiveDirs() {
+    sandbox, err := resolvePath(dir)
+    if err != nil {
+        continue
+    }
+    allInSandbox := true
+    for _, r := range resolved {
+        if !isContainedIn(r, sandbox) {
+            allInSandbox = false
+            break
+        }
+    }
+    if allInSandbox {
+        return FastPathAllow, nil
+    }
+}
+```
+
+A tool call is fast-path-allowed if ALL of its paths fall within a single sandbox
+directory (not split across multiple). This preserves the current semantics while
+supporting multiple directories.
+
+### Step 3 — `internal/gate/localfs/server.go`
+
+**`fsServer` struct:** add `sandboxDirs []string` alongside the existing `sandbox`
+(which becomes the primary directory, used only for resolving relative paths).
+
+```go
+type fsServer struct {
+    sandbox     string   // primary: relative-path base
+    sandboxDirs []string // all configured sandbox dirs (for resolve + list)
+}
+```
+
+**`NewServer`:** change signature to `NewServer(sandboxDirs []string)`. The first
+entry is the primary (for relative-path resolution). Fail if the slice is empty.
+
+**`resolve`:** replace the single-sandbox containment check with a loop over
+`s.sandboxDirs`. A path is accepted if it falls within ANY of the configured
+sandbox directories.
+
+**`listAllowedDirectories`:** list all entries in `s.sandboxDirs` instead of the
+single `s.sandbox`.
+
+**`Connect`:** change signature to `Connect(ctx context.Context, sandboxDirs []string)`.
+
+### Step 4 — `internal/gate/server.go`
+
+Update the call site:
+
+```go
+dirs := cfg.Sandbox.EffectiveDirs()
+if len(dirs) > 0 {
+    expanded := make([]string, len(dirs))
+    for i, d := range dirs {
+        expanded[i], err = expandHome(d)
+        if err != nil { ... }
+    }
+    localFSSession, err = localfs.Connect(ctx, expanded)
+    ...
+}
+```
+
+### Step 5 — Tests
+
+**`internal/gate/fastpath_test.go`**
+
+Add multi-sandbox cases:
+- Path inside sandbox A → `FastPathAllow`
+- Path inside sandbox B → `FastPathAllow`
+- Path spanning both sandboxes (one path in A, one in B, e.g. a copy_file call) → `FastPathForward` (not all in one sandbox)
+- Path outside all sandboxes → `FastPathForward`
+- Protected path overrides sandbox B → `FastPathDeny`
+- `EffectiveDirs` deduplication: `directory` + `directories` with overlap → no duplicate resolution
+
+**`internal/gate/localfs/server_test.go`**
+
+Update existing tests for new `NewServer([]string)` / `Connect(ctx, []string)` signatures.
+
+Add:
+- `resolve` accepts paths in sandbox A or sandbox B.
+- `resolve` rejects paths outside all configured directories.
+- `listAllowedDirectories` response includes all configured directories.
