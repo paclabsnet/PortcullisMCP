@@ -18,6 +18,14 @@ import rego.v1
 
 match( restriction, element ) := [ { "rule": restriction, "arg": element } ] if {
 
+   lower(restriction.type) == "any"
+
+   # always true
+}
+
+
+match( restriction, element ) := [ { "rule": restriction, "arg": element } ] if {
+
    lower(restriction.type) == "prefix"
    is_string(element)
    startswith(lower(element), lower(restriction.data))

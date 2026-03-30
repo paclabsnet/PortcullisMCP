@@ -611,6 +611,81 @@ tests:
 
 
 
+  - name: mock-enterprise-api - update_order_status - returns escalate 
+    skip: false
+    description: the user needs approval
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"escalate"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {
+            "action":{
+              "service": "mock-enterprise-api",
+              "tool_name": "update_order_status"
+            },
+            "resource":{
+                "arguments": {
+                  "order_id":"ABC123",
+                  "status":"SHIPPED"
+                }
+            },
+            "principal": {
+              "user_id": "alice@example.com",
+              "display_name": "Alice Developer",
+              "groups": ["developer", "blah"]
+            },
+            "context": {
+              "escalation_tokens":[
+              ]
+            }
+          },
+          "session_id": "tbd123",
+          "trace_id": "req-abc123"
+        }
+
+
+
+  - name: mock-enterprise-api - update_order_status - returns allow because of escalation-token
+    skip: false
+    description: the user has approved and provided a signed escalation-token
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"allow"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {
+            "action":{
+              "service": "mock-enterprise-api",
+              "tool_name": "update_order_status"
+            },
+            "resource":{
+                "arguments": {
+                  "order_id":"ABC123",
+                  "status":"SHIPPED"
+                }
+            },
+            "principal": {
+              "user_id": "alice@example.com",
+              "display_name": "Alice Developer",
+              "groups": ["developer", "blah"]
+            },
+            "context": {
+              "escalation_tokens":[
+                {"raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJwb3J0Y3VsbGlzLWd1YXJkIiwiaWF0IjoxNzczNzY3MzM2LCJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsInBvcnRjdWxsaXMiOnsiYXJnX3Jlc3RyaWN0aW9ucyI6W3siZGF0YSI6IkFCQzEyMyIsImtleV9wYXRoIjoib3JkZXJfaWQiLCJ0eXBlIjoiYW55In1dLCJ0b29scyI6WyJ1cGRhdGVfb3JkZXJfc3RhdHVzIl0sInNlcnZpY2VzIjpbIm1vY2stZW50ZXJwcmlzZS1hcGkiXX19.5jM9MCU4c6aQOXuQGG8o32S_X1pd1cnN4XrzoPxzEnM"}
+              ]
+            }
+          },
+          "session_id": "tbd123",
+          "trace_id": "req-abc123"
+        }
+
+
+
 ####################################################
 #
 # fetch

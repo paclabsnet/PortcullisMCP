@@ -20,12 +20,12 @@ request_matches_base_criteria( request, rules) := true if {
 # a list of groups to which the user doesn't belong normally
 request_principal_not_in_escalation_group( request, rules) := true if {
 
-   print("#DEBUG: request_principal_not_in_escalation_group: request: ", request, ", rules: ", rules)
+#   print("#DEBUG: request_principal_not_in_escalation_group: request: ", request, ", rules: ", rules)
 
    "escalate_to_groups" in object.keys(rules)
    not "arg_restrictions" in object.keys(rules)
 
-   print("#DEBUG++: principal groups: ", request.principal.groups, ", escalate_to_groups: ", rules.escalate_to_groups)
+#   print("#DEBUG++: principal groups: ", request.principal.groups, ", escalate_to_groups: ", rules.escalate_to_groups)
 
    not util.has_group_membership( request.principal.groups, rules.escalate_to_groups)
 
@@ -49,11 +49,11 @@ request_not_in_escalation_group_and_maches_arg_restrictions( request, rules) := 
 
 request_has_arg_restrictions( request, rules ) := true if {
 
-    print("#DEBUG: request_has_arg_restrictions: ", rules)
+#    print("#DEBUG: request_has_arg_restrictions: ", rules)
 
    "arg_restrictions" in object.keys(rules)
 
-   print("#DEBUG++: comparing arg_restrictions against arguments ", request.resource.arguments)
+#   print("#DEBUG++: comparing arg_restrictions against arguments ", request.resource.arguments)
 
    util.any_arg_restriction_rule_honored( rules.arg_restrictions, request.resource.arguments)
 
@@ -116,7 +116,7 @@ request_matches_escalation_criteria( request, rules, escalation_grant_list) := t
    # escalation token
    # escalation_groups := object.get(rules, "escalate_to_groups", ["*"])   
 
-   print("#DEBUG: request_matches_escalation_criteria: grants: ", escalation_grant_list)
+#   print("#DEBUG: request_matches_escalation_criteria: grants: ", escalation_grant_list)
 
    request_arguments := object.get(request, ["resource", "arguments"], [])
 
@@ -126,7 +126,7 @@ request_matches_escalation_criteria( request, rules, escalation_grant_list) := t
             request.action.tool_name, 
             request_arguments )   
 
-   print("#DEBUG: request_matches_escalation_criteria: TRUE")
+#   print("#DEBUG: request_matches_escalation_criteria: TRUE")
 
 } else := false
 
@@ -201,7 +201,7 @@ find_rule_arg_restrictions_matching_request_args(
                                                 "data" :  record.arg }
                              ]
     
-    print("#DEBUG: find_rule_arg_restrictions_matching_request_args: ", escalation_claim_list)
+#    print("#DEBUG: find_rule_arg_restrictions_matching_request_args: ", escalation_claim_list)
 
 
 } else := [] 
@@ -221,12 +221,12 @@ escalation_grant_matches_service_tool_and_request_args(
       request_args) := true if {
 
 
-  print("#DEBUG: escalation_matches_service_tool_and_request_args: service: ",service,", tool:",tool,", request: ", request_args) 
-  print("#DEBUG++: escalation grant list: ", escalation_grant_list)
+#  print("#DEBUG: escalation_matches_service_tool_and_request_args: service: ",service,", tool:",tool,", request: ", request_args) 
+#  print("#DEBUG++: escalation grant list: ", escalation_grant_list)
 
   some escalation_grant in escalation_grant_list
 
-     print("#DEBUG++: escalation grant: ", escalation_grant)
+#     print("#DEBUG++: escalation grant: ", escalation_grant)
 
      # subtle logical error fixed here - escalation grants do not require groups, and 
      # in fact, groups should probably be deprecated as something to test during escalation
@@ -240,13 +240,13 @@ escalation_grant_matches_service_tool_and_request_args(
      service in escalation_grant.portcullis.services
      tool in escalation_grant.portcullis.tools
 
-     print("#DEBUG++: arg restrictions: ", escalation_grant.portcullis.arg_restrictions," request_args: ", request_args)
+#     print("#DEBUG++: arg restrictions: ", escalation_grant.portcullis.arg_restrictions," request_args: ", request_args)
      util.any_arg_restriction_rule_honored( escalation_grant.portcullis.arg_restrictions, request_args)	
 
 
 
 
-   print("#DEBUG++: escalation_grant_matches_service_tool_and_request_args: TRUE")
+#   print("#DEBUG++: escalation_grant_matches_service_tool_and_request_args: TRUE")
 
 } else := false
 
