@@ -146,7 +146,15 @@ func (c *IdentityCache) SetToken(rawJWT string) error {
 
 // refresh re-resolves the identity from the configured source.
 // Must be called with c.mu held.
+// For oidc-login, the identity is set externally via SetToken (the IdP callback
+// is the only update mechanism), so refresh just extends the TTL without
+// touching the stored identity — otherwise the OS identity would silently
+// replace the OIDC token after identityRefreshTTL elapses.
 func (c *IdentityCache) refresh(ctx context.Context) error {
+	if c.cfg.Source == "oidc-login" {
+		c.refreshAt = time.Now().Add(identityRefreshTTL)
+		return nil
+	}
 	id, expiry, err := resolveIdentityWithExpiry(ctx, c.cfg)
 	if err != nil {
 		return err

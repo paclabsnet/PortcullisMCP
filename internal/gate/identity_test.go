@@ -383,3 +383,47 @@ func TestIdentityCache_UpdateToken_NotOIDCSource(t *testing.T) {
 		t.Fatal("expected error when updating token on non-OIDC source, got nil")
 	}
 }
+
+// TestIdentityCache_OIDCLogin_NoFallbackToOS verifies that after SetToken
+// populates an oidc-login cache, a subsequent refresh (simulated by expiring
+// the TTL) does not silently replace the OIDC identity with OS credentials.
+// This is a regression test for the bug where Get() called resolveIdentityWithExpiry
+// which fell through to resolveOSIdentity for the "oidc-login" source.
+func TestIdentityCache_OIDCLogin_NoFallbackToOS(t *testing.T) {
+	cfg := IdentityConfig{Source: "oidc-login"}
+	cache, err := NewIdentityCache(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewIdentityCache: %v", err)
+	}
+
+	raw := buildJWT(map[string]any{
+		"sub": "oidc-login-user@corp.com",
+		"exp": float64(time.Now().Add(time.Hour).Unix()),
+	})
+	if err := cache.SetToken(raw); err != nil {
+		t.Fatalf("SetToken: %v", err)
+	}
+
+	// Confirm OIDC identity is present.
+	id := cache.Get(context.Background())
+	if id.UserID != "oidc-login-user@corp.com" {
+		t.Fatalf("before TTL expiry: UserID = %q, want oidc-login-user@corp.com", id.UserID)
+	}
+	if id.SourceType != "oidc" {
+		t.Fatalf("before TTL expiry: SourceType = %q, want oidc", id.SourceType)
+	}
+
+	// Simulate TTL expiry by resetting refreshAt to the past.
+	cache.mu.Lock()
+	cache.refreshAt = time.Now().Add(-1 * time.Second)
+	cache.mu.Unlock()
+
+	// Get() must call refresh(), which must NOT fall back to OS identity.
+	id = cache.Get(context.Background())
+	if id.SourceType != "oidc" {
+		t.Errorf("after TTL expiry: SourceType = %q, want oidc (must not fall back to OS)", id.SourceType)
+	}
+	if id.UserID != "oidc-login-user@corp.com" {
+		t.Errorf("after TTL expiry: UserID = %q, want oidc-login-user@corp.com", id.UserID)
+	}
+}
