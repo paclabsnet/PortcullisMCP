@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 )
 
 // pingHealth performs a GET to <endpoint>/healthz with a 3-second timeout.
@@ -92,7 +93,7 @@ func RunDegraded(ctx context.Context, reason string) error {
 	slog.Warn("gate starting in degraded mode", "reason", reason)
 
 	srv := mcp.NewServer(&mcp.Implementation{
-		Name:    "portcullis-gate",
+		Name:    shared.ServiceGate,
 		Version: "0.1.0",
 	}, nil)
 

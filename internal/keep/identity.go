@@ -50,6 +50,9 @@ func init() {
 	RegisterNormalizer("passthrough", func(cfg IdentityConfig) (IdentityNormalizer, error) {
 		return &passthroughNormalizer{silenced: cfg.AcceptForgedIdentities}, nil
 	})
+
+	// both oidc-login and oidc-file use this verification path
+	//
 	RegisterNormalizer("oidc-verify", func(cfg IdentityConfig) (IdentityNormalizer, error) {
 		if cfg.OIDCVerify.Issuer == "" {
 			return nil, fmt.Errorf("normalizer oidc-verify requires identity.oidc_verify.issuer to be set")
@@ -226,7 +229,7 @@ func (n *oidcVerifyingNormalizer) Normalize(ctx context.Context, id shared.UserI
 	// Use claims from the verified token
 	email, _ := claims["email"].(string)
 	displayName, _ := claims["name"].(string)
-	
+
 	var groups []string
 	if g, ok := claims["groups"].([]any); ok {
 		for _, v := range g {
@@ -246,7 +249,7 @@ func (n *oidcVerifyingNormalizer) Normalize(ctx context.Context, id shared.UserI
 	}
 
 	dept, _ := claims["department"].(string)
-	
+
 	var amr []string
 	if a, ok := claims["amr"].([]any); ok {
 		for _, v := range a {

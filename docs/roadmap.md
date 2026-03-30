@@ -24,6 +24,29 @@ would benefit.
 - priority: medium-low
 
 
+### Task: Add preferred_username and acr claims to Principal
+
+Two common OIDC claims are not currently extracted by the `oidc-verify` normalizer:
+
+- `preferred_username` — In Azure AD and many enterprise IdPs, `sub` is a pairwise
+  opaque per-application identifier, not the UPN. The human-readable, policy-writable
+  login name is `preferred_username`. OPA rules written against `alice@corp.com` need
+  this field, not `sub`.
+
+- `acr` (Authentication Context Class Reference) — A string describing the
+  authentication strength achieved, e.g. `"urn:mace:incommon:iap:silver"` or `"mfa"`.
+  Complements the existing `amr` (methods used) by giving policies a single level
+  signal: "deny privileged tools unless acr indicates MFA".
+
+Changes required: add `PreferredUsername string` and `ACR string` fields to both
+`shared.UserIdentity` and `shared.Principal`; extract them in
+`keep/identity.go:oidcVerifyingNormalizer.Normalize`; pass them through in
+`passthroughNormalizer.Normalize`; update the Rego reference implementation to
+expose both fields to policies.
+
+- priority: medium
+
+
 ### Task: Allow multiple sandbox directories in Gate config
 
 Currently `sandbox.directory` accepts a single path. Users with multiple unrelated

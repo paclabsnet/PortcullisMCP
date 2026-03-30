@@ -41,10 +41,10 @@ type MCPBackend interface {
 
 // Router maintains MCP client sessions to all registered backend servers.
 type Router struct {
-	mu         sync.Mutex
-	backends   map[string]*backendConn
-	cacheMu    sync.RWMutex
-	toolCache  []shared.AnnotatedTool
+	mu        sync.Mutex
+	backends  map[string]*backendConn
+	cacheMu   sync.RWMutex
+	toolCache []shared.AnnotatedTool
 }
 
 type backendConn struct {
@@ -70,7 +70,7 @@ func NewRouter(backends map[string]BackendConfig) *Router {
 // toolName is the alias as seen by the agent and PDP; it is un-aliased to the
 // real backend tool name before dispatch so the PDP always evaluates the alias.
 func (r *Router) CallTool(ctx context.Context, serverName, toolName string, args map[string]any) (*mcp.CallToolResult, error) {
-	ctx, span := otel.Tracer("portcullis-keep").Start(ctx, "keep.backend.call_tool")
+	ctx, span := otel.Tracer(shared.ServiceKeep).Start(ctx, "keep.backend.call_tool")
 	defer span.End()
 	span.SetAttributes(
 		attribute.String("backend.name", serverName),
@@ -298,7 +298,7 @@ func (r *Router) sessionFor(ctx context.Context, serverName string) (*mcp.Client
 	}
 
 	conn.client = mcp.NewClient(&mcp.Implementation{
-		Name:    "portcullis-keep",
+		Name:    shared.ServiceKeep,
 		Version: "0.1.0",
 	}, nil)
 
@@ -367,6 +367,11 @@ func noRedirectHTTPClient() *http.Client {
 
 // privateRanges lists the CIDR blocks that must not be reachable via HTTP
 // backend URLs: RFC 1918 private ranges, loopback, and link-local.
+//
+// this is specifically for SSRF protection. It can be disabled by setting
+// the config variable:
+//
+//	backends.<backend>.allow_private_addresses: true
 var privateRanges = func() []*net.IPNet {
 	var ranges []*net.IPNet
 	for _, cidr := range []string{

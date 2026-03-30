@@ -238,7 +238,7 @@ func (s *Server) issueEscalationToken(claims *escalationRequestClaims, requestJT
 	tokenClaims := escalationTokenClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			ID:        jti,
-			Issuer:    shared.IssuerGuard,
+			Issuer:    shared.ServiceGuard,
 			Subject:   claims.UserID,
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(expiry),
@@ -363,7 +363,7 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request) {
 		"reason", claims.Reason,
 		"escalation_scope", string(scopeJSON),
 		"jti", claims.ID,
-		"issuer", shared.IssuerGuard,
+		"issuer", shared.ServiceGuard,
 		"expires_at", expiry.UTC().Format(time.RFC3339),
 		"remote", r.RemoteAddr,
 	)

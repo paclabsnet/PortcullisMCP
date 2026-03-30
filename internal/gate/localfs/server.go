@@ -38,6 +38,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 )
 
 // NewServer creates an MCP server that exposes filesystem tools for any path
@@ -155,7 +156,7 @@ func Connect(ctx context.Context, sandboxDir string) (*mcp.ClientSession, error)
 	}
 
 	client := mcp.NewClient(&mcp.Implementation{
-		Name:    "portcullis-gate",
+		Name:    shared.ServiceGate,
 		Version: "0.1.0",
 	}, nil)
 

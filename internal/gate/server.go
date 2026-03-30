@@ -207,7 +207,7 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 	// Fetch tool schemas from Keep and register them with the MCP server.
 	// Local filesystem tools are also registered so the agent sees them.
 	g.server = mcp.NewServer(&mcp.Implementation{
-		Name:    "portcullis-gate",
+		Name:    shared.ServiceGate,
 		Version: "0.1.0",
 	}, nil)
 
@@ -366,7 +366,7 @@ func (g *Gate) registerTool(tool *mcp.Tool) {
 // handleToolCall applies the fast-path, logs the decision, and routes the call
 // to either the local filesystem server or Keep.
 func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[string]any) (*mcp.CallToolResult, error) {
-	ctx, span := otel.Tracer("portcullis-gate").Start(ctx, "gate.tool_call")
+	ctx, span := otel.Tracer(shared.ServiceGate).Start(ctx, "gate.tool_call")
 	defer span.End()
 	span.SetAttributes(
 		attribute.String("tool.name", toolName),

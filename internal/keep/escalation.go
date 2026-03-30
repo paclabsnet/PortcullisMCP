@@ -73,7 +73,7 @@ func (s *EscalationSigner) Sign(req AuthorizedRequest, reason string, scope []ma
 	claims := escalationRequestClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			ID:        jti,
-			Issuer:    shared.IssuerKeep,
+			Issuer:    shared.ServiceKeep,
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(now.Add(s.ttl)),
 		},

@@ -199,7 +199,7 @@ type opaResponse struct {
 
 // Evaluate sends the authorized request to OPA and returns the PDP decision.
 func (c *opaClient) Evaluate(ctx context.Context, req AuthorizedRequest) (shared.PDPResponse, error) {
-	ctx, span := otel.Tracer("portcullis-keep").Start(ctx, "keep.pdp.evaluate")
+	ctx, span := otel.Tracer(shared.ServiceKeep).Start(ctx, "keep.pdp.evaluate")
 	defer span.End()
 	span.SetAttributes(
 		attribute.String("pdp.type", "opa"),

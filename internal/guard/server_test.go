@@ -56,7 +56,7 @@ func makeServer(t *testing.T) *Server {
 func signKeepJWT(t *testing.T, claims escalationRequestClaims, expiry time.Time) string {
 	t.Helper()
 	if claims.RegisteredClaims.Issuer == "" {
-		claims.RegisteredClaims.Issuer = shared.IssuerKeep
+		claims.RegisteredClaims.Issuer = shared.ServiceKeep
 	}
 	claims.RegisteredClaims.IssuedAt = jwt.NewNumericDate(time.Now())
 	claims.RegisteredClaims.ExpiresAt = jwt.NewNumericDate(expiry)
@@ -322,7 +322,7 @@ func TestIssueEscalationToken_Claims(t *testing.T) {
 	if !ok || !parsed.Valid {
 		t.Fatal("issued token has invalid claims")
 	}
-	if tc.Issuer != shared.IssuerGuard {
+	if tc.Issuer != shared.ServiceGuard {
 		t.Errorf("Issuer = %q, want portcullis-guard", tc.Issuer)
 	}
 	if tc.Subject != "alice@corp.com" {
