@@ -1,6 +1,7 @@
 # Enterprise Objections and Responses
 
-This document is a practical briefing sheet for conversations with enterprise architects, security teams, and platform governance groups evaluating PortcullisMCP.
+This document is a practical briefing sheet for conversations with enterprise architects, security teams, and platform
+governance groups evaluating PortcullisMCP.
 
 Use it to:
 - anticipate common objections
@@ -19,7 +20,8 @@ For each objection:
 ## Objection 1: "How do you prove user identity is real and current?"
 
 **Short response**
-Portcullis supports enterprise OIDC validation and now supports interactive IdP login at Gate (`oidc-login`) using Authorization Code + PKCE, with token freshness controls at Keep.
+Portcullis supports enterprise OIDC validation and now supports interactive IdP login at Gate (`oidc-login`) using
+Authorization Code + PKCE, with token freshness controls at Keep.
 
 **Technical response**
 - `oidc-login` enables interactive browser login from Gate through an IdP.
@@ -34,7 +36,8 @@ Portcullis supports enterprise OIDC validation and now supports interactive IdP 
 
 **Common follow-up**
 - "Can we force stronger auth for privileged tools?"
-  Response: yes, use policy with claims like `amr`/`acr` (as available from your IdP) and tool-level authorization rules.
+  Response: yes, use policy with claims like `amr`/`acr` (as available from your IdP) and tool-level authorization
+  rules.
 
 ## Objection 2: "What prevents stale sessions and long-lived trust?"
 
@@ -98,7 +101,8 @@ Portcullis provides traceable decision and escalation flows, with integration po
 ## Objection 6: "Can this integrate with our existing enterprise controls?"
 
 **Short response**
-Yes, by design: OIDC for identity, policy engines for authorization, workflow adapters for approvals, and configurable secret providers.
+Yes, by design: OIDC for identity, policy engines for authorization, workflow adapters for approvals, and configurable
+secret providers.
 
 **Technical response**
 - OIDC-compatible IdP integration.
@@ -114,10 +118,11 @@ Yes, by design: OIDC for identity, policy engines for authorization, workflow ad
 ## Objection 7: "Who owns operations and risk if this is open source?"
 
 **Short response**
-With open source, contractual assurances are lighter, but technical controls and operational discipline still need to meet enterprise standards.
+With open source, contractual assurances are lighter, but technical controls and operational discipline still need to
+meet enterprise standards.
 
 **Technical response**
-- Separate "product guarantees" from "technical readiness." 
+- Separate "product guarantees" from "technical readiness."
 - Position Portcullis as operable by internal platform/security teams with clear runbooks, tests, and observability.
 - If needed, pair with internal support model or a commercial services partner.
 
@@ -129,13 +134,17 @@ With open source, contractual assurances are lighter, but technical controls and
 ## Objection 8: "Will this scale without becoming fragile?"
 
 **Short response**
-The architecture is composable, but enterprise rollout should include explicit load, resilience, and multi-instance validation.
+The architecture is composable, but enterprise rollout should include explicit load, resilience, and multi-instance
+validation.
 
 **Technical response**
 - Core components are separable and configurable.
-- Scale concerns to validate: policy evaluation latency, workflow round-trip behavior, token validation caching strategy, and distributed state assumptions.
-- For Guard/Keep clustering, document shared-state expectations (for example distributed cache and idempotent workflow handling).
-  - Note: the only interesting idempotency challenge is in delegating tasks to a workflow engine, which is not currently supported
+- Scale concerns to validate: policy evaluation latency, workflow round-trip behavior, token validation caching
+  strategy, and distributed state assumptions.
+- For Guard/Keep clustering, document shared-state expectations (for example distributed cache and idempotent workflow
+  handling).
+  - Note: the only interesting idempotency challenge is in delegating tasks to a workflow engine, which is not currently
+    supported
 
 **Evidence to show**
 - Performance test plan and baseline metrics.
@@ -157,13 +166,16 @@ Use this at the end of review meetings:
 
 ## Suggested phrasing in architecture review
 
-"Portcullis is designed for user-attributed automation: human-authenticated identity bootstrap with machine-speed authorization enforcement. We fail closed on identity freshness controls, preserve escalation correlation, and expose policy and workflow decisions with auditable context."
+"Portcullis is designed for user-attributed automation: human-authenticated identity bootstrap with machine-speed
+authorization enforcement. We fail closed on identity freshness controls, preserve escalation correlation, and expose
+policy and workflow decisions with auditable context."
 
 ## Known gaps to acknowledge proactively
 
 These are typically better received when stated up front:
 
-- Formal compliance artifacts (SOC2/ISO mappings) may need to be produced by the adopting organization or a commercial wrapper.
+- Formal compliance artifacts (SOC2/ISO mappings) may need to be produced by the adopting organization or a commercial
+  wrapper.
 - Some enterprise integrations may require adapter work.
   - PAC.Labs provides technical & helpdesk support, and consulting services for integration support
 - Large-scale HA/performance claims should be validated with environment-specific testing.

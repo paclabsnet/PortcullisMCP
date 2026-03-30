@@ -1,15 +1,20 @@
 # PortcullisMCP Architecture
 
-PortcullisMCP is an enterprise MCP (Model Context Protocol) policy gateway solution written in Go. It sits between AI agents and the MCP servers they call, enforcing access policy through an external Policy Decision Point (PDP) with full user identity context and enterprise workflow integration for escalations.
+PortcullisMCP is an enterprise MCP (Model Context Protocol) policy gateway solution written in Go. It sits between AI
+agents and the MCP servers they call, enforcing access policy through an external Policy Decision Point (PDP) with full
+user identity context and enterprise workflow integration for escalations.
 
 ## The Problem
 
-Enterprise AI agents need controlled access to tools (filesystem, APIs, databases, internal services) with the same policy rigor as human users: identity-aware decisions, audit trails, escalation to human approvers, and integration with existing enterprise workflow systems. Generic local policy enforcement (compile-time rules, single-user assumptions) does not meet this bar.
+Enterprise AI agents need controlled access to tools (filesystem, APIs, databases, internal services) with the same
+policy rigor as human users: identity-aware decisions, audit trails, escalation to human approvers, and integration with
+existing enterprise workflow systems. Generic local policy enforcement (compile-time rules, single-user assumptions)
+does not meet this bar.
 
 ## System Overview
 
-### Agent (Claude, Copilot, etc.) 
-Runs on a user's machine. Where appropriate, it is a managed binary, so the user can't change it. 
+### Agent (Claude, Copilot, etc.)
+Runs on a user's machine. Where appropriate, it is a managed binary, so the user can't change it.
 - All MCP interactions are sent to the local proxy: `portcullis-gate`
 
 ### portcullis-gate
@@ -26,7 +31,8 @@ Acts as the local, lightweight proxy for the user's access to the MCPs.
 Acts as a central MCP proxy, responsible for authorizing all MCP requests against corporate policy rules.
 - **Authorization:** Calls a PDP (e.g., OPA) to allow/deny/escalate requests using full context.
 - **Routing:** On `allow`, routes requests to the appropriate backend MCP server (stdio, HTTP, etc.).
-- **Escalation:** On `escalate`, sends information back to the `portcullis-gate` and eventually the user for authorization
+- **Escalation:** On `escalate`, sends information back to the `portcullis-gate` and eventually the user for
+  authorization
 
 ### portcullis-guard
 A web-based service where users or administrators approve pending escalation requests.

@@ -21,21 +21,21 @@ The server starts on `http://localhost:3000/mcp`
 ## Available Tools
 
 ### `get_customer`
-**Description:** Retrieve customer information by ID  
+**Description:** Retrieve customer information by ID
 **Arguments:**
 - `customer_id` (string, required): The customer ID to look up
 
 **Policy:** Allowed for all users (read operation)
 
 ### `query_inventory`
-**Description:** Query product inventory levels  
+**Description:** Query product inventory levels
 **Arguments:**
 - `product_sku` (string, required): Product SKU to query
 
 **Policy:** Allowed for all users (read operation)
 
 ### `update_order_status`
-**Description:** Update the status of an order  
+**Description:** Update the status of an order
 **Arguments:**
 - `order_id` (string, required): The order ID to update
 - `status` (string, required): New status (pending, shipped, delivered)
