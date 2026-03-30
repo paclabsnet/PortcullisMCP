@@ -28,10 +28,23 @@ auth:
   bearer_token: "envvar://GUARD_BEARER_TOKEN"
   allow_unauthenticated: false
 
-# Unclaimed token store settings.
+# Token store: selects where pending escalation requests and unclaimed tokens
+# are held.  "memory" (default) is single-instance only; "redis" is required
+# for HA deployments with multiple Guard instances.
 token_store:
+  backend: "memory"      # "memory" or "redis"
   ttl: 3600              # default token lifetime in seconds when expiry cannot be parsed (default: 3600)
-  cleanup_interval: 300  # how often to prune expired tokens in seconds (default: 300)
+  cleanup_interval: 300  # how often the memory store prunes expired entries (default: 300); no effect for redis
+
+  # Redis settings — required when backend is "redis".
+  # redis:
+  #   addr: "redis.internal:6379"          # host:port of the Redis server
+  #   password: "envvar://REDIS_PASSWORD"  # AUTH password (optional)
+  #   db: 0                                # logical database index (default: 0)
+  #   tls_enabled: false                   # set true for Redis Enterprise / Upstash / TLS-terminated Redis
+  #   tls_skip_verify: false               # disable cert verification (dev only — never use in production)
+  #   tls_ca_cert: ""                      # path to CA PEM for verifying the Redis server cert
+  #   key_prefix: "portcullis:guard:"      # namespace prefix; override to share a Redis instance
 
 # limits:
 #   max_request_body_bytes: 524288

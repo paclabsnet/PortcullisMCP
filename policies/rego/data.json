@@ -162,7 +162,13 @@
 			"update_order_status": {
 				"allow" : {
 					"groups" : [ "admin" ]
-				}
+				},
+                                "escalate": {
+                                        "arg_restrictions" :[
+						{ "type":"any","key_path":"order_id" }
+                                        ]
+                                }
+
 			},
 			"query_inventory": {
 				"allow" : {

@@ -145,6 +145,14 @@ type DenyError struct {
 	TraceID string
 }
 
+// SessionUnknownError is returned when Keep no longer recognizes Gate's
+// in-memory session (for example, after a Keep restart). Gate can use this to
+// resync session state and retry the request.
+type SessionUnknownError struct {
+	SessionID string
+	Reason    string
+}
+
 func (e *DenyError) Error() string {
 	if e.Reason != "" {
 		return "portcullis: request denied by policy: " + e.Reason
@@ -153,6 +161,15 @@ func (e *DenyError) Error() string {
 }
 
 func (e *DenyError) Unwrap() error { return ErrDenied }
+
+func (e *SessionUnknownError) Error() string {
+	if e.Reason != "" {
+		return e.Reason
+	}
+	return ErrSessionUnknown.Error()
+}
+
+func (e *SessionUnknownError) Unwrap() error { return ErrSessionUnknown }
 
 func (e *EscalationPendingError) Error() string {
 	msg := "Escalation required"
@@ -169,4 +186,5 @@ var (
 	ErrDenied            = errors.New("portcullis: request denied by policy")
 	ErrEscalationPending = errors.New("portcullis: escalation pending approval")
 	ErrPDPUnavailable    = errors.New("portcullis: policy decision point unavailable")
+	ErrSessionUnknown    = errors.New("portcullis: keep session unknown")
 )

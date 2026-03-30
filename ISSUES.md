@@ -15,3 +15,7 @@
    `internal/gate/localfs/server.go:fsServer.resolve`, or extract that logic into a shared helper used by both.
 
 
+
+4. Portcullis-Gate - portcullis_login MCP - need the ability to send a 'force' directive to the portcullis login tool, so even if Portcullis-Gate thinks that the user is logged in, they will start the process again.  This is necessary if the Keep backend
+restarts, which begs the question about whether cluster mode would work without sticky sessions
+

@@ -41,6 +41,16 @@ services:
     networks:
       - portcullis
 
+  redis:
+    image: redis:7-alpine
+    container_name: portcullis-redis
+    # requirepass sets the AUTH password; change in production.
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-portcullis-dev-secret}", "--loglevel", "notice"]
+    ports:
+      - "6379:6379"
+    networks:
+      - portcullis
+
   guard:
     build:
       context: ../..
@@ -56,6 +66,7 @@ services:
     command: ["-config", "/etc/portcullis/guard.yaml"]
     depends_on:
       - keep
+      - redis
     networks:
       - portcullis
 

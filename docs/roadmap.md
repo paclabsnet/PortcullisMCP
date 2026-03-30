@@ -78,7 +78,9 @@ keep the scope of the first release a little more manageable
 
 
 ### Task: Add distributed caching to the Portcullis-Guard
-allow multiple Portcullis-Guard instances to share a common distributed memory system (such as Redis)
+- [x] Redis token store — pending escalation requests and unclaimed tokens can be stored in Redis
+  (`token_store.backend: "redis"`), enabling shared state across multiple Guard instances and
+  survival across Guard restarts.  Sandbox docker-compose includes a Redis 7 container.
 - priority: high
 
 ### Task: Allow Portcullis-Keep to add extra data to MCP server calls

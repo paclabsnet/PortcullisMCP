@@ -105,15 +105,45 @@ func NewServer(ctx context.Context, cfg Config) (*Server, error) {
 		return nil, fmt.Errorf("load templates: %w", err)
 	}
 
+	pending, unclaimed, err := buildStores(ctx, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("init token stores: %w", err)
+	}
+
 	return &Server{
 		cfg:        cfg,
 		keepKey:    []byte(cfg.Keep.PendingEscalationRequestSigningKey),
 		signingKey: []byte(cfg.EscalationTokenSigning.Key),
 		ttl:        ttl,
 		templates:  tmpl,
-		pending:    NewMemPendingStore(cfg.Limits.MaxPendingRequests),
-		unclaimed:  NewMemUnclaimedStore(cfg.Limits.MaxUnclaimedPerUser, cfg.Limits.MaxUnclaimedTotal),
+		pending:    pending,
+		unclaimed:  unclaimed,
 	}, nil
+}
+
+// buildStores constructs the PendingStore and UnclaimedStore selected by cfg.
+// Returns in-memory stores for "memory" (or empty) backend, Redis stores for
+// "redis" backend.
+func buildStores(ctx context.Context, cfg Config) (PendingStore, UnclaimedStore, error) {
+	switch cfg.TokenStore.Backend {
+	case "", "memory":
+		return NewMemPendingStore(cfg.Limits.MaxPendingRequests),
+			NewMemUnclaimedStore(cfg.Limits.MaxUnclaimedPerUser, cfg.Limits.MaxUnclaimedTotal),
+			nil
+	case "redis":
+		client, err := NewRedisClient(ctx, cfg.TokenStore.Redis)
+		slog.Debug("Creating new redis client for token storage: ", "config", cfg.TokenStore.Redis)
+		if err != nil {
+			return nil, nil, err
+		}
+		prefix := cfg.TokenStore.Redis.KeyPrefix
+		return NewRedisPendingStore(client, prefix),
+			NewRedisUnclaimedStore(client, prefix, cfg.Limits.MaxUnclaimedPerUser),
+			nil
+	default:
+		// Validate() should have caught this, but be defensive.
+		return nil, nil, fmt.Errorf("unknown token_store.backend %q", cfg.TokenStore.Backend)
+	}
 }
 
 // loadTemplates loads approval.html and token.html from dir.

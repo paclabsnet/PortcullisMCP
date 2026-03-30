@@ -14,8 +14,19 @@ templates:
 portcullis_gate_management_port: 7777
 
 #
-# Whether Gate instances can call the API to get token lists, etc 
+# Whether Gate instances can call the API to get token lists, etc
 # without a bearer token shared secret
 #
 auth:
   allow_unauthenticated: true  # sandbox only
+
+#
+# Token store: use Redis so that pending escalations and unclaimed tokens
+# survive a Guard restart and are shared across Guard replicas.
+# The password must match the --requirepass value in docker-compose.yml.
+#
+token_store:
+  backend: "redis"
+  redis:
+    addr: "redis:6379"
+    password: "portcullis-dev-secret"

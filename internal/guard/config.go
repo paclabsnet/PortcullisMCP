@@ -28,6 +28,7 @@ var SecretAllowlist = []string{
 	"auth.bearer_token",
 	"keep.pending_escalation_request_signing_key",
 	"escalation_token_signing.key",
+	"token_store.redis.password",
 }
 
 // SigningConfig is an alias for shared.SigningConfig.
@@ -55,6 +56,16 @@ func (c Config) Validate() error {
 	}
 	if c.Auth.BearerToken == "" && !c.Auth.AllowUnauthenticated {
 		return fmt.Errorf("auth.bearer_token is required; to allow unauthenticated token API access (development only) set auth.allow_unauthenticated: true")
+	}
+	switch c.TokenStore.Backend {
+	case "", "memory":
+		// no extra fields required
+	case "redis":
+		if c.TokenStore.Redis.Addr == "" {
+			return fmt.Errorf("token_store.redis.addr is required when token_store.backend is \"redis\"")
+		}
+	default:
+		return fmt.Errorf("token_store.backend must be \"memory\" or \"redis\", got %q", c.TokenStore.Backend)
 	}
 	return nil
 }
@@ -121,14 +132,58 @@ func (l *LimitsConfig) ApplyDefaults() {
 	}
 }
 
-// TokenStoreConfig controls the in-memory unclaimed token store.
+// TokenStoreConfig selects and configures the backing store for pending
+// escalation requests and unclaimed escalation tokens.
 type TokenStoreConfig struct {
+	// Backend selects the store implementation.
+	// "memory" (default) uses an in-process map; data is lost on restart.
+	// "redis" uses a Redis server; data persists across restarts and is
+	// shared across multiple Guard instances for HA deployments.
+	Backend string `yaml:"backend"`
+
 	// TTL is the default lifetime (in seconds) for unclaimed tokens when no
 	// expiry can be parsed from the token itself (default: 3600 = 1 hour).
 	TTL int `yaml:"ttl"`
-	// CleanupInterval is how often (in seconds) Guard scans for and removes
-	// expired unclaimed tokens (default: 300 = 5 minutes).
+
+	// CleanupInterval is how often (in seconds) the in-memory store scans for
+	// and removes expired entries (default: 300 = 5 minutes).
+	// Has no effect when backend is "redis" (Redis TTL handles expiry).
 	CleanupInterval int `yaml:"cleanup_interval"`
+
+	// Redis holds connection settings used when backend is "redis".
+	Redis RedisConfig `yaml:"redis"`
+}
+
+// RedisConfig holds connection and security settings for the Redis token store.
+type RedisConfig struct {
+	// Addr is the Redis server address in "host:port" form (required when
+	// token_store.backend is "redis").
+	Addr string `yaml:"addr"`
+
+	// Password is the Redis AUTH password.  Leave empty if Redis is not
+	// password-protected.  Supports vault:// and envvar:// secret URIs.
+	Password string `yaml:"password"`
+
+	// DB selects the Redis logical database (0-based, default 0).
+	DB int `yaml:"db"`
+
+	// TLSEnabled enables TLS for the Redis connection (e.g. Redis Enterprise,
+	// Upstash, or any Redis deployment with TLS termination).
+	TLSEnabled bool `yaml:"tls_enabled"`
+
+	// TLSSkipVerify disables server certificate verification.
+	// For development with self-signed certs only; never use in production.
+	TLSSkipVerify bool `yaml:"tls_skip_verify"`
+
+	// TLSCACert is an optional path to a PEM file containing the CA certificate
+	// used to verify the Redis server's TLS certificate.  If empty, the system
+	// certificate pool is used.
+	TLSCACert string `yaml:"tls_ca_cert"`
+
+	// KeyPrefix is prepended to every Redis key Guard writes.
+	// Defaults to "portcullis:guard:".  Override when sharing a Redis instance
+	// across multiple environments.
+	KeyPrefix string `yaml:"key_prefix"`
 }
 
 type ListenConfig struct {
