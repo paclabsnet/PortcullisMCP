@@ -75,14 +75,16 @@ func TestConfig_Validate_OIDCLoginRequired(t *testing.T) {
 	}
 }
 
-func TestConfig_Validate_OIDCLoginRequiresManagementAPI(t *testing.T) {
+func TestConfig_Validate_OIDCLoginWithoutExplicitPort(t *testing.T) {
+	// management_api.port defaults to 7777 when omitted; oidc-login must not
+	// require the operator to specify it explicitly.
 	cfg := validBaseConfig()
 	cfg.Identity.Source = "oidc-login"
 	cfg.Identity.OIDCLogin.IssuerURL = "https://idp.example.com"
 	cfg.Identity.OIDCLogin.ClientID = "client-id"
-	cfg.ManagementAPI.Port = 0 // Explicitly disabled
-	if err := cfg.Validate(); err == nil {
-		t.Error("expected error when oidc-login is used but management_api.port is 0")
+	cfg.ManagementAPI.Port = 0 // omitted in YAML; will be defaulted to 7777
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("expected no error when management_api.port is omitted with oidc-login, got: %v", err)
 	}
 }
 

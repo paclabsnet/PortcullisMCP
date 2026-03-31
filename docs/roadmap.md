@@ -63,7 +63,7 @@ Affected code: `gate/config.go`, `gate/fastpath.go`, `gate/localfs/server.go`
 - priority: medium
 
 
-### Task: Support Cloud Vaults (Phase 3)
+### Task: Support Cloud Vaults
 These require importing heavy cloud-provider SDKs (AWS/GCP/Azure) and setting up complex test environments. By deferring
 them, we
 keep the scope of the first release a little more manageable
@@ -235,3 +235,8 @@ Functionally `{"type":"any", "key_path":"customer_id"}` is equivalent to
 is a little more clear that this will match any argument supplied.  Also,
 the `any` type works better for non-string arguments
 - priority: medium-low
+
+
+### Task:  Add a logging-level flag to Keep, Gate and Guard
+So we can turn on debugging and info level logs as appropriate
+

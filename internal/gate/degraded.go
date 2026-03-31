@@ -90,7 +90,7 @@ func (g *Gate) buildStatusReport(ctx context.Context) (msg string, isErr bool) {
 // rather than crashing, which would surface as an unresponsive tool server with
 // no actionable feedback.
 func RunDegraded(ctx context.Context, reason string) error {
-	slog.Warn("gate starting in degraded mode", "reason", reason)
+	slog.Error("gate entered degraded mode", "reason", reason)
 
 	srv := mcp.NewServer(&mcp.Implementation{
 		Name:    shared.ServiceGate,

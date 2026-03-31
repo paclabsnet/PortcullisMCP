@@ -238,9 +238,6 @@ func (c Config) Validate() error {
 	if err := c.Identity.Validate(); err != nil {
 		return err
 	}
-	if c.Identity.Source == "oidc-login" && c.ManagementAPI.Port == 0 {
-		return fmt.Errorf("management_api.port must be non-zero (enabled) when identity.source is \"oidc-login\" to receive the OIDC callback")
-	}
 	return c.Guard.Validate()
 }
 
