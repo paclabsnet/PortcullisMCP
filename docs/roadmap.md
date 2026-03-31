@@ -237,6 +237,14 @@ the `any` type works better for non-string arguments
 - priority: medium-low
 
 
-### Task:  Add a logging-level flag to Keep, Gate and Guard
+### Task:  Add a logging-level command-line flag to Keep, Gate and Guard
 So we can turn on debugging and info level logs as appropriate
+- priority: medium-low
+
+
+### Task: Add mTLS support for Gate to Guard
+So every path is protected in the same way that the Gate to Keep path is protected
+- priority: medium
+
+
 

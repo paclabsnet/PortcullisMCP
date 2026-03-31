@@ -424,6 +424,9 @@ easier. And this reference implementation has the ability to delegate to custom 
 PAC.Labs provides helpdesk and consulting support for PortcullisMCP, with several tiers of support available, including
 24/7, if required.
 
+**We would need mutual TLS (mTLS) between the servers**
+The system supports mTLS between Portcullis-Gate and Portcullis-Keep.  Support
+for Portcullis-Gate <-> Portcullis-Guard is on the roadmap.
 
 **This will add latency to the MCP calls**
 Yes, just like any other system that enforces fine-grained policy. Having said that, the additional latency is on the
