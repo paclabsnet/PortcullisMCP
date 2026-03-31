@@ -26,6 +26,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -608,4 +609,137 @@ func generateSelfSignedCert(t *testing.T) (keyPEM, certPEM []byte, cert *x509.Ce
 	// Make transport accept this self-signed cert.
 	_ = tls.Certificate{}
 	return keyPEM, certPEM, parsed
+}
+
+// generateServerCerts builds an ephemeral CA and a server cert signed by it.
+// The server cert has SAN localhost/127.0.0.1 so TLS hostname verification passes.
+// Returns caCertPEM, serverCertPEM, serverKeyPEM.
+func generateServerCerts(t *testing.T) (caCertPEM, serverCertPEM, serverKeyPEM []byte) {
+	t.Helper()
+	notBefore := time.Now().Add(-time.Minute)
+	notAfter := time.Now().Add(time.Hour)
+
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate CA key: %v", err)
+	}
+	caTmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "test-keep-ca"},
+		NotBefore:             notBefore,
+		NotAfter:              notAfter,
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("create CA cert: %v", err)
+	}
+	caCert, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		t.Fatalf("parse CA cert: %v", err)
+	}
+	caCertPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})
+
+	serverKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate server key: %v", err)
+	}
+	serverTmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "portcullis-keep"},
+		NotBefore:    notBefore,
+		NotAfter:     notAfter,
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:     []string{"localhost"},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+	}
+	serverDER, err := x509.CreateCertificate(rand.Reader, serverTmpl, caCert, &serverKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("create server cert: %v", err)
+	}
+	serverCertPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: serverDER})
+	serverKeyDER, err := x509.MarshalECPrivateKey(serverKey)
+	if err != nil {
+		t.Fatalf("marshal server key: %v", err)
+	}
+	serverKeyPEM = pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: serverKeyDER})
+	return
+}
+
+// startPlainTLSServer starts a minimal HTTPS server using the supplied server
+// cert/key (no client-cert requirement) and returns its base URL.
+// The server is shut down via t.Cleanup.
+func startPlainTLSServer(t *testing.T, serverCertPEM, serverKeyPEM []byte) string {
+	t.Helper()
+	serverCert, err := tls.X509KeyPair(serverCertPEM, serverKeyPEM)
+	if err != nil {
+		t.Fatalf("X509KeyPair: %v", err)
+	}
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+		Certificates: []tls.Certificate{serverCert},
+	})
+	if err != nil {
+		t.Fatalf("tls.Listen: %v", err)
+	}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	return "https://" + ln.Addr().String()
+}
+
+// ---- Gate-side server CA verification ----------------------------------------
+
+func TestGateMTLS_TrustedServerCA_ConnectsSuccessfully(t *testing.T) {
+	caCertPEM, serverCertPEM, serverKeyPEM := generateServerCerts(t)
+	serverURL := startPlainTLSServer(t, serverCertPEM, serverKeyPEM)
+
+	// Write the CA cert to a temp file and configure Gate to trust it.
+	caFile := filepath.Join(t.TempDir(), "ca.crt")
+	if err := os.WriteFile(caFile, caCertPEM, 0644); err != nil {
+		t.Fatalf("write CA file: %v", err)
+	}
+
+	transport, err := buildTransport(KeepAuth{ServerCA: caFile})
+	if err != nil {
+		t.Fatalf("buildTransport: %v", err)
+	}
+	client := &http.Client{Transport: transport}
+
+	resp, err := client.Get(serverURL)
+	if err != nil {
+		t.Fatalf("GET with trusted server CA failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestGateMTLS_UntrustedServerCA_ConnectionFails(t *testing.T) {
+	// Build a server with CA1-signed cert, but configure Gate to trust CA2.
+	_, serverCertPEM, serverKeyPEM := generateServerCerts(t)
+	serverURL := startPlainTLSServer(t, serverCertPEM, serverKeyPEM)
+
+	// A completely separate CA — the server cert was not signed by this.
+	differentCACertPEM, _, _ := generateServerCerts(t)
+	caFile := filepath.Join(t.TempDir(), "ca.crt")
+	if err := os.WriteFile(caFile, differentCACertPEM, 0644); err != nil {
+		t.Fatalf("write CA file: %v", err)
+	}
+
+	transport, err := buildTransport(KeepAuth{ServerCA: caFile})
+	if err != nil {
+		t.Fatalf("buildTransport: %v", err)
+	}
+	client := &http.Client{Transport: transport}
+
+	_, err = client.Get(serverURL)
+	if err == nil {
+		t.Fatal("expected TLS certificate verification failure, got nil")
+	}
 }

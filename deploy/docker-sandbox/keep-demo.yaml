@@ -3,6 +3,16 @@ listen:
   auth:
     bearer_token: "dev-secret-token"
 
+  # Uncomment the block below to enable mTLS for the Gate→Keep transport.
+  # The static certificates in ./tls/ are valid for 50 years (until 2076) and
+  # are safe to commit — they are demo-only fixtures signed by a private CA that
+  # is not trusted by any public root store.
+  #
+  # tls:
+  #   cert:      "/tls/keep-server.crt"
+  #   key:       "/tls/keep-server.key"
+  #   client_ca: "/tls/ca.crt"   # requires Gate to present a cert signed by this CA
+
 pdp:
   type: "opa"
   endpoint: "http://opa:8181/v1/data/portcullis/tabular/decision"

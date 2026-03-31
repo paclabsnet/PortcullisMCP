@@ -33,6 +33,7 @@ services:
       - "8080:8080"
     volumes:
       - ./keep-demo.yaml:/etc/portcullis/keep.yaml:ro
+      - ./tls:/tls:ro   # mTLS certs (uncomment tls: block in keep-demo.yaml to activate)
     command: ["-config", "/etc/portcullis/keep.yaml"]
     depends_on:
       - opa
