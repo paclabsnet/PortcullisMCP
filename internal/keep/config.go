@@ -21,6 +21,7 @@ import (
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
 	identity "github.com/paclabsnet/PortcullisMCP/internal/shared/identity"
+	"github.com/paclabsnet/PortcullisMCP/internal/shared/tlsutil"
 	telemetrycfg "github.com/paclabsnet/PortcullisMCP/internal/telemetry"
 )
 
@@ -125,11 +126,10 @@ func (c ListenConfig) Validate() error {
 	return nil
 }
 
-type TLSConfig struct {
-	Cert     string `yaml:"cert"`
-	Key      string `yaml:"key"`
-	ClientCA string `yaml:"client_ca"` // non-empty = require mTLS from gate
-}
+// TLSConfig is an alias for tlsutil.TLSConfig.
+// The canonical definition lives in internal/shared/tlsutil so it can be
+// shared with portcullis-guard without duplication.
+type TLSConfig = tlsutil.TLSConfig
 
 type AuthConfig struct {
 	BearerToken string `yaml:"bearer_token"` // optional shared secret for bearer auth

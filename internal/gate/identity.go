@@ -182,7 +182,7 @@ func (c *IdentityCache) refresh(ctx context.Context) error {
 // If it does not, an error is returned — there is no fallback to OS identity.
 // This ensures that an enterprise deployment that requires OIDC credentials
 // cannot silently degrade to a weaker identity source.
-func resolveIdentityWithExpiry(ctx context.Context, cfg IdentityConfig) (shared.UserIdentity, time.Time, error) {
+func resolveIdentityWithExpiry(_ context.Context, cfg IdentityConfig) (shared.UserIdentity, time.Time, error) {
 	if cfg.Source == "oidc-file" {
 		tokenFile, err := expandHome(cfg.OIDCFile.TokenFile)
 		if err != nil {
@@ -206,11 +206,14 @@ func resolveIdentityWithExpiry(ctx context.Context, cfg IdentityConfig) (shared.
 	return id, time.Time{}, err
 }
 
+/*
+@TODO: 2026-04-02 : remove
 // resolveIdentity is kept for compatibility; prefer NewIdentityCache for new code.
 func resolveIdentity(ctx context.Context, cfg IdentityConfig) (shared.UserIdentity, error) {
 	id, _, err := resolveIdentityWithExpiry(ctx, cfg)
 	return id, err
 }
+*/
 
 // identityFromJWT parses a raw OIDC JWT string, extracts identity claims, and
 // returns the token expiry time. It does NOT verify the signature — that is the
@@ -294,6 +297,8 @@ func identityFromJWT(token string) (shared.UserIdentity, time.Time, error) {
 	return id, expiry, nil
 }
 
+/*
+@TODO : 2026-04-02 : remove
 // resolveOIDCIdentity reads the OIDC token from the configured file.
 // Kept for use by tests; production code should use identityFromJWT or IdentityCache.
 func resolveOIDCIdentity(_ context.Context, cfg OIDCFileConfig) (shared.UserIdentity, error) {
@@ -308,6 +313,7 @@ func resolveOIDCIdentity(_ context.Context, cfg OIDCFileConfig) (shared.UserIden
 	id, _, err := identityFromJWT(token)
 	return id, err
 }
+*/
 
 // resolveOSIdentity builds a UserIdentity from the OS user. Provided for
 // testing/evaluation only; portcullis-keep may be configured to reject it.

@@ -34,6 +34,7 @@ import (
 	"github.com/paclabsnet/PortcullisMCP/internal/gate/localfs"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 	"github.com/paclabsnet/PortcullisMCP/internal/telemetry"
+	"github.com/paclabsnet/PortcullisMCP/internal/version"
 )
 
 // DecisionLogEntry is a fast-path decision log entry sent to Keep.
@@ -137,7 +138,11 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 
 	var guardClient *GuardClient
 	if cfg.Guard.resolvedAPIEndpoint() != "" {
-		guardClient = NewGuardClient(cfg.Guard)
+		var err error
+		guardClient, err = NewGuardClient(cfg.Guard)
+		if err != nil {
+			return nil, fmt.Errorf("init guard client: %w", err)
+		}
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -213,7 +218,7 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 	// Local filesystem tools are also registered so the agent sees them.
 	g.server = mcp.NewServer(&mcp.Implementation{
 		Name:    shared.ServiceGate,
-		Version: "0.1.0",
+		Version: version.Version,
 	}, nil)
 
 	mcp.AddTool(g.server,
@@ -845,7 +850,7 @@ func (g *Gate) policyErrToResult(err error, toolName, traceID string) (*mcp.Call
 	case errors.As(err, &identityErr):
 		// Identity token is invalid (e.g., JWKS kid mismatch after IdP restart).
 		// Reset to unauthenticated state and prompt user to log in again.
-		slog.Warn("identity verification failed, resetting to unauthenticated", 
+		slog.Warn("identity verification failed, resetting to unauthenticated",
 			"error", identityErr.Reason, "trace_id", traceID)
 		if g.cfg.Identity.Source == "oidc-login" {
 			g.stateMachine.SetUnauthenticated()

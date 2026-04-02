@@ -20,6 +20,15 @@
 
 
 
+5. (FIXED) Portcullis-Guard - authentication - there's no need for `/token/claim` to be outside of the authentication umbrella, just because it's technically fine. Consistency is better
 
 
+
+
+
+6. All - config - the config is clunky and arbitrary. Create some consistent "domains" of config, and ensure that all of the key/values are 1) in the right domain and 2) the names are not really_long_strings_with_underscores_just_because_that_is_explicit
+
+
+
+7. All - config - add a mode: dev, production at the top of each config file.  This will govern whether we allow insecure implementations or fail at startup
 

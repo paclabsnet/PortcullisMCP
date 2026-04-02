@@ -29,7 +29,10 @@ var SecretAllowlist = []string{
 	"keep.auth.cert",
 	"keep.auth.key",
 	"keep.auth.server_ca",
-	"guard.bearer_token",
+	"guard.auth.bearer_token",
+	"guard.auth.mtls.client_cert",
+	"guard.auth.mtls.client_key",
+	"guard.auth.mtls.server_ca",
 	"management_api.shared_secret",
 	"identity.oidc_login.client_secret",
 }
@@ -185,6 +188,19 @@ type DecisionLogBatchConfig struct {
 // can still make escalation work manually, but it requires creating a JWT by hand using
 // deep knowledge of the Rego structures and policies, and the capabilities
 // of PortcullisGate's web interface
+// GuardAuth holds authentication settings for Gate→Guard machine-to-machine calls.
+type GuardAuth struct {
+	BearerToken string          `yaml:"bearer_token"` // shared secret for Bearer auth; supports envvar:// etc
+	Mtls        MtlsClientConfig `yaml:"mtls"`
+}
+
+// MtlsClientConfig holds the TLS material Gate uses as a client when connecting to Guard.
+type MtlsClientConfig struct {
+	ServerCA   string `yaml:"server_ca"`   // CA cert that signed Guard's server cert; empty = system pool
+	ClientCert string `yaml:"client_cert"` // Gate's client certificate for mTLS
+	ClientKey  string `yaml:"client_key"`  // Gate's client private key for mTLS
+}
+
 type GuardConfig struct {
 	// EscalationApprovalEndpoint is the human-facing base URL of portcullis-guard,
 	// used to construct the /approve link shown to the user and their agent.
@@ -195,15 +211,15 @@ type GuardConfig struct {
 	EscalationApprovalEndpoint string `yaml:"escalation_approval_endpoint"`
 
 	// TokenAPIEndpoint is the machine-to-machine base URL used by Gate for
-	// /token/unclaimed/list, /token/claim, and /pending API calls (bearer-token
-	// protected). Set this to the internal Guard address when the SSO proxy is on
+	// /token/unclaimed/list, /token/claim, and /pending API calls.
+	// Set this to the internal Guard API address when the SSO proxy is on
 	// a separate hostname from the API. Defaults to EscalationApprovalEndpoint
 	// when unset, which is correct for single-hostname deployments.
 	TokenAPIEndpoint string `yaml:"token_api_endpoint"`
 
-	BearerToken                string `yaml:"bearer_token"`                 // for /token/unclaimed/list, /token/deposit, and /pending
-	PollInterval               int    `yaml:"poll_interval"`                // seconds between polls of /token/unclaimed/list (default: 60)
-	ApprovalManagementStrategy string `yaml:"approval_management_strategy"` // "proactive" | "user-driven" (default: "user-driven")
+	Auth                       GuardAuth `yaml:"auth"`
+	PollInterval               int       `yaml:"poll_interval"`                // seconds between polls of /token/unclaimed/list (default: 60)
+	ApprovalManagementStrategy string    `yaml:"approval_management_strategy"` // "proactive" | "user-driven" (default: "user-driven")
 }
 
 // resolvedAPIEndpoint returns the endpoint Gate should use for machine-to-machine

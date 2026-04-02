@@ -17,14 +17,11 @@ package keep
 import (
 	"context"
 	"crypto/subtle"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.opentelemetry.io/otel"
@@ -33,6 +30,7 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
+	"github.com/paclabsnet/PortcullisMCP/internal/shared/tlsutil"
 	"github.com/paclabsnet/PortcullisMCP/internal/telemetry"
 )
 
@@ -142,7 +140,7 @@ func (s *Server) Run(ctx context.Context) error {
 	useTLS := s.cfg.Listen.TLS.Cert != "" && s.cfg.Listen.TLS.Key != ""
 
 	if useTLS {
-		tlsCfg, err := buildServerTLS(s.cfg.Listen.TLS)
+		tlsCfg, err := tlsutil.BuildServerTLS(s.cfg.Listen.TLS)
 		if err != nil {
 			return fmt.Errorf("build tls config: %w", err)
 		}
@@ -651,12 +649,12 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
 	for _, e := range entries {
 		invalid := false
 		for _, chk := range []shared.FieldCheck{
-			{e.UserID, "user_id", s.cfg.Limits.MaxUserIDBytes},
-			{e.ToolName, "tool_name", s.cfg.Limits.MaxToolNameBytes},
-			{e.ServerName, "server_name", s.cfg.Limits.MaxServerNameBytes},
-			{e.TraceID, "trace_id", s.cfg.Limits.MaxTraceIDBytes},
-			{e.SessionID, "session_id", s.cfg.Limits.MaxSessionIDBytes},
-			{e.Reason, "reason", s.cfg.Limits.MaxReasonBytes},
+			{Value: e.UserID, Name: "user_id", Max: s.cfg.Limits.MaxUserIDBytes},
+			{Value: e.ToolName, Name: "tool_name", Max: s.cfg.Limits.MaxToolNameBytes},
+			{Value: e.ServerName, Name: "server_name", Max: s.cfg.Limits.MaxServerNameBytes},
+			{Value: e.TraceID, Name: "trace_id", Max: s.cfg.Limits.MaxTraceIDBytes},
+			{Value: e.SessionID, Name: "session_id", Max: s.cfg.Limits.MaxSessionIDBytes},
+			{Value: e.Reason, Name: "reason", Max: s.cfg.Limits.MaxReasonBytes},
 		} {
 			if err := shared.CheckLen(chk.Value, chk.Name, chk.Max); err != nil {
 				slog.Warn("dropping oversized log entry", "field", chk.Name, "tool", e.ToolName)
@@ -721,32 +719,6 @@ func (s *Server) handleReload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "reloaded"})
 }
 
-// buildServerTLS creates a tls.Config for the Keep server.
-// If ClientCA is set, mTLS client verification is required.
-func buildServerTLS(cfg TLSConfig) (*tls.Config, error) {
-	cert, err := tls.LoadX509KeyPair(cfg.Cert, cfg.Key)
-	if err != nil {
-		return nil, fmt.Errorf("load server cert: %w", err)
-	}
-	tlsCfg := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		MinVersion:   tls.VersionTLS13,
-	}
-	if cfg.ClientCA != "" {
-		caData, err := os.ReadFile(cfg.ClientCA)
-		if err != nil {
-			return nil, fmt.Errorf("read client CA: %w", err)
-		}
-		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM(caData) {
-			return nil, fmt.Errorf("parse client CA: no valid certificates found")
-		}
-		tlsCfg.ClientCAs = pool
-		tlsCfg.ClientAuth = tls.RequireAndVerifyClientCert
-	}
-	return tlsCfg, nil
-}
-
 // hasWorkflow returns true when a real workflow handler is configured.
 // noopWorkflow (the default when no workflow type is set) does not count —
 // a "workflow" PDP decision requires an actual external system to approve it.
@@ -759,10 +731,10 @@ func (s *Server) hasWorkflow() bool {
 // Centralising them here means handleCall and handleAuthorize stay in sync automatically.
 func enrichedRequestChecks(req shared.EnrichedMCPRequest, limits LimitsConfig) []shared.FieldCheck {
 	return []shared.FieldCheck{
-		{req.ServerName, "server_name", limits.MaxServerNameBytes},
-		{req.ToolName, "tool_name", limits.MaxToolNameBytes},
-		{req.TraceID, "trace_id", limits.MaxTraceIDBytes},
-		{req.SessionID, "session_id", limits.MaxSessionIDBytes},
+		{Value: req.ServerName, Name: "server_name", Max: limits.MaxServerNameBytes},
+		{Value: req.ToolName, Name: "tool_name", Max: limits.MaxToolNameBytes},
+		{Value: req.TraceID, Name: "trace_id", Max: limits.MaxTraceIDBytes},
+		{Value: req.SessionID, Name: "session_id", Max: limits.MaxSessionIDBytes},
 	}
 }
 

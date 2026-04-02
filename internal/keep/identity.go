@@ -23,7 +23,6 @@ import (
 	"log/slog"
 	"math/big"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -389,6 +388,8 @@ func (n *oidcVerifyingNormalizer) getJWKS(ctx context.Context, force bool) (*jwk
 	return n.jwks, nil
 }
 
+/*
+@TODO: 2026-04-02 : remove
 // jwtIssuer extracts the iss claim from a JWT without verifying the signature.
 func jwtIssuer(token string) (string, error) {
 	parts := strings.Split(token, ".")
@@ -407,6 +408,7 @@ func jwtIssuer(token string) (string, error) {
 	}
 	return claims.Issuer, nil
 }
+*/
 
 // buildIdentityNormalizer constructs the configured IdentityNormalizer using
 // the global registry. It is a thin wrapper around identity.Build.

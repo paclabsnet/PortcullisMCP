@@ -29,6 +29,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/paclabsnet/PortcullisMCP/internal/shared/tlsutil"
 )
 
 // tlsFixtures holds an in-memory PKI for mTLS tests:
@@ -235,9 +237,9 @@ func TestBuildServerTLS_ValidServerCertOnly(t *testing.T) {
 	os.WriteFile(cfg.Cert, fx.ServerCertPEM, 0644)
 	os.WriteFile(cfg.Key, fx.ServerKeyPEM, 0600)
 
-	tlsCfg, err := buildServerTLS(cfg)
+	tlsCfg, err := tlsutil.BuildServerTLS(cfg)
 	if err != nil {
-		t.Fatalf("buildServerTLS: %v", err)
+		t.Fatalf("BuildServerTLS: %v", err)
 	}
 	if len(tlsCfg.Certificates) != 1 {
 		t.Errorf("expected 1 certificate, got %d", len(tlsCfg.Certificates))
@@ -260,9 +262,9 @@ func TestBuildServerTLS_WithClientCA_RequiresVerification(t *testing.T) {
 	os.WriteFile(cfg.Key, fx.ServerKeyPEM, 0600)
 	os.WriteFile(cfg.ClientCA, fx.CACertPEM, 0644)
 
-	tlsCfg, err := buildServerTLS(cfg)
+	tlsCfg, err := tlsutil.BuildServerTLS(cfg)
 	if err != nil {
-		t.Fatalf("buildServerTLS: %v", err)
+		t.Fatalf("BuildServerTLS: %v", err)
 	}
 	if tlsCfg.ClientAuth != tls.RequireAndVerifyClientCert {
 		t.Errorf("ClientAuth = %v, want RequireAndVerifyClientCert", tlsCfg.ClientAuth)
@@ -278,7 +280,7 @@ func TestBuildServerTLS_InvalidCertFile(t *testing.T) {
 		Cert: filepath.Join(dir, "missing.crt"),
 		Key:  filepath.Join(dir, "missing.key"),
 	}
-	if _, err := buildServerTLS(cfg); err == nil {
+	if _, err := tlsutil.BuildServerTLS(cfg); err == nil {
 		t.Fatal("expected error for missing cert file, got nil")
 	}
 }
@@ -295,7 +297,7 @@ func TestBuildServerTLS_InvalidClientCAFile(t *testing.T) {
 	os.WriteFile(cfg.Cert, fx.ServerCertPEM, 0644)
 	os.WriteFile(cfg.Key, fx.ServerKeyPEM, 0600)
 
-	if _, err := buildServerTLS(cfg); err == nil {
+	if _, err := tlsutil.BuildServerTLS(cfg); err == nil {
 		t.Fatal("expected error for missing client CA file, got nil")
 	}
 }
@@ -326,13 +328,13 @@ func TestMTLS_ValidClientCert_Accepted(t *testing.T) {
 	fx := generateTLSFixtures(t)
 
 	// Start Keep server with mTLS (requires client cert signed by trusted CA).
-	serverTLSCfg, err := buildServerTLS(TLSConfig{
+	serverTLSCfg, err := tlsutil.BuildServerTLS(TLSConfig{
 		Cert:     writePEMFile(t, fx.ServerCertPEM),
 		Key:      writePEMFile(t, fx.ServerKeyPEM),
 		ClientCA: writePEMFile(t, fx.CACertPEM),
 	})
 	if err != nil {
-		t.Fatalf("buildServerTLS: %v", err)
+		t.Fatalf("BuildServerTLS: %v", err)
 	}
 	serverURL := startMTLSServer(t, serverTLSCfg)
 
@@ -354,13 +356,13 @@ func TestMTLS_NoClientCert_Rejected(t *testing.T) {
 	fx := generateTLSFixtures(t)
 
 	// Start Keep server requiring mTLS.
-	serverTLSCfg, err := buildServerTLS(TLSConfig{
+	serverTLSCfg, err := tlsutil.BuildServerTLS(TLSConfig{
 		Cert:     writePEMFile(t, fx.ServerCertPEM),
 		Key:      writePEMFile(t, fx.ServerKeyPEM),
 		ClientCA: writePEMFile(t, fx.CACertPEM),
 	})
 	if err != nil {
-		t.Fatalf("buildServerTLS: %v", err)
+		t.Fatalf("BuildServerTLS: %v", err)
 	}
 	serverURL := startMTLSServer(t, serverTLSCfg)
 
@@ -378,13 +380,13 @@ func TestMTLS_UntrustedClientCert_Rejected(t *testing.T) {
 	fx := generateTLSFixtures(t)
 
 	// Start Keep server: only trusts the primary CA.
-	serverTLSCfg, err := buildServerTLS(TLSConfig{
+	serverTLSCfg, err := tlsutil.BuildServerTLS(TLSConfig{
 		Cert:     writePEMFile(t, fx.ServerCertPEM),
 		Key:      writePEMFile(t, fx.ServerKeyPEM),
 		ClientCA: writePEMFile(t, fx.CACertPEM),
 	})
 	if err != nil {
-		t.Fatalf("buildServerTLS: %v", err)
+		t.Fatalf("BuildServerTLS: %v", err)
 	}
 	serverURL := startMTLSServer(t, serverTLSCfg)
 

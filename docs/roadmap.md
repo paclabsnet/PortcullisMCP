@@ -243,7 +243,10 @@ So we can turn on debugging and info level logs as appropriate
 
 
 ### Task: Add mTLS support for Gate to Guard
-So every path is protected in the same way that the Gate to Keep path is protected
+So every path is protected in the same way that the Gate to Keep path is protected. Ideally we re-use the certs we created for Gate, create new certs for Guard and set up
+the config for Guard in a way that is consistent with the mTLS config for Keep. Then 
+write some tests to make sure it works.
+
 - priority: medium
 
 

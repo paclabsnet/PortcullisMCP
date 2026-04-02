@@ -1,5 +1,12 @@
 listen:
-  address: "0.0.0.0:8444"
+  ui_address: "0.0.0.0:8444"
+  # ui_tls:               # uncomment to enable TLS on the UI listener
+  #   cert: "/tls/guard-server.crt"
+  #   key:  "/tls/guard-server.key"
+  api_address: "0.0.0.0:8445"
+  # api_tls:              # uncomment to enable TLS on the API listener
+  #   cert: "/tls/guard-server.crt"
+  #   key:  "/tls/guard-server.key"
 
 keep:
   pending_escalation_request_signing_key: "dev-keep-signing-secret"  # must match keep's escalation_request_signing.key
@@ -14,11 +21,15 @@ templates:
 portcullis_gate_management_port: 7777
 
 #
-# Whether Gate instances can call the API to get token lists, etc
-# without a bearer token shared secret
+# Whether Gate instances can call the API without any credentials.
+# Set auth.allow_unauthenticated: true for sandbox/dev only.
+# In production, set auth.bearer_token or auth.mtls.client_ca (or both).
 #
 auth:
   allow_unauthenticated: true  # sandbox only
+  # bearer_token: "shared-secret"
+  # mtls:
+  #   client_ca: "/tls/ca.crt"  # CA that signed Gate client certs
 
 #
 # Token store: use Redis so that pending escalations and unclaimed tokens

@@ -180,6 +180,8 @@ func isContainedIn(target, base string) bool {
 		strings.HasPrefix(target, base)
 }
 
+/*
+@TODO : 2026-04-02 : remove
 // isFastPathTool reports whether the tool name is a known filesystem tool
 // that may be subject to fast-path evaluation. This is a defence-in-depth
 // check; the path extraction in extractPath is the primary gate.
@@ -195,6 +197,7 @@ func isFastPathTool(toolName string) bool {
 	}
 	return false
 }
+*/
 
 // decisionLabel returns a log-friendly string for a FastPathResult.
 func (r FastPathResult) String() string {

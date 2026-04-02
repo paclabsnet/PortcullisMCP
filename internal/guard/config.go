@@ -20,6 +20,7 @@ import (
 
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
+	"github.com/paclabsnet/PortcullisMCP/internal/shared/tlsutil"
 )
 
 // SecretAllowlist lists the config fields eligible for vault:// and other
@@ -54,8 +55,8 @@ func (c Config) Validate() error {
 	if c.EscalationTokenSigning.Key == "" {
 		return fmt.Errorf("escalation_token_signing.key is required")
 	}
-	if c.Auth.BearerToken == "" && !c.Auth.AllowUnauthenticated {
-		return fmt.Errorf("auth.bearer_token is required; to allow unauthenticated token API access (development only) set auth.allow_unauthenticated: true")
+	if c.Auth.BearerToken == "" && c.Auth.Mtls.ClientCA == "" && !c.Auth.AllowUnauthenticated {
+		return fmt.Errorf("auth.bearer_token or auth.mtls.client_ca is required; to allow unauthenticated token API access (development only) set auth.allow_unauthenticated: true")
 	}
 	switch c.TokenStore.Backend {
 	case "", "memory":
@@ -82,12 +83,21 @@ type Config struct {
 	Limits                       LimitsConfig     `yaml:"limits"`
 }
 
-// AuthConfig controls authentication for the token API endpoints.
-// /token/unclaimed/list and /token/deposit require a valid bearer token.
-// /token/claim does not require auth — the JTI is treated as a capability.
+// MtlsConfig holds the CA certificate used to verify Gate client certificates
+// on the API listener. When set, the API listener requests client certificates
+// and verifies them against this CA; the machineAuth middleware grants access
+// when a valid certificate is presented.
+type MtlsConfig struct {
+	ClientCA string `yaml:"client_ca"`
+}
+
+// AuthConfig controls authentication for the API listener endpoints.
+// Authentication is checked in order: mTLS peer cert, Bearer token,
+// allow_unauthenticated nag-ware, or 401.
 type AuthConfig struct {
-	BearerToken        string `yaml:"bearer_token"`
-	AllowUnauthenticated bool `yaml:"allow_unauthenticated"`
+	BearerToken          string     `yaml:"bearer_token"`
+	AllowUnauthenticated bool       `yaml:"allow_unauthenticated"`
+	Mtls                 MtlsConfig `yaml:"mtls"`
 }
 
 // LimitsConfig controls request body, field length, and in-memory map size limits for Guard.
@@ -186,14 +196,23 @@ type RedisConfig struct {
 	KeyPrefix string `yaml:"key_prefix"`
 }
 
+// ListenConfig controls the network addresses and TLS settings for Guard's two listeners.
+// UIAddress serves the human-facing approval UI (/approve).
+// APIAddress serves the machine-to-machine API (/token/*, /pending).
 type ListenConfig struct {
-	Address string `yaml:"address"`
+	UIAddress  string            `yaml:"ui_address"`
+	UITLS      tlsutil.TLSConfig `yaml:"ui_tls"`
+	APIAddress string            `yaml:"api_address"`
+	APITLS     tlsutil.TLSConfig `yaml:"api_tls"`
 }
 
 // Validate returns an error if the listen config contains invalid values.
 func (c ListenConfig) Validate() error {
-	if c.Address == "" {
-		return fmt.Errorf("listen.address is required")
+	if c.UIAddress == "" {
+		return fmt.Errorf("listen.ui_address is required")
+	}
+	if c.APIAddress == "" {
+		return fmt.Errorf("listen.api_address is required")
 	}
 	return nil
 }

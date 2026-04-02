@@ -92,13 +92,13 @@ func TestGate_Secrets_Vault_AllowlistedField_AttemptedNotPermittedError(t *testi
 func TestGate_Secrets_GuardBearerToken_Allowlisted(t *testing.T) {
 	t.Setenv("TEST_GATE_GUARD_TOKEN", "guard-bearer-value")
 	cfg := validBaseConfig()
-	cfg.Guard.BearerToken = "envvar://TEST_GATE_GUARD_TOKEN"
+	cfg.Guard.Auth.BearerToken = "envvar://TEST_GATE_GUARD_TOKEN"
 
 	if err := resolveGateConfig(&cfg); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Guard.BearerToken != "guard-bearer-value" {
-		t.Errorf("guard.bearer_token = %q, want %q", cfg.Guard.BearerToken, "guard-bearer-value")
+	if cfg.Guard.Auth.BearerToken != "guard-bearer-value" {
+		t.Errorf("guard.auth.bearer_token = %q, want %q", cfg.Guard.Auth.BearerToken, "guard-bearer-value")
 	}
 }
 
@@ -156,7 +156,7 @@ func TestGate_LoadConfig_WrapsResolverError(t *testing.T) {
 func TestGate_Secrets_Passthrough_Unchanged(t *testing.T) {
 	cfg := validBaseConfig()
 	cfg.Keep.Auth.Token = "plain-literal-token"
-	cfg.Guard.BearerToken = "another-literal"
+	cfg.Guard.Auth.BearerToken = "another-literal"
 
 	if err := resolveGateConfig(&cfg); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -164,7 +164,7 @@ func TestGate_Secrets_Passthrough_Unchanged(t *testing.T) {
 	if cfg.Keep.Auth.Token != "plain-literal-token" {
 		t.Errorf("plain token should be unchanged; got %q", cfg.Keep.Auth.Token)
 	}
-	if cfg.Guard.BearerToken != "another-literal" {
-		t.Errorf("plain guard token should be unchanged; got %q", cfg.Guard.BearerToken)
+	if cfg.Guard.Auth.BearerToken != "another-literal" {
+		t.Errorf("plain guard token should be unchanged; got %q", cfg.Guard.Auth.BearerToken)
 	}
 }

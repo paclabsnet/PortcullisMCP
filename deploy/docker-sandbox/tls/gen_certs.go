@@ -5,9 +5,10 @@
 //
 //	go run gen_certs.go
 //
-// This overwrites ca.crt, keep-server.crt, keep-server.key, gate-client.crt,
-// and gate-client.key in the same directory. Certificates are valid for 50
-// years so they do not need to be rotated during the lifetime of this project.
+// This overwrites ca.crt, keep-server.crt, keep-server.key, guard-server.crt,
+// guard-server.key, gate-client.crt, and gate-client.key in the same directory.
+// Certificates are valid for 50 years so they do not need to be rotated during
+// the lifetime of this project.
 package main
 
 import (
@@ -76,12 +77,36 @@ func main() {
 	writeKey("keep-server.key", serverKey)
 	log.Println("wrote keep-server.crt keep-server.key")
 
+	// ---- Guard server cert -------------------------------------------------
+	guardKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	must(err, "generate guard server key")
+
+	guardTmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(3),
+		Subject: pkix.Name{
+			Organization: []string{"Portcullis Demo"},
+			CommonName:   "portcullis-guard",
+		},
+		NotBefore:   notBefore,
+		NotAfter:    notAfter,
+		KeyUsage:    x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:    []string{"localhost", "portcullis-guard"},
+		IPAddresses: []net.IP{net.ParseIP("127.0.0.1")},
+	}
+	guardDER, err := x509.CreateCertificate(rand.Reader, guardTmpl, caCert, &guardKey.PublicKey, caKey)
+	must(err, "create guard server cert")
+
+	writeCert("guard-server.crt", guardDER)
+	writeKey("guard-server.key", guardKey)
+	log.Println("wrote guard-server.crt guard-server.key")
+
 	// ---- Gate client cert --------------------------------------------------
 	clientKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	must(err, "generate client key")
 
 	clientTmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(3),
+		SerialNumber: big.NewInt(4),
 		Subject: pkix.Name{
 			Organization: []string{"Portcullis Demo"},
 			CommonName:   "portcullis-gate",

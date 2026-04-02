@@ -17,20 +17,24 @@ package guard
 import (
 	"context"
 	"crypto/subtle"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
 	"log/slog"
+	"net"
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
+	"github.com/paclabsnet/PortcullisMCP/internal/shared/tlsutil"
 )
 
 // escalationRequestClaims are the JWT claims Keep embeds in approval URL tokens.
@@ -77,6 +81,11 @@ type Server struct {
 
 	// unclaimed holds approved escalation tokens not yet collected by Gate.
 	unclaimed UnclaimedStore
+
+	// uiReady and apiReady are set to true once each listener is successfully bound.
+	// handleReadyz returns 503 until both are true.
+	uiReady  atomic.Bool
+	apiReady atomic.Bool
 }
 
 // NewServer creates a Guard server from config.
@@ -90,9 +99,9 @@ func NewServer(ctx context.Context, cfg Config) (*Server, error) {
 	}
 
 	// Emit a startup warning when token APIs are explicitly left open for development.
-	if cfg.Auth.BearerToken == "" && cfg.Auth.AllowUnauthenticated {
+	if cfg.Auth.BearerToken == "" && cfg.Auth.Mtls.ClientCA == "" && cfg.Auth.AllowUnauthenticated {
 		slog.Warn("Guard token APIs are running without authentication — do not use in production",
-			"affected_endpoints", []string{"/token/unclaimed/list", "/token/deposit", "/pending"})
+			"affected_endpoints", []string{"/token/unclaimed/list", "/token/deposit", "/pending", "/token/claim"})
 	}
 
 	ttl := time.Duration(cfg.EscalationTokenSigning.TTL) * time.Second
@@ -164,40 +173,146 @@ func loadTemplates(dir string) (*template.Template, error) {
 	return tmpl, nil
 }
 
-// Run starts the HTTP server and blocks until ctx is cancelled.
+// Run starts the UI and API listeners and blocks until ctx is cancelled.
+// The UI listener serves the human-facing approval page (/approve).
+// The API listener serves all machine-to-machine endpoints (/token/*, /pending)
+// and enforces machine authentication via machineAuth middleware.
 func (s *Server) Run(ctx context.Context) error {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", s.handleHealthz)
-	mux.HandleFunc("GET /readyz", s.handleReadyz)
-	mux.HandleFunc("GET /approve", s.handleGet)
-	mux.HandleFunc("POST /approve", s.handlePost)
+	// UI mux: human-facing routes only.
+	uiMux := http.NewServeMux()
+	uiMux.HandleFunc("GET /healthz", s.handleHealthz)
+	uiMux.HandleFunc("GET /readyz", s.handleReadyz)
+	uiMux.HandleFunc("GET /approve", s.handleGet)
+	uiMux.HandleFunc("POST /approve", s.handlePost)
 
-	// Token API endpoints — used by Gate to claim approved tokens.
-	// /token/unclaimed/list, /token/deposit, and /pending require bearer auth.
-	// /token/claim does not require auth: the JTI acts as a capability token.
-	// An attacker would need to already know the random UUID JTI to attempt a
-	// claim, and the resulting token is still validated by the PDP.
-	mux.HandleFunc("GET /token/unclaimed/list", s.requireTokenAuth(s.handleTokenUnclaimedList))
-	mux.HandleFunc("POST /token/deposit", s.requireTokenAuth(s.handleTokenDeposit))
-	mux.HandleFunc("POST /token/claim", s.handleTokenClaim)
-	// Proactive mode: Gate registers the pending escalation JWT before presenting
-	// the approval URL to the user, so the URL can be shortened to ?jti=<uuid>.
-	mux.HandleFunc("POST /pending", s.requireTokenAuth(s.handlePending))
+	// API mux: machine-to-machine routes, all behind machineAuth.
+	apiMux := http.NewServeMux()
+	apiMux.HandleFunc("GET /healthz", s.handleHealthz)
+	apiMux.HandleFunc("GET /readyz", s.handleReadyz)
+	apiMux.HandleFunc("GET /token/unclaimed/list", s.machineAuth(s.handleTokenUnclaimedList))
+	apiMux.HandleFunc("POST /token/deposit", s.machineAuth(s.handleTokenDeposit))
+	apiMux.HandleFunc("POST /token/claim", s.machineAuth(s.handleTokenClaim))
+	apiMux.HandleFunc("POST /pending", s.machineAuth(s.handlePending))
 
-	// Start background cleanup of expired unclaimed tokens.
 	go s.cleanupWorker(ctx)
 
-	srv := &http.Server{
-		Addr:    s.cfg.Listen.Address,
-		Handler: mux,
+	uiSrv := &http.Server{Handler: uiMux}
+	apiSrv := &http.Server{Handler: apiMux}
+
+	// Build TLS configs from the listen config and auth.mtls settings.
+	if s.cfg.Listen.UITLS.Cert != "" {
+		tlsCfg, err := tlsutil.BuildServerTLS(s.cfg.Listen.UITLS)
+		if err != nil {
+			return fmt.Errorf("build UI TLS config: %w", err)
+		}
+		uiSrv.TLSConfig = tlsCfg
 	}
+	apiTLSCfg := s.cfg.Listen.APITLS
+	if s.cfg.Auth.Mtls.ClientCA != "" {
+		apiTLSCfg.ClientCA = s.cfg.Auth.Mtls.ClientCA
+	}
+	if apiTLSCfg.Cert != "" {
+		tlsCfg, err := tlsutil.BuildServerTLSOptionalClient(apiTLSCfg)
+		if err != nil {
+			return fmt.Errorf("build API TLS config: %w", err)
+		}
+		apiSrv.TLSConfig = tlsCfg
+	}
+
+	// Bind both listeners before accepting any connections.
+	uiLn, err := net.Listen("tcp", s.cfg.Listen.UIAddress)
+	if err != nil {
+		return fmt.Errorf("bind UI listener %s: %w", s.cfg.Listen.UIAddress, err)
+	}
+	apiLn, err := net.Listen("tcp", s.cfg.Listen.APIAddress)
+	if err != nil {
+		_ = uiLn.Close()
+		return fmt.Errorf("bind API listener %s: %w", s.cfg.Listen.APIAddress, err)
+	}
+
+	// Wrap with TLS if configured.
+	if uiSrv.TLSConfig != nil {
+		uiLn = tls.NewListener(uiLn, uiSrv.TLSConfig)
+	}
+	if apiSrv.TLSConfig != nil {
+		apiLn = tls.NewListener(apiLn, apiSrv.TLSConfig)
+	}
+
+	// Both listeners are bound — mark as ready for health probes.
+	s.uiReady.Store(true)
+	s.apiReady.Store(true)
+	slog.Info("portcullis-guard UI listener ready", "addr", uiLn.Addr())
+	slog.Info("portcullis-guard API listener ready", "addr", apiLn.Addr())
+
+	// Cancel-driven shutdown: when ctx is done, both servers shut down gracefully.
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	go func() {
-		<-ctx.Done()
-		_ = srv.Shutdown(context.Background())
+		<-runCtx.Done()
+		_ = uiSrv.Shutdown(context.Background())
+		_ = apiSrv.Shutdown(context.Background())
 	}()
 
-	slog.Info("portcullis-guard listening", "addr", s.cfg.Listen.Address)
-	return srv.ListenAndServe()
+	errCh := make(chan error, 2)
+	go func() {
+		defer cancel() // if this server exits unexpectedly, shut down the other
+		if err := uiSrv.Serve(uiLn); !errors.Is(err, http.ErrServerClosed) {
+			errCh <- fmt.Errorf("UI server: %w", err)
+			return
+		}
+		errCh <- nil
+	}()
+	go func() {
+		defer cancel()
+		if err := apiSrv.Serve(apiLn); !errors.Is(err, http.ErrServerClosed) {
+			errCh <- fmt.Errorf("API server: %w", err)
+			return
+		}
+		errCh <- nil
+	}()
+
+	var firstErr error
+	for i := 0; i < 2; i++ {
+		if err := <-errCh; err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+// machineAuth is middleware that enforces machine authentication on API endpoints.
+// Auth is checked in order:
+//  1. mTLS: if the TLS listener verified a client certificate, grant access.
+//  2. Bearer: if a valid Authorization: Bearer token is provided, grant access.
+//  3. Nag-ware: if allow_unauthenticated is true, log a warning and grant access.
+//  4. Fail: return 401 Unauthorized.
+func (s *Server) machineAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// 1. mTLS: listener has verified peer certs via VerifyClientCertIfGiven.
+		if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+			next(w, r)
+			return
+		}
+		// 2. Bearer token.
+		if s.cfg.Auth.BearerToken != "" {
+			auth := r.Header.Get("Authorization")
+			expected := "Bearer " + s.cfg.Auth.BearerToken
+			if subtle.ConstantTimeCompare([]byte(auth), []byte(expected)) == 1 {
+				next(w, r)
+				return
+			}
+		}
+		// 3. Dev / nag-ware mode.
+		if s.cfg.Auth.AllowUnauthenticated {
+			slog.Warn("guard: unauthenticated API access — do not use in production",
+				"remote", r.RemoteAddr, "path", r.URL.Path)
+			next(w, r)
+			return
+		}
+		// 4. Fail closed.
+		slog.Warn("guard: unauthorized API request", "remote", r.RemoteAddr, "path", r.URL.Path)
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	}
 }
 
 // verifyRequest parses and verifies a Keep-signed escalation request JWT.
@@ -531,7 +646,8 @@ func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 }
 
 // handleReadyz is the readiness probe. Returns 200 when Guard is fully
-// initialized: signing keys are loaded and templates are parsed.
+// initialized: signing keys are loaded, templates are parsed, and both
+// listeners are bound and serving.
 func (s *Server) handleReadyz(w http.ResponseWriter, _ *http.Request) {
 	if len(s.keepKey) == 0 || len(s.signingKey) == 0 || s.templates == nil {
 		w.Header().Set("Content-Type", "application/json")
@@ -542,32 +658,19 @@ func (s *Server) handleReadyz(w http.ResponseWriter, _ *http.Request) {
 		})
 		return
 	}
+	if !s.uiReady.Load() || !s.apiReady.Load() {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"status": "unavailable",
+			"reason": "listeners not yet ready",
+		})
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ready"})
 }
 
-// requireTokenAuth is middleware that requires a valid bearer token for the
-// /token/unclaimed/list, /token/deposit, and /pending endpoints.
-func (s *Server) requireTokenAuth(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if s.cfg.Auth.BearerToken == "" {
-			if s.cfg.Auth.AllowUnauthenticated {
-				next(w, r)
-				return
-			}
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		auth := r.Header.Get("Authorization")
-		expected := "Bearer " + s.cfg.Auth.BearerToken
-		if subtle.ConstantTimeCompare([]byte(auth), []byte(expected)) != 1 {
-			slog.Warn("unauthorized token API request", "remote", r.RemoteAddr, "path", r.URL.Path)
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		next(w, r)
-	}
-}
 
 // handleTokenUnclaimedList returns the list of unclaimed tokens for a given user.
 // GET /token/unclaimed/list?user_id={userID}

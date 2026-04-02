@@ -54,5 +54,14 @@ management_api:
 token_store: "~/.portcullis/tokens.json"
 
 guard:
-  escalation_approval_endpoint: "http://localhost:8444"
-  poll_interval_seconds: 10
+  escalation_approval_endpoint: "http://localhost:8444"  # UI: human approval page
+  token_api_endpoint: "http://localhost:8445"             # API: machine-to-machine calls
+  poll_interval: 10
+  # auth: omitted — no credentials (sandbox uses allow_unauthenticated: true on the server)
+  # To use bearer auth or mTLS in production, uncomment:
+  # auth:
+  #   bearer_token: "shared-secret"
+  #   mtls:
+  #     server_ca:   "/path/to/tls/ca.crt"
+  #     client_cert: "/path/to/tls/gate-client.crt"
+  #     client_key:  "/path/to/tls/gate-client.key"

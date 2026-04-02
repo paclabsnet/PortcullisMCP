@@ -61,9 +61,11 @@ services:
         VERSION: ${VERSION:-0.1.0-dev}
     container_name: portcullis-guard
     ports:
-      - "8444:8444"
+      - "8444:8444"  # UI listener (human approval page)
+      - "8445:8445"  # API listener (Gate machine calls)
     volumes:
       - ./guard-demo.yaml:/etc/portcullis/guard.yaml:ro
+      - ./tls:/tls:ro   # mTLS certs (enable in guard-demo.yaml to activate)
     command: ["-config", "/etc/portcullis/guard.yaml"]
     depends_on:
       - keep

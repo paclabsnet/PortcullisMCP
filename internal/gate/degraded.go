@@ -27,11 +27,11 @@ import (
 
 // pingHealth performs a GET to <endpoint>/healthz with a 3-second timeout.
 // Returns "available" if any HTTP response is received, "unavailable" otherwise.
-func pingHealth(ctx context.Context, endpoint string) string {
+func pingReadiness(ctx context.Context, endpoint string) string {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"/healthz", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"/readyz", nil)
 	if err != nil {
 		return "unavailable"
 	}
@@ -67,11 +67,11 @@ func (g *Gate) buildStatusReport(ctx context.Context) (msg string, isErr bool) {
 		}
 	}
 
-	keepStatus := pingHealth(ctx, g.cfg.Keep.Endpoint)
+	keepStatus := pingReadiness(ctx, g.cfg.Keep.Endpoint)
 
 	guardStatus := "not configured"
 	if g.cfg.Guard.EscalationApprovalEndpoint != "" {
-		guardStatus = pingHealth(ctx, g.cfg.Guard.EscalationApprovalEndpoint)
+		guardStatus = pingReadiness(ctx, g.cfg.Guard.EscalationApprovalEndpoint)
 	}
 
 	msg = fmt.Sprintf(

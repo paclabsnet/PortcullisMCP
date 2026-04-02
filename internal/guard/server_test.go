@@ -37,10 +37,11 @@ const (
 
 // makeServer creates a Guard server using the real templates directory.
 // Tests run from the package directory so "templates" resolves correctly.
+// The ready flags are pre-set so handleReadyz returns 200 in unit tests.
 func makeServer(t *testing.T) *Server {
 	t.Helper()
 	s, err := NewServer(context.Background(), Config{
-		Listen:                 ListenConfig{Address: ":0"},
+		Listen:                 ListenConfig{UIAddress: ":0", APIAddress: ":0"},
 		Keep:                   KeepConfig{PendingEscalationRequestSigningKey: testKeepKey},
 		EscalationTokenSigning: SigningConfig{Key: testSigningKey, TTL: 3600},
 		Templates:              TemplatesConfig{Dir: "templates"},
@@ -49,6 +50,8 @@ func makeServer(t *testing.T) *Server {
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
+	s.uiReady.Store(true)
+	s.apiReady.Store(true)
 	return s
 }
 
@@ -137,7 +140,7 @@ func TestNewServer_DefaultTTL(t *testing.T) {
 	writeTempTemplates(t, dir)
 
 	s, err := NewServer(context.Background(), Config{
-		Listen:                 ListenConfig{Address: ":0"},
+		Listen:                 ListenConfig{UIAddress: ":0", APIAddress: ":0"},
 		Keep:                   KeepConfig{PendingEscalationRequestSigningKey: testKeepKey},
 		EscalationTokenSigning: SigningConfig{Key: testSigningKey, TTL: 0},
 		Templates:              TemplatesConfig{Dir: dir},
@@ -156,7 +159,7 @@ func TestNewServer_CustomTTL(t *testing.T) {
 	writeTempTemplates(t, dir)
 
 	s, err := NewServer(context.Background(), Config{
-		Listen:                 ListenConfig{Address: ":0"},
+		Listen:                 ListenConfig{UIAddress: ":0", APIAddress: ":0"},
 		Keep:                   KeepConfig{PendingEscalationRequestSigningKey: testKeepKey},
 		EscalationTokenSigning: SigningConfig{Key: testSigningKey, TTL: 7200},
 		Templates:              TemplatesConfig{Dir: dir},
@@ -360,7 +363,7 @@ func TestIssueEscalationToken_TTL(t *testing.T) {
 	dir := t.TempDir()
 	writeTempTemplates(t, dir)
 	s, _ := NewServer(context.Background(), Config{
-		Listen:                 ListenConfig{Address: ":0"},
+		Listen:                 ListenConfig{UIAddress: ":0", APIAddress: ":0"},
 		Keep:                   KeepConfig{PendingEscalationRequestSigningKey: testKeepKey},
 		EscalationTokenSigning: SigningConfig{Key: testSigningKey, TTL: 7200},
 		Templates:              TemplatesConfig{Dir: dir},
@@ -575,7 +578,7 @@ func TestHandlePost_GatePortDefault(t *testing.T) {
 	dir := t.TempDir()
 	writeTempTemplates(t, dir)
 	s, _ := NewServer(context.Background(), Config{
-		Listen:                       ListenConfig{Address: ":0"},
+		Listen:                       ListenConfig{UIAddress: ":0", APIAddress: ":0"},
 		Keep:                         KeepConfig{PendingEscalationRequestSigningKey: testKeepKey},
 		EscalationTokenSigning:       SigningConfig{Key: testSigningKey, TTL: 60},
 		Templates:                    TemplatesConfig{Dir: dir},
@@ -607,7 +610,7 @@ func TestHandlePost_GatePortCustom(t *testing.T) {
 	dir := t.TempDir()
 	writeTempTemplates(t, dir)
 	s, _ := NewServer(context.Background(), Config{
-		Listen:                       ListenConfig{Address: ":0"},
+		Listen:                       ListenConfig{UIAddress: ":0", APIAddress: ":0"},
 		Keep:                         KeepConfig{PendingEscalationRequestSigningKey: testKeepKey},
 		EscalationTokenSigning:       SigningConfig{Key: testSigningKey, TTL: 60},
 		Templates:                    TemplatesConfig{Dir: dir},
@@ -801,7 +804,7 @@ func TestHandlePending_RequiresBearerAuth(t *testing.T) {
 	dir := t.TempDir()
 	writeTempTemplates(t, dir)
 	s, _ := NewServer(context.Background(), Config{
-		Listen:                 ListenConfig{Address: ":0"},
+		Listen:                 ListenConfig{UIAddress: ":0", APIAddress: ":0"},
 		Keep:                   KeepConfig{PendingEscalationRequestSigningKey: testKeepKey},
 		EscalationTokenSigning: SigningConfig{Key: testSigningKey, TTL: 3600},
 		Templates:              TemplatesConfig{Dir: dir},
@@ -816,7 +819,7 @@ func TestHandlePending_RequiresBearerAuth(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/pending", strings.NewReader(string(body)))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	s.requireTokenAuth(s.handlePending)(w, req)
+	s.machineAuth(s.handlePending)(w, req)
 
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401 without auth", w.Code)
@@ -827,7 +830,7 @@ func TestHandlePending_RequiresBearerAuth(t *testing.T) {
 	req2.Header.Set("Content-Type", "application/json")
 	req2.Header.Set("Authorization", "Bearer secret-token")
 	w2 := httptest.NewRecorder()
-	s.requireTokenAuth(s.handlePending)(w2, req2)
+	s.machineAuth(s.handlePending)(w2, req2)
 
 	if w2.Code != http.StatusCreated {
 		t.Errorf("status = %d, want 201 with correct auth", w2.Code)

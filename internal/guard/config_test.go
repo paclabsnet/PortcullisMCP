@@ -21,7 +21,10 @@ import (
 
 func validGuardConfig() Config {
 	return Config{
-		Listen:                 ListenConfig{Address: ":8444"},
+		Listen: ListenConfig{
+			UIAddress:  ":8444",
+			APIAddress: ":8445",
+		},
 		Keep:                   KeepConfig{PendingEscalationRequestSigningKey: "keep-key-32bytes!!!!!!!!!!!!!!!"},
 		EscalationTokenSigning: SigningConfig{Key: "signing-key-32bytes!!!!!!!!!!!!!"},
 		Auth:                   AuthConfig{BearerToken: "test-token"},
@@ -34,11 +37,19 @@ func TestGuardConfig_Validate_Valid(t *testing.T) {
 	}
 }
 
-func TestGuardConfig_Validate_ListenAddressRequired(t *testing.T) {
+func TestGuardConfig_Validate_UIAddressRequired(t *testing.T) {
 	cfg := validGuardConfig()
-	cfg.Listen.Address = ""
+	cfg.Listen.UIAddress = ""
 	if err := cfg.Validate(); err == nil {
-		t.Error("expected error when listen.address is empty")
+		t.Error("expected error when listen.ui_address is empty")
+	}
+}
+
+func TestGuardConfig_Validate_APIAddressRequired(t *testing.T) {
+	cfg := validGuardConfig()
+	cfg.Listen.APIAddress = ""
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error when listen.api_address is empty")
 	}
 }
 
@@ -60,10 +71,10 @@ func TestGuardConfig_Validate_SigningKeyRequired(t *testing.T) {
 
 func TestGuardConfig_Validate_NoAuthToken_NoFlag_Error(t *testing.T) {
 	cfg := validGuardConfig()
-	cfg.Auth = AuthConfig{} // no bearer token, no flag
+	cfg.Auth = AuthConfig{} // no bearer token, no mtls, no flag
 	err := cfg.Validate()
 	if err == nil {
-		t.Fatal("expected error when bearer_token is empty and allow_unauthenticated is false")
+		t.Fatal("expected error when bearer_token and mtls.client_ca are empty and allow_unauthenticated is false")
 	}
 	if !strings.Contains(err.Error(), "bearer_token") {
 		t.Errorf("error should mention bearer_token; got: %v", err)
@@ -75,5 +86,13 @@ func TestGuardConfig_Validate_NoAuthToken_WithFlag_OK(t *testing.T) {
 	cfg.Auth = AuthConfig{AllowUnauthenticated: true}
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("expected no error when allow_unauthenticated is true; got: %v", err)
+	}
+}
+
+func TestGuardConfig_Validate_MtlsClientCA_NoBearer_OK(t *testing.T) {
+	cfg := validGuardConfig()
+	cfg.Auth = AuthConfig{Mtls: MtlsConfig{ClientCA: "/tls/ca.crt"}}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("expected no error when mtls.client_ca is set without bearer_token; got: %v", err)
 	}
 }

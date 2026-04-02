@@ -40,17 +40,23 @@ func makeLimitedServer(t *testing.T) *Server {
 
 // newServerWithLimits creates a server with explicit limits. Limits default to
 // values that match NewServer defaults when AllowUnauthenticated is set.
+// The ready flags are pre-set so handleReadyz returns 200 in unit tests.
 func newServerWithLimits(t *testing.T, auth AuthConfig) (*Server, error) {
 	t.Helper()
 	dir := t.TempDir()
 	writeTempTemplates(t, dir)
-	return NewServer(context.Background(), Config{
-		Listen:                 ListenConfig{Address: ":0"},
+	s, err := NewServer(context.Background(), Config{
+		Listen:                 ListenConfig{UIAddress: ":0", APIAddress: ":0"},
 		Keep:                   KeepConfig{PendingEscalationRequestSigningKey: testKeepKey},
 		EscalationTokenSigning: SigningConfig{Key: testSigningKey, TTL: 3600},
 		Templates:              TemplatesConfig{Dir: dir},
 		Auth:                   auth,
 	})
+	if err == nil && s != nil {
+		s.uiReady.Store(true)
+		s.apiReady.Store(true)
+	}
+	return s, err
 }
 
 // makeServerDirect creates a Server struct directly without using NewServer,
@@ -87,7 +93,7 @@ func TestGuard_Auth_NoTokenNoFlag_Returns401(t *testing.T) {
 	body, _ := json.Marshal(map[string]string{"pending_jwt": "x", "user_id": "u"})
 	req := httptest.NewRequest(http.MethodPost, "/token/deposit", bytes.NewReader(body))
 	w := httptest.NewRecorder()
-	s.requireTokenAuth(s.handleTokenDeposit)(w, req)
+	s.machineAuth(s.handleTokenDeposit)(w, req)
 
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401 when no bearer token and flag is false", w.Code)
@@ -114,7 +120,7 @@ func TestGuard_Auth_NoTokenWithFlag_Allowed(t *testing.T) {
 	})
 	req := httptest.NewRequest(http.MethodPost, "/token/deposit", bytes.NewReader(body))
 	w := httptest.NewRecorder()
-	s.requireTokenAuth(s.handleTokenDeposit)(w, req)
+	s.machineAuth(s.handleTokenDeposit)(w, req)
 
 	// Should not be 401 — the flag allows unauthenticated access.
 	if w.Code == http.StatusUnauthorized {
@@ -133,7 +139,7 @@ func TestGuard_Auth_WrongToken_Returns401(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/token/deposit", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer wrong-token")
 	w := httptest.NewRecorder()
-	s.requireTokenAuth(s.handleTokenDeposit)(w, req)
+	s.machineAuth(s.handleTokenDeposit)(w, req)
 
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401 for wrong bearer token", w.Code)
