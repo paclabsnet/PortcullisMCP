@@ -23,23 +23,62 @@ import (
 	"syscall"
 
 	"github.com/paclabsnet/PortcullisMCP/internal/gate"
+	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
 	"github.com/paclabsnet/PortcullisMCP/internal/telemetry"
 	"github.com/paclabsnet/PortcullisMCP/internal/version"
 )
 
+// logSetupFn is the logging-setup function. Overridable in tests.
+var logSetupFn = cfgloader.SetupLogging
+
+type cliArgs struct {
+	config   string
+	logLevel string
+}
+
+// parseFlags parses argv using a fresh FlagSet so it can be called in tests
+// without touching flag.CommandLine or calling os.Exit.
+func parseFlags(argv []string) (cliArgs, error) {
+	fs := flag.NewFlagSet("portcullis-gate", flag.ContinueOnError)
+	var a cliArgs
+	fs.StringVar(&a.config, "config", "~/.portcullis/gate.yaml", "path to gate config file")
+	fs.StringVar(&a.logLevel, "log-level", "", "override logging level (debug, info, warn, error)")
+	return a, fs.Parse(argv)
+}
+
+// applyLogging calls logSetupFn with the loaded config and parsed CLI args.
+// It is the only call site that forwards args.logLevel into the logging setup,
+// which makes the forwarding path directly testable.
+func applyLogging(cfg gate.Config, args cliArgs) error {
+	return logSetupFn(cfg.Operations.Logging, cfg.Mode, args.logLevel)
+}
+
 func main() {
-	cfgPath := flag.String("config", "~/.portcullis/gate.yaml", "path to gate config file")
-	flag.Parse()
+	cfgloader.BootstrapLogger()
+
+	args, err := parseFlags(os.Args[1:])
+	if err == flag.ErrHelp {
+		os.Exit(0)
+	}
+	if err != nil {
+		os.Exit(2) // flag package already wrote the error to stderr
+	}
 
 	slog.Info("portcullis-gate starting", "version", version.Version)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	cfg, err := gate.LoadConfig(ctx, *cfgPath)
+	cfg, err := gate.LoadConfig(ctx, args.config)
 	if err != nil {
 		slog.Error("load config", "error", err)
 		runDegraded(ctx, "configuration error: "+err.Error())
+		return
+	}
+
+	if err := applyLogging(cfg, args); err != nil {
+		slog.Error("invalid log level", "error", err)
+		runDegraded(ctx, "invalid log level: "+err.Error())
 		return
 	}
 

@@ -15,6 +15,10 @@
 package config
 
 import (
+	"fmt"
+	"io"
+	"log/slog"
+	"os"
 	"strings"
 
 	"github.com/paclabsnet/PortcullisMCP/internal/shared/tlsutil"
@@ -114,6 +118,88 @@ type StorageConfig struct {
 type LoggingConfig struct {
 	Level  string `yaml:"level"`
 	Format string `yaml:"format"`
+}
+
+// BootstrapLogger installs a minimal INFO-level text logger on stderr. Call
+// this as the first line of main() so that messages emitted before the config
+// file is loaded and SetupLogging is called go somewhere useful.
+func BootstrapLogger() {
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	})))
+}
+
+// resolveLogLevel determines the effective log level string and whether a
+// production-mode override notice must be emitted.
+// Precedence (highest to lowest): levelOverride > cfg.Level > "info".
+// In production mode, levelOverride is suppressed and emitNotice is set true.
+func resolveLogLevel(cfg LoggingConfig, mode, levelOverride string) (level string, emitNotice bool) {
+	if mode == ModeProduction && levelOverride != "" {
+		emitNotice = true
+		levelOverride = ""
+	}
+	switch {
+	case levelOverride != "":
+		level = levelOverride
+	case cfg.Level != "":
+		level = cfg.Level
+	default:
+		level = "info"
+	}
+	return level, emitNotice
+}
+
+// parseLevel converts a level string to slog.Level. Matching is case-insensitive.
+// An empty string resolves to INFO. Returns an error for unrecognised values.
+func parseLevel(s string) (slog.Level, error) {
+	switch strings.ToLower(s) {
+	case "debug":
+		return slog.LevelDebug, nil
+	case "info", "":
+		return slog.LevelInfo, nil
+	case "warn", "warning":
+		return slog.LevelWarn, nil
+	case "error":
+		return slog.LevelError, nil
+	default:
+		return slog.LevelInfo, fmt.Errorf("invalid log level %q: must be debug, info, warn, or error", s)
+	}
+}
+
+// SetupLogging configures the global slog logger. Call this after LoadConfig
+// and before component initialisation (including telemetry). In production mode,
+// levelOverride is ignored and a notice is logged explaining why. The effective
+// level is included in that notice.
+// Returns an error if any level string is invalid so the caller can exit cleanly.
+func SetupLogging(cfg LoggingConfig, mode, levelOverride string) error {
+	return setupLogging(cfg, mode, levelOverride, os.Stderr)
+}
+
+// setupLogging is the testable core of SetupLogging; w receives all log output.
+func setupLogging(cfg LoggingConfig, mode, levelOverride string, w io.Writer) error {
+	effectiveLevel, emitNotice := resolveLogLevel(cfg, mode, levelOverride)
+
+	level, err := parseLevel(effectiveLevel)
+	if err != nil {
+		return err
+	}
+
+	opts := &slog.HandlerOptions{Level: level}
+	var handler slog.Handler
+	if strings.ToLower(cfg.Format) == "json" {
+		handler = slog.NewJSONHandler(w, opts)
+	} else {
+		handler = slog.NewTextHandler(w, opts)
+	}
+	slog.SetDefault(slog.New(handler))
+
+	if emitNotice {
+		slog.Warn("NOTICE: --log-level flag ignored in production mode",
+			"reason", "command-line log level overrides are not permitted in production mode; update the configuration file to change log level",
+			"effective_level", effectiveLevel)
+	}
+
+	return nil
 }
 
 // DecisionLogConfig defines how policy decisions are recorded and dispatched.

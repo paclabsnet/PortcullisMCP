@@ -125,7 +125,7 @@ automatically deleted
 
 
 ### Task: Add performance monitoring to Portcullis-Keep
-Use the OpenTelemetry wrapper around HTTP calls to get detailed measurements
+Use the OpenTelemetry wrapper around HTTP calls to get detailed performance measurements
 - priority: medium
 
 
@@ -167,7 +167,10 @@ more informative and less consistent.
 
 
 ### Task:  Add a logging-level command-line flag to Keep, Gate and Guard
-So we can turn on debugging and info level logs as appropriate
+So we can turn on debugging and info level logs as appropriate.  Also add log-level to
+the YAML configuration.  Command line flag overrides YAML.
+- comment: if the mode is production, and the command-line mode is set, emit a warning message that the command line setting (X) has overridden the setting in
+the config (Y)
 - priority: medium-low
 
 
@@ -176,9 +179,18 @@ So we can turn on debugging and info level logs as appropriate
 
 ### Task: Add a security assessment at startup
 log the full resolved security posture at startup regardless of mode — every security-relevant property, its value, and whether it meets production standards. Vault does this well. That log becomes an artifact that feeds directly into audit evidence without requiring auditors to understand your config schema.
+- priority: medium-low
 
-priority: medium-low
 
+
+### Task: Migrate all the security complaint supression (in dev mode)
+The default behavior in dev mode is to generate a warning message when there
+is a security violation.  Then we've added a few 'supression' flags to keep
+the system from generating a particular warning.  All of these flags should
+be moved to be "under" the `mode: dev` flag, so the developers who don't need
+to see the flags can turn them on and off easily.  
+- priority: low
+- comment: this is mostly a feature of convenience
 
 
 
