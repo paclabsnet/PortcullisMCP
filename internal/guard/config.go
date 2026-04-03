@@ -27,17 +27,19 @@ import (
 // restricted secret URI schemes. envvar:// and filevar:// may be used on any field.
 var SecretAllowlist = []string{
 	"server.endpoints.token_api.auth.credentials.bearer_token",
+	"responsibility.issuance.approval_request_verification_key",
 	"responsibility.issuance.signing_key",
 	"operations.storage.config.password",
 }
 
 // LoadConfig reads, parses, resolves secrets in, and validates a guard config file.
-func LoadConfig(ctx context.Context, path string) (Config, error) {
-	cfg, err := cfgloader.Load[*Config](ctx, path, SecretAllowlist)
+// It returns the config and a PostureReport for startup security attestation.
+func LoadConfig(ctx context.Context, path string) (Config, cfgloader.PostureReport, error) {
+	cfg, report, err := cfgloader.Load[*Config](ctx, path, SecretAllowlist)
 	if err != nil {
-		return Config{}, err
+		return Config{}, report, err
 	}
-	return *cfg, nil
+	return *cfg, report, nil
 }
 
 // Config holds the full portcullis-guard configuration.
@@ -82,8 +84,8 @@ type PeersConfig struct {
 	Keep cfgloader.PeerAuth `yaml:"keep"`
 }
 
-// Validate returns an error if the configuration contains invalid values.
-func (c *Config) Validate() error {
+// Validate returns a PostureReport and an error if the configuration contains invalid values.
+func (c *Config) Validate(sources cfgloader.SourceMap) (cfgloader.PostureReport, error) {
 	if c.Mode == "" {
 		c.Mode = cfgloader.ModeProduction
 	}
@@ -91,37 +93,50 @@ func (c *Config) Validate() error {
 	if c.Mode == cfgloader.ModeProduction {
 		for name, ep := range c.Server.Endpoints {
 			if ep.Auth.Type == "none" {
-				return fmt.Errorf("auth.type \"none\" for endpoint %q is not allowed in production mode", name)
+				return cfgloader.PostureReport{}, fmt.Errorf("auth.type \"none\" for endpoint %q is not allowed in production mode", name)
 			}
 			if !cfgloader.IsLoopback(ep.Listen) && !ep.IsSecure() {
-				return fmt.Errorf("TLS is required for non-loopback endpoint %q in production mode", name)
+				return cfgloader.PostureReport{}, fmt.Errorf("TLS is required for non-loopback endpoint %q in production mode", name)
 			}
 		}
 	}
 
 	if _, ok := c.Server.Endpoints["approval_ui"]; !ok {
-		return fmt.Errorf("server.endpoints.approval_ui is required")
+		return cfgloader.PostureReport{}, fmt.Errorf("server.endpoints.approval_ui is required")
 	}
 	if _, ok := c.Server.Endpoints["token_api"]; !ok {
-		return fmt.Errorf("server.endpoints.token_api is required")
+		return cfgloader.PostureReport{}, fmt.Errorf("server.endpoints.token_api is required")
 	}
 
 	if c.Responsibility.Issuance.ApprovalRequestVerificationKey == "" {
-		return fmt.Errorf("responsibility.issuance.approval_request_verification_key is required")
+		return cfgloader.PostureReport{}, fmt.Errorf("responsibility.issuance.approval_request_verification_key is required")
 	}
 	if c.Responsibility.Issuance.SigningKey == "" {
-		return fmt.Errorf("responsibility.issuance.signing_key is required")
+		return cfgloader.PostureReport{}, fmt.Errorf("responsibility.issuance.signing_key is required")
 	}
 
-	// Decode Limits
 	if c.Operations.Limits != nil {
 		if err := mapstructure.Decode(c.Operations.Limits, &c.Limits); err != nil {
-			return fmt.Errorf("decode operations.limits: %w", err)
+			return cfgloader.PostureReport{}, fmt.Errorf("decode operations.limits: %w", err)
 		}
 	}
 	c.Limits.ApplyDefaults()
 
-	return nil
+	report := cfgloader.BuildPostureReport(c, sources, SecretAllowlist)
+
+	if c.Mode != cfgloader.ModeProduction {
+		report.SetStatus("mode", "WARN", "Use production mode for deployments")
+	}
+	for name, ep := range c.Server.Endpoints {
+		if ep.Auth.Type == "none" {
+			report.SetStatus("server.endpoints."+name+".auth.type", "WARN", "Configure authentication for this endpoint in production")
+		}
+		if !ep.IsSecure() {
+			report.SetStatus("server.endpoints."+name+".tls.cert", "WARN", "Enable TLS for this endpoint in production")
+		}
+	}
+
+	return report, nil
 }
 
 // LimitsConfig controls request body, field length, and in-memory map size limits for Guard.

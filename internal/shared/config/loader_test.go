@@ -30,11 +30,11 @@ type testConfig struct {
 	BadFlag string `yaml:"bad_flag,omitempty"`
 }
 
-func (c testConfig) Validate() error {
+func (c testConfig) Validate(_ cfgloader.SourceMap) (cfgloader.PostureReport, error) {
 	if c.Name == "" {
-		return &validationError{"name is required"}
+		return cfgloader.PostureReport{}, &validationError{"name is required"}
 	}
-	return nil
+	return cfgloader.PostureReport{}, nil
 }
 
 type validationError struct{ msg string }
@@ -59,7 +59,7 @@ func writeTemp(t *testing.T, content string) string {
 
 func TestLoad_ValidConfig(t *testing.T) {
 	path := writeTemp(t, "name: test-service\n")
-	cfg, err := cfgloader.Load[testConfig](context.Background(), path, nil)
+	cfg, _, err := cfgloader.Load[testConfig](context.Background(), path, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestLoad_ValidConfig(t *testing.T) {
 
 func TestLoad_ValidationError(t *testing.T) {
 	path := writeTemp(t, "secret: some-value\n") // name is missing
-	_, err := cfgloader.Load[testConfig](context.Background(), path, nil)
+	_, _, err := cfgloader.Load[testConfig](context.Background(), path, nil)
 	if err == nil {
 		t.Fatal("expected validation error, got nil")
 	}
@@ -81,7 +81,7 @@ func TestLoad_ValidationError(t *testing.T) {
 
 func TestLoad_UnknownFieldRejected(t *testing.T) {
 	path := writeTemp(t, "name: svc\nunknown_field: oops\n")
-	_, err := cfgloader.Load[testConfig](context.Background(), path, nil)
+	_, _, err := cfgloader.Load[testConfig](context.Background(), path, nil)
 	if err == nil {
 		t.Fatal("expected error for unknown YAML field, got nil")
 	}
@@ -90,7 +90,7 @@ func TestLoad_UnknownFieldRejected(t *testing.T) {
 func TestLoad_EnvVarSecret(t *testing.T) {
 	t.Setenv("TEST_LOADER_SECRET", "resolved-value")
 	path := writeTemp(t, "name: svc\nsecret: envvar://TEST_LOADER_SECRET\n")
-	cfg, err := cfgloader.Load[testConfig](context.Background(), path, nil)
+	cfg, _, err := cfgloader.Load[testConfig](context.Background(), path, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestLoad_EnvVarSecret(t *testing.T) {
 }
 
 func TestLoad_FileNotFound(t *testing.T) {
-	_, err := cfgloader.Load[testConfig](context.Background(), "/definitely/does/not/exist.yaml", nil)
+	_, _, err := cfgloader.Load[testConfig](context.Background(), "/definitely/does/not/exist.yaml", nil)
 	if err == nil {
 		t.Fatal("expected error for missing file, got nil")
 	}
@@ -109,7 +109,7 @@ func TestLoad_FileNotFound(t *testing.T) {
 func TestLoad_ResolverError_Wrapped(t *testing.T) {
 	// vault:// on a non-allowlisted field should produce a "resolve secrets:" wrapped error.
 	path := writeTemp(t, "name: svc\nsecret: vault://mymount/mypath#key\n")
-	_, err := cfgloader.Load[testConfig](context.Background(), path, nil)
+	_, _, err := cfgloader.Load[testConfig](context.Background(), path, nil)
 	if err == nil {
 		t.Fatal("expected error for vault:// on non-allowlisted field, got nil")
 	}
@@ -136,7 +136,7 @@ func TestLoad_TildeExpansion(t *testing.T) {
 
 	// Convert absolute path to tilde-relative.
 	rel := "~" + strings.TrimPrefix(filePath, home)
-	cfg, err := cfgloader.Load[testConfig](context.Background(), rel, nil)
+	cfg, _, err := cfgloader.Load[testConfig](context.Background(), rel, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

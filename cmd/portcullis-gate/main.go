@@ -69,7 +69,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	cfg, err := gate.LoadConfig(ctx, args.config)
+	cfg, report, err := gate.LoadConfig(ctx, args.config)
 	if err != nil {
 		slog.Error("load config", "error", err)
 		runDegraded(ctx, "configuration error: "+err.Error())
@@ -81,6 +81,8 @@ func main() {
 		runDegraded(ctx, "invalid log level: "+err.Error())
 		return
 	}
+
+	report.Log("portcullis-gate")
 
 	shutdownTelemetry, err := telemetry.Setup(ctx, cfg.Operations.Telemetry)
 	if err != nil {

@@ -32,6 +32,11 @@ const (
 	ModeDev = "dev"
 )
 
+// SourceMap maps resolved config field paths to their secret resolution source.
+// Fields absent from the map were not secret URIs and have source "static".
+// Produced by secrets.ResolveConfig and passed into Config.Validate().
+type SourceMap map[string]string
+
 // IsLoopback returns true if the address (host or host:port) is local-only.
 func IsLoopback(addr string) bool {
 	host := addr

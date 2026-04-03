@@ -44,7 +44,6 @@ type MCPRouter interface {
 // Server is the portcullis-keep HTTP server.
 type Server struct {
 	cfg         Config
-	configPath  string
 	pdp         PolicyDecisionPoint
 	router      MCPRouter
 	workflow    WorkflowHandler
@@ -54,7 +53,7 @@ type Server struct {
 }
 
 // NewServer creates a Keep server.
-func NewServer(ctx context.Context, cfg Config, configPath string) (*Server, error) {
+func NewServer(ctx context.Context, cfg Config) (*Server, error) {
 	var pdp PolicyDecisionPoint
 	switch cfg.Responsibility.Policy.Strategy {
 	case "noop":
@@ -83,8 +82,7 @@ func NewServer(ctx context.Context, cfg Config, configPath string) (*Server, err
 	}
 
 	return &Server{
-		cfg:         cfg,
-		configPath:  configPath,
+		cfg: cfg,
 		pdp:         pdp,
 		router:      router,
 		workflow:    wf,
@@ -113,7 +111,6 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("POST /authorize", s.handleAuthorize)
 	mux.HandleFunc("POST /tools", s.handleListTools)
 	mux.HandleFunc("POST /log", s.handleLog)
-	mux.HandleFunc("POST /admin/reload", s.adminAuthMiddleware(s.handleReload))
 
 	var handler http.Handler = mux
 	if mainEndpoint.Auth.Credentials.BearerToken != "" {
@@ -479,36 +476,6 @@ func isValidDecision(d string) bool {
 	}
 }
 
-// adminAuthMiddleware guards admin endpoints.
-func (s *Server) adminAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if s.cfg.Responsibility.Admin.Token == "" {
-			writeError(w, http.StatusForbidden, "forbidden")
-			return
-		}
-		token := r.Header.Get("X-Api-Key")
-		if subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.Responsibility.Admin.Token)) != 1 {
-			writeError(w, http.StatusUnauthorized, "invalid or missing X-Api-Key")
-			return
-		}
-		next(w, r)
-	}
-}
-
-// handleReload re-reads keep.yaml.
-func (s *Server) handleReload(w http.ResponseWriter, r *http.Request) {
-	cfg, err := LoadConfig(r.Context(), s.configPath)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to read configuration")
-		return
-	}
-	if err := s.router.Reload(r.Context(), cfg.Responsibility.Backends); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to reload backends")
-		return
-	}
-	s.cfg.Responsibility.Backends = cfg.Responsibility.Backends
-	writeJSON(w, http.StatusOK, map[string]string{"status": "reloaded"})
-}
 
 func (s *Server) hasWorkflow() bool {
 	_, isNoop := s.workflow.(*noopWorkflow)

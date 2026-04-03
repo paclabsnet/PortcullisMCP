@@ -35,7 +35,7 @@ func validBaseConfig() Config {
 func TestConfig_Validate_KeepEndpointRequired(t *testing.T) {
 	cfg := validBaseConfig()
 	cfg.Peers.Keep.Endpoint = ""
-	if err := cfg.Validate(); err == nil {
+	if _, err := cfg.Validate(nil); err == nil {
 		t.Error("expected error when peers.keep.endpoint is empty")
 	}
 }
@@ -55,7 +55,7 @@ func TestConfig_Validate_IdentityStrategy(t *testing.T) {
 		t.Run(tc.strategy, func(t *testing.T) {
 			cfg := validBaseConfig()
 			cfg.Identity.Strategy = tc.strategy
-			err := cfg.Validate()
+			_, err := cfg.Validate(nil)
 			if (err != nil) != tc.wantErr {
 				t.Errorf("Validate() error = %v, wantErr %v", err, tc.wantErr)
 			}
@@ -67,7 +67,7 @@ func TestConfig_Validate_OIDCFileTokenFileRequired(t *testing.T) {
 	cfg := validBaseConfig()
 	cfg.Identity.Strategy = "oidc-file"
 	cfg.Identity.Config = map[string]any{"token_file": "/path/to/token"}
-	if err := cfg.Validate(); err != nil {
+	if _, err := cfg.Validate(nil); err != nil {
 		t.Errorf("expected no error with token_file set; got: %v", err)
 	}
 }
@@ -79,7 +79,7 @@ func TestConfig_Validate_OIDCLoginRequired(t *testing.T) {
 		"issuer_url": "https://idp.example.com",
 		"client_id":  "client-id",
 	}
-	if err := cfg.Validate(); err != nil {
+	if _, err := cfg.Validate(nil); err != nil {
 		t.Errorf("expected no error with issuer_url and client_id set; got: %v", err)
 	}
 }
@@ -104,7 +104,7 @@ func TestConfig_Validate_ApprovalManagementStrategy(t *testing.T) {
 			if tc.strategy == "proactive" {
 				cfg.Peers.Guard.Endpoints.ApprovalUI = "http://guard.example.com"
 			}
-			err := cfg.Validate()
+			_, err := cfg.Validate(nil)
 			if (err != nil) != tc.wantErr {
 				t.Errorf("Validate() error = %v, wantErr %v", err, tc.wantErr)
 			}
@@ -116,7 +116,7 @@ func TestConfig_Validate_ProactiveRequiresGuardEndpoint(t *testing.T) {
 	cfg := validBaseConfig()
 	cfg.Responsibility.Escalation.Strategy = "proactive"
 	cfg.Peers.Guard.Endpoints.ApprovalUI = ""
-	if err := cfg.Validate(); err == nil {
+	if _, err := cfg.Validate(nil); err == nil {
 		t.Error("expected error when proactive strategy set but peers.guard.endpoints.approval_ui is empty")
 	}
 }
@@ -190,7 +190,7 @@ func TestConfig_Validate_ProductionMode(t *testing.T) {
 			cfg := validBaseConfig()
 			cfg.Mode = tc.mode
 			tc.prepare(&cfg)
-			err := cfg.Validate()
+			_, err := cfg.Validate(nil)
 			if (err != nil) != tc.wantErr {
 				t.Errorf("Validate() error = %v, wantErr %v", err, tc.wantErr)
 			}

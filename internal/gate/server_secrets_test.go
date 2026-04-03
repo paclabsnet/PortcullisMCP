@@ -27,7 +27,8 @@ import (
 // resolveGateConfig is a test helper that runs ResolveConfig over a gate.Config
 // using the package-level allowlist, matching what gate.LoadConfig does at startup.
 func resolveGateConfig(cfg *Config) error {
-	return secrets.ResolveConfig(context.Background(), cfg, SecretAllowlist)
+	_, err := secrets.ResolveConfig(context.Background(), cfg, SecretAllowlist)
+	return err
 }
 
 func TestGate_Secrets_EnvVar_AllowlistedField(t *testing.T) {
@@ -153,7 +154,7 @@ func TestGate_LoadConfig_WrapsResolverError(t *testing.T) {
 	}
 	f.Close()
 
-	_, err = LoadConfig(context.Background(), f.Name())
+	_, _, err = LoadConfig(context.Background(), f.Name())
 	if err == nil {
 		t.Fatal("expected error from LoadConfig with unresolvable vault URI, got nil")
 	}

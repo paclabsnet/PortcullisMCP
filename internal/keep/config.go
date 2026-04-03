@@ -32,16 +32,17 @@ var SecretAllowlist = []string{
 	"server.endpoints.main.tls.client_ca",
 	"server.endpoints.main.auth.credentials.bearer_token",
 	"responsibility.issuance.signing_key",
+	"responsibility.admin.token",
 }
 
 // LoadConfig reads, parses, resolves secrets in, and validates a keep config file.
-func LoadConfig(ctx context.Context, path string) (Config, error) {
-	// Use *Config so Validate() can populate derived fields.
-	cfg, err := cfgloader.Load[*Config](ctx, path, SecretAllowlist)
+// It returns the config and a PostureReport for startup security attestation.
+func LoadConfig(ctx context.Context, path string) (Config, cfgloader.PostureReport, error) {
+	cfg, report, err := cfgloader.Load[*Config](ctx, path, SecretAllowlist)
 	if err != nil {
-		return Config{}, err
+		return Config{}, report, err
 	}
-	return *cfg, nil
+	return *cfg, report, nil
 }
 
 // Config holds the full portcullis-keep configuration loaded from keep.yaml.
@@ -64,7 +65,6 @@ type ResponsibilityConfig struct {
 	Backends []BackendConfig  `yaml:"mcp_backends"`
 	Issuance IssuanceConfig   `yaml:"issuance"`
 	Workflow EscalationConfig `yaml:"workflow"`
-	Admin    AdminConfig      `yaml:"admin"`
 }
 
 // IssuanceConfig holds signing logic for escalation requests.
@@ -78,71 +78,82 @@ type PeersConfig struct {
 	Guard cfgloader.GuardPeerConfig `yaml:"guard"`
 }
 
-// Validate returns an error if the configuration contains invalid values.
-func (c *Config) Validate() error {
+// Validate returns a PostureReport and an error if the configuration contains invalid values.
+func (c *Config) Validate(sources cfgloader.SourceMap) (cfgloader.PostureReport, error) {
 	if c.Mode == "" {
 		c.Mode = cfgloader.ModeProduction
 	}
 
 	if c.Mode == cfgloader.ModeProduction {
 		if c.Identity.Strategy == "passthrough" {
-			return fmt.Errorf("identity.strategy \"passthrough\" is not allowed in production mode")
+			return cfgloader.PostureReport{}, fmt.Errorf("identity.strategy \"passthrough\" is not allowed in production mode")
 		}
 		if c.Responsibility.Policy.Strategy == "noop" {
-			return fmt.Errorf("policy.strategy \"noop\" is not allowed in production mode")
+			return cfgloader.PostureReport{}, fmt.Errorf("policy.strategy \"noop\" is not allowed in production mode")
 		}
 		if val, ok := c.Identity.Config["allow_insecure_jwks_url"]; ok {
 			if b, ok := val.(bool); ok && b {
-				return fmt.Errorf("identity.config.allow_insecure_jwks_url is not allowed in production mode")
+				return cfgloader.PostureReport{}, fmt.Errorf("identity.config.allow_insecure_jwks_url is not allowed in production mode")
 			}
 		}
-
 		for name, ep := range c.Server.Endpoints {
 			if ep.Auth.Type == "none" {
-				return fmt.Errorf("auth.type \"none\" for endpoint %q is not allowed in production mode", name)
+				return cfgloader.PostureReport{}, fmt.Errorf("auth.type \"none\" for endpoint %q is not allowed in production mode", name)
 			}
 			if !cfgloader.IsLoopback(ep.Listen) && !ep.IsSecure() {
-				return fmt.Errorf("TLS is required for non-loopback endpoint %q in production mode", name)
+				return cfgloader.PostureReport{}, fmt.Errorf("TLS is required for non-loopback endpoint %q in production mode", name)
 			}
 		}
 	}
 
-	// 1. Validate Main Endpoint
 	if _, ok := c.Server.Endpoints["main"]; !ok {
-		return fmt.Errorf("server.endpoints.main is required")
+		return cfgloader.PostureReport{}, fmt.Errorf("server.endpoints.main is required")
 	}
 
-	// 2. Decode Identity
 	if err := c.Identity.Validate(); err != nil {
-		return err
+		return cfgloader.PostureReport{}, err
 	}
-
-	// 3. Decode Policy
 	if err := c.Responsibility.Policy.Validate(); err != nil {
-		return err
+		return cfgloader.PostureReport{}, err
 	}
-
-	// 4. Decode Workflow (Escalation)
 	if err := c.Responsibility.Workflow.Validate(); err != nil {
-		return err
+		return cfgloader.PostureReport{}, err
 	}
 
-	// 5. Decode Operations.Limits
 	if c.Operations.Limits != nil {
 		if err := mapstructure.Decode(c.Operations.Limits, &c.Limits); err != nil {
-			return fmt.Errorf("decode operations.limits: %w", err)
+			return cfgloader.PostureReport{}, fmt.Errorf("decode operations.limits: %w", err)
 		}
 	}
 	c.Limits.ApplyDefaults()
 
-	// 6. Map DecisionLog
 	if logCfg, ok := c.Operations.Storage.Config["decision_log"]; ok {
 		if err := mapstructure.Decode(logCfg, &c.DecisionLog); err != nil {
-			return fmt.Errorf("decode operations.storage.config.decision_log: %w", err)
+			return cfgloader.PostureReport{}, fmt.Errorf("decode operations.storage.config.decision_log: %w", err)
 		}
 	}
 
-	return nil
+	report := cfgloader.BuildPostureReport(c, sources, SecretAllowlist)
+
+	if c.Mode != cfgloader.ModeProduction {
+		report.SetStatus("mode", "WARN", "Use production mode for deployments")
+	}
+	if c.Identity.Strategy == "passthrough" {
+		report.SetStatus("identity.strategy", "WARN", "Passthrough identity is not suitable for production; use oidc-verify")
+	}
+	if c.Responsibility.Policy.Strategy == "noop" {
+		report.SetStatus("responsibility.policy.strategy", "WARN", "Noop policy allows all requests; configure OPA for production")
+	}
+	for name, ep := range c.Server.Endpoints {
+		if ep.Auth.Type == "none" {
+			report.SetStatus("server.endpoints."+name+".auth.type", "WARN", "Configure authentication for this endpoint in production")
+		}
+		if !ep.IsSecure() {
+			report.SetStatus("server.endpoints."+name+".tls.cert", "WARN", "Enable TLS for this endpoint in production")
+		}
+	}
+
+	return report, nil
 }
 
 type IdentityConfig struct {
@@ -267,10 +278,6 @@ type BackendConfig struct {
 	URL                   string            `yaml:"url"` // for http
 	AllowPrivateAddresses bool              `yaml:"allow_private_addresses"`
 	ToolMap               map[string]string `yaml:"tool_map"`
-}
-
-type AdminConfig struct {
-	Token string `yaml:"token"`
 }
 
 type ServiceNowConfig struct {

@@ -22,7 +22,7 @@
 //
 // Usage:
 //
-//	cfg, err := config.Load[keep.Config](ctx, path, keep.SecretAllowlist)
+//	cfg, report, err := config.Load[keep.Config](ctx, path, keep.SecretAllowlist)
 package config
 
 import (
@@ -37,46 +37,49 @@ import (
 )
 
 // Loadable is the constraint for config types supported by Load.
-// Any struct with a Validate() method satisfies this interface.
+// Any struct with a Validate(SourceMap) method satisfies this interface.
 type Loadable interface {
-	Validate() error
+	Validate(sources SourceMap) (PostureReport, error)
 }
 
 // Load reads a YAML config file from path, strict-unmarshals it into T,
 // resolves all secret URIs against allowlist, then validates the result.
+// It returns the validated config and a PostureReport for startup logging.
 //
 // The allowlist controls which config fields may use vault:// and other
 // restricted secret URI schemes; see internal/shared/secrets for details.
 // ~ at the start of path is expanded to the current user's home directory.
-func Load[T Loadable](ctx context.Context, path string, allowlist []string) (T, error) {
+func Load[T Loadable](ctx context.Context, path string, allowlist []string) (T, PostureReport, error) {
 	var zero T
 
 	expanded, err := expandHome(path)
 	if err != nil {
-		return zero, fmt.Errorf("expand config path: %w", err)
+		return zero, PostureReport{}, fmt.Errorf("expand config path: %w", err)
 	}
 
 	data, err := os.ReadFile(expanded)
 	if err != nil {
-		return zero, err
+		return zero, PostureReport{}, err
 	}
 
 	var cfg T
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 	if err := dec.Decode(&cfg); err != nil {
-		return zero, err
+		return zero, PostureReport{}, err
 	}
 
-	if err := secrets.ResolveConfig(ctx, &cfg, allowlist); err != nil {
-		return zero, fmt.Errorf("resolve secrets: %w", err)
+	rawSources, err := secrets.ResolveConfig(ctx, &cfg, allowlist)
+	if err != nil {
+		return zero, PostureReport{}, fmt.Errorf("resolve secrets: %w", err)
 	}
 
-	if err := cfg.Validate(); err != nil {
-		return zero, err
+	report, err := cfg.Validate(SourceMap(rawSources))
+	if err != nil {
+		return zero, report, err
 	}
 
-	return cfg, nil
+	return cfg, report, nil
 }
 
 // expandHome replaces a leading ~ with the current user's home directory.

@@ -1,4 +1,4 @@
-# Phase 3 / Future
+# Phase 3
 
 Some of these tasks were deferred from Phase 2 because they are complicated and involve access to potentially expensive
 cloud resources
@@ -42,11 +42,6 @@ keep the scope of the first release a little more manageable
 
 
 
-### Task: Allow Portcullis-Keep to add extra data to MCP server calls
-if the MCP server requires a secret or some sort of certificate in order to accept MCP requests, Keep can be
-modified
-- priority: medium-low
-- comment: this could be really tricky to implement properly, need a lot of examples first
 
 ### Task: Routing model for Portcullis-Keep and Workflows
 when the PDP generates a 'workflow' response, the important information should be
@@ -129,11 +124,6 @@ Use the OpenTelemetry wrapper around HTTP calls to get detailed performance meas
 - priority: medium
 
 
-### Task: Reload Secrets at Keep and Guard
-Full config reload via admin API — extend Keep's `POST /admin/reload` and add an
-equivalent Guard endpoint to re-resolve all secrets (including `vault://` URIs)
-without a process restart, enabling zero-downtime secret rotation
-- priority: medium-low
 
 
 
@@ -146,10 +136,6 @@ potentially customized to each rule, which could then be echoed to the user.
 - priority: low
 
 
-### Task: Allow a managed-device signal (device cert, workload identity, or attestation) in addition to user token
-Keep should be configured to validate the additional proof-of-identity information.
-Policy should require both: trusted user identity and trusted device posture for privileged tool usage.
-- priority: low
 
 
 
@@ -166,18 +152,11 @@ more informative and less consistent.
 
 
 
-### Task:  Add a logging-level command-line flag to Keep, Gate and Guard
-So we can turn on debugging and info level logs as appropriate.  Also add log-level to
-the YAML configuration.  Command line flag overrides YAML.
-- comment: if the mode is production, and the command-line mode is set, emit a warning message that the command line setting (X) has overridden the setting in
-the config (Y)
-- priority: medium-low
 
 
 
 
-
-### Task: Add a security assessment at startup
+### Task: Add a security posture assessment at startup
 log the full resolved security posture at startup regardless of mode — every security-relevant property, its value, and whether it meets production standards. Vault does this well. That log becomes an artifact that feeds directly into audit evidence without requiring auditors to understand your config schema.
 - priority: medium-low
 
@@ -196,6 +175,42 @@ to see the flags can turn them on and off easily.
 
 
 -----------------------------------------------------
+# Phase 4
+
+### Task: Allow Portcullis-Keep to add extra data to MCP server calls
+if the MCP server requires a secret or some sort of certificate in order to accept MCP requests, Keep can be
+modified
+- priority: medium-low
+- comment: this could be really tricky to implement properly, need a lot of examples first
+
+
+
+-----------------------------------------------------
+
+# Phase 99
+
+These tasks seem unnecessarily complex and not worth doing
+
+### Task: Reload Secrets at Keep and Guard
+Full config reload via admin API — extend Keep's `POST /admin/reload` and add an
+equivalent Guard endpoint to re-resolve all secrets (including `vault://` URIs)
+without a process restart, enabling zero-downtime secret rotation
+- priority: medium-low
+
+
+
+
+-----------------------------------------------------
+# Completed Tasks
+
+
+### Task:  Add a logging-level command-line flag to Keep, Gate and Guard (DONE)
+So we can turn on debugging and info level logs as appropriate.  Also add log-level to
+the YAML configuration.  Command line flag overrides YAML.
+- comment: if the mode is production, and the command-line mode is set, emit a warning message that the command line setting (X) has overridden the setting in
+the config (Y)
+- priority: medium-low
+
 
 
 
@@ -266,6 +281,12 @@ agains Portcullis-Keep
 - priority: low
 
 
+### Task: Allow a managed-device signal (device cert, workload identity, or attestation) in addition to user token (DONE)
+Keep should be configured to validate the additional proof-of-identity information.
+Policy should require both: trusted user identity and trusted device posture for privileged tool usage.
+- priority: low
+
+
 
 ### Task: Add mTLS support for Gate to Guard (DONE)
 So every path is protected in the same way that the Gate to Keep path is protected. Ideally we re-use the certs we created for Gate, create new certs for Guard and set up
@@ -299,4 +320,9 @@ works end-to-end; the in-memory tests cover edge cases quickly without file depe
 - priority: medium
 - comment: the Gate-side mTLS client setup already has basic validation tests in `forwarder_test.go`;
   the Keep-side server setup and end-to-end handshake are the gaps
+
+
+
+
+------------------------------------------------
 

@@ -238,7 +238,7 @@ func TestConfigValidate(t *testing.T) {
 			t.Parallel()
 			cfg := validBaseConfig()
 			tc.mutate(&cfg)
-			err := cfg.Validate()
+			_, err := cfg.Validate(nil)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("expected error containing %q, got nil", tc.errContains)

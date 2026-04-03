@@ -35,16 +35,13 @@ var SecretAllowlist = []string{
 }
 
 // LoadConfig reads, parses, resolves secrets in, and validates a gate config file.
-// It uses strict unmarshaling to ensure that unknown or deprecated fields
-// cause a configuration error at startup. ~ in path is expanded to the
-// user home directory.
-func LoadConfig(ctx context.Context, path string) (Config, error) {
-	// Use *Config so Validate() can populate derived fields in IdentityConfig.
-	cfg, err := cfgloader.Load[*Config](ctx, path, SecretAllowlist)
+// It returns the config and a PostureReport for startup security attestation.
+func LoadConfig(ctx context.Context, path string) (Config, cfgloader.PostureReport, error) {
+	cfg, report, err := cfgloader.Load[*Config](ctx, path, SecretAllowlist)
 	if err != nil {
-		return Config{}, err
+		return Config{}, report, err
 	}
-	return *cfg, nil
+	return *cfg, report, nil
 }
 
 // Config holds the full portcullis-gate configuration loaded from gate.yaml.
@@ -60,48 +57,63 @@ type Config struct {
 	Agent AgentConfig `yaml:"agent"`
 }
 
-// Validate returns an error if the configuration contains invalid values.
-func (c *Config) Validate() error {
+// Validate returns a PostureReport and an error if the configuration contains invalid values.
+func (c *Config) Validate(sources cfgloader.SourceMap) (cfgloader.PostureReport, error) {
 	if c.Mode == "" {
 		c.Mode = cfgloader.ModeProduction
 	}
 
 	if c.Mode == cfgloader.ModeProduction {
 		if c.Identity.Strategy == "os" {
-			return fmt.Errorf("identity.strategy \"os\" is not allowed in production mode")
+			return cfgloader.PostureReport{}, fmt.Errorf("identity.strategy \"os\" is not allowed in production mode")
 		}
 		for name, ep := range c.Server.Endpoints {
 			if ep.Auth.Type == "none" {
-				return fmt.Errorf("auth.type \"none\" for endpoint %q is not allowed in production mode", name)
+				return cfgloader.PostureReport{}, fmt.Errorf("auth.type \"none\" for endpoint %q is not allowed in production mode", name)
 			}
 			if !cfgloader.IsLoopback(ep.Listen) && !ep.IsSecure() {
-				return fmt.Errorf("TLS is required for non-loopback endpoint %q in production mode", name)
+				return cfgloader.PostureReport{}, fmt.Errorf("TLS is required for non-loopback endpoint %q in production mode", name)
 			}
 		}
 	}
 
 	if c.Peers.Keep.Endpoint == "" {
-		return fmt.Errorf("peers.keep.endpoint is required")
+		return cfgloader.PostureReport{}, fmt.Errorf("peers.keep.endpoint is required")
 	}
 	if err := c.Identity.Validate(); err != nil {
-		return err
+		return cfgloader.PostureReport{}, err
 	}
 	if err := c.Peers.Guard.Validate(); err != nil {
-		return err
+		return cfgloader.PostureReport{}, err
 	}
 
-	// Validate escalation strategy
 	switch c.Responsibility.Escalation.Strategy {
 	case "", "user-driven", "proactive":
-		// valid
 	default:
-		return fmt.Errorf("invalid responsibility.escalation.strategy %q: must be \"user-driven\" or \"proactive\"", c.Responsibility.Escalation.Strategy)
+		return cfgloader.PostureReport{}, fmt.Errorf("invalid responsibility.escalation.strategy %q: must be \"user-driven\" or \"proactive\"", c.Responsibility.Escalation.Strategy)
 	}
 	if c.Responsibility.Escalation.Strategy == "proactive" && c.Peers.Guard.Endpoints.ApprovalUI == "" {
-		return fmt.Errorf("peers.guard.endpoints.approval_ui is required when escalation strategy is \"proactive\"")
+		return cfgloader.PostureReport{}, fmt.Errorf("peers.guard.endpoints.approval_ui is required when escalation strategy is \"proactive\"")
 	}
 
-	return nil
+	report := cfgloader.BuildPostureReport(c, sources, SecretAllowlist)
+
+	if c.Mode != cfgloader.ModeProduction {
+		report.SetStatus("mode", "WARN", "Use production mode for deployments")
+	}
+	if c.Identity.Strategy == "os" {
+		report.SetStatus("identity.strategy", "WARN", "OS identity is not suitable for production; use oidc-file or oidc-login")
+	}
+	for name, ep := range c.Server.Endpoints {
+		if ep.Auth.Type == "none" {
+			report.SetStatus("server.endpoints."+name+".auth.type", "WARN", "Configure authentication for this endpoint in production")
+		}
+		if !ep.IsSecure() {
+			report.SetStatus("server.endpoints."+name+".tls.cert", "WARN", "Enable TLS for this endpoint in production")
+		}
+	}
+
+	return report, nil
 }
 
 type PeersConfig struct {

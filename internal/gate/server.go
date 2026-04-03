@@ -131,7 +131,7 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 		}
 	}
 
-	if err := cfg.Validate(); err != nil {
+	if _, err := cfg.Validate(nil); err != nil {
 		return nil, err
 	}
 

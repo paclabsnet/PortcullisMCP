@@ -179,7 +179,7 @@ func TestNewServer_UnknownPDPType(t *testing.T) {
 			Policy: PolicyConfig{Strategy: "unknown-pdp"},
 		},
 	}
-	_, err := NewServer(context.Background(), cfg, "")
+	_, err := NewServer(context.Background(), cfg)
 	if err == nil {
 		t.Fatal("expected error for unknown PDP type, got nil")
 	}

@@ -47,6 +47,8 @@ var restrictedSchemes = map[string]bool{
 
 // ResolveConfig walks cfg (must be a non-nil pointer to a struct) using
 // reflection and resolves every secret URI found in string fields.
+// It returns a SourceMap recording which fields were resolved from a secret
+// URI scheme (fields with no URI scheme are absent from the map, implying "static").
 //
 // envvar:// and filevar:// are resolved on any field.
 // vault:// (and future cloud schemes) are only resolved when the field's
@@ -54,25 +56,26 @@ var restrictedSchemes = map[string]bool{
 //
 // Field paths are built from yaml struct tag names (e.g. "listen.auth.bearer_token").
 // If a field has no yaml tag the Go field name is used.
-func ResolveConfig(ctx context.Context, cfg any, allowlist []string) error {
+func ResolveConfig(ctx context.Context, cfg any, allowlist []string) (map[string]string, error) {
 	allowset := make(map[string]bool, len(allowlist))
 	for _, f := range allowlist {
 		allowset[f] = true
 	}
 	v := reflect.ValueOf(cfg)
 	if v.Kind() != reflect.Ptr || v.IsNil() {
-		return fmt.Errorf("secrets: ResolveConfig requires a non-nil pointer")
+		return nil, fmt.Errorf("secrets: ResolveConfig requires a non-nil pointer")
 	}
-	return walkValue(ctx, v.Elem(), "", allowset)
+	sources := make(map[string]string)
+	return sources, walkValue(ctx, v.Elem(), "", allowset, sources)
 }
 
-func walkValue(ctx context.Context, v reflect.Value, path string, allowset map[string]bool) error {
+func walkValue(ctx context.Context, v reflect.Value, path string, allowset map[string]bool, sources map[string]string) error {
 	switch v.Kind() {
 	case reflect.Ptr:
 		if v.IsNil() {
 			return nil
 		}
-		return walkValue(ctx, v.Elem(), path, allowset)
+		return walkValue(ctx, v.Elem(), path, allowset, sources)
 
 	case reflect.Struct:
 		t := v.Type()
@@ -86,7 +89,7 @@ func walkValue(ctx context.Context, v reflect.Value, path string, allowset map[s
 			if path != "" {
 				childPath = path + "." + name
 			}
-			if err := walkValue(ctx, v.Field(i), childPath, allowset); err != nil {
+			if err := walkValue(ctx, v.Field(i), childPath, allowset, sources); err != nil {
 				return err
 			}
 		}
@@ -95,9 +98,12 @@ func walkValue(ctx context.Context, v reflect.Value, path string, allowset map[s
 		if !v.CanSet() {
 			return nil
 		}
-		resolved, err := resolve(ctx, v.String(), path, allowset)
+		src, resolved, err := resolveWithSource(ctx, v.String(), path, allowset)
 		if err != nil {
 			return err
+		}
+		if src != "static" {
+			sources[path] = src
 		}
 		v.SetString(resolved)
 
@@ -110,16 +116,18 @@ func walkValue(ctx context.Context, v reflect.Value, path string, allowset map[s
 			}
 			switch elem.Kind() {
 			case reflect.String:
-				resolved, err := resolve(ctx, elem.String(), childPath, allowset)
+				src, resolved, err := resolveWithSource(ctx, elem.String(), childPath, allowset)
 				if err != nil {
 					return err
 				}
+				if src != "static" {
+					sources[childPath] = src
+				}
 				v.SetMapIndex(key, reflect.ValueOf(resolved))
 			case reflect.Struct, reflect.Ptr:
-				// Map values are not addressable; copy into addressable memory.
 				cp := reflect.New(elem.Type()).Elem()
 				cp.Set(elem)
-				if err := walkValue(ctx, cp, childPath, allowset); err != nil {
+				if err := walkValue(ctx, cp, childPath, allowset, sources); err != nil {
 					return err
 				}
 				v.SetMapIndex(key, cp)
@@ -129,7 +137,7 @@ func walkValue(ctx context.Context, v reflect.Value, path string, allowset map[s
 	case reflect.Slice:
 		for i := 0; i < v.Len(); i++ {
 			childPath := fmt.Sprintf("%s[%d]", path, i)
-			if err := walkValue(ctx, v.Index(i), childPath, allowset); err != nil {
+			if err := walkValue(ctx, v.Index(i), childPath, allowset, sources); err != nil {
 				return err
 			}
 		}
@@ -137,29 +145,32 @@ func walkValue(ctx context.Context, v reflect.Value, path string, allowset map[s
 	return nil
 }
 
-// resolve resolves a single string value. path is used only for error messages.
-func resolve(ctx context.Context, raw, path string, allowset map[string]bool) (string, error) {
+// resolveWithSource resolves a single string value and returns the source label.
+// source is one of "static", "env", "file", or the scheme name for restricted schemes.
+func resolveWithSource(ctx context.Context, raw, path string, allowset map[string]bool) (source, resolved string, err error) {
 	if !strings.Contains(raw, "://") {
-		return raw, nil
+		return "static", raw, nil
 	}
-	u, err := url.Parse(raw)
-	if err != nil {
-		return "", fmt.Errorf("secrets: invalid URI at field %q: %w", path, err)
+	u, parseErr := url.Parse(raw)
+	if parseErr != nil {
+		return "", "", fmt.Errorf("secrets: invalid URI at field %q: %w", path, parseErr)
 	}
 	switch {
 	case u.Scheme == "envvar":
-		return resolveEnvVar(u)
+		val, resolveErr := resolveEnvVar(u)
+		return "env", val, resolveErr
 	case u.Scheme == "filevar":
-		return resolveFileVar(u)
+		val, resolveErr := resolveFileVar(u)
+		return "file", val, resolveErr
 	case restrictedSchemes[u.Scheme]:
 		if !allowset[path] {
-			return "", fmt.Errorf("secrets: %s:// URI is not permitted at field %q — only allowed on: %v",
+			return "", "", fmt.Errorf("secrets: %s:// URI is not permitted at field %q — only allowed on: %v",
 				u.Scheme, path, allowlistKeys(allowset))
 		}
-		return resolveRestricted(ctx, u)
+		val, resolveErr := resolveRestricted(ctx, u)
+		return u.Scheme, val, resolveErr
 	default:
-		// Not a secret URI scheme (e.g. http://, https://). Leave the value unchanged.
-		return raw, nil
+		return "static", raw, nil
 	}
 }
 
@@ -198,8 +209,6 @@ func yamlFieldName(f reflect.StructField) string {
 
 // resolveEnvVar handles envvar://VAR_NAME (two or three slashes).
 func resolveEnvVar(u *url.URL) (string, error) {
-	// envvar://VAR_NAME  ->  host = "VAR_NAME", path = ""
-	// envvar:///VAR_NAME ->  host = "",          path = "/VAR_NAME"
 	name := u.Host
 	if name == "" {
 		name = strings.TrimPrefix(u.Path, "/")
@@ -215,24 +224,16 @@ func resolveEnvVar(u *url.URL) (string, error) {
 }
 
 // resolveFileVar handles filevar:///path/to/file or filevar://path/to/file.
-// Both forms resolve to the same absolute path — operators should not need to
-// count slashes. url.Parse splits the first path segment into Host when only
-// two slashes are used; we reassemble the full absolute path in both cases.
 func resolveFileVar(u *url.URL) (string, error) {
 	var path string
 	if u.Host != "" {
-		// filevar://etc/portcullis/key — host="etc", path="/portcullis/key"
-		// Reassemble as the absolute path /etc/portcullis/key.
 		path = "/" + u.Host + u.Path
 	} else {
-		// filevar:///etc/portcullis/key — host="", path="/etc/portcullis/key"
 		path = u.Path
 	}
 	if path == "" {
 		return "", fmt.Errorf("secrets: filevar URI missing path")
 	}
-	// On Windows, url.Parse leaves a leading "/" before the drive letter
-	// (e.g. "/C:/foo/bar"). Strip it so os.ReadFile gets a valid Windows path.
 	if len(path) >= 3 && path[0] == '/' && path[2] == ':' {
 		path = path[1:]
 	}
@@ -244,8 +245,6 @@ func resolveFileVar(u *url.URL) (string, error) {
 }
 
 // resolveVault handles vault://[mount]/[path]#[key].
-// The Vault KV v2 data/ prefix is automatically inserted by client.KVv2.
-// If no fragment (key) is specified, the field "value" is used.
 func resolveVault(ctx context.Context, u *url.URL) (string, error) {
 	mount := u.Host
 	if mount == "" {

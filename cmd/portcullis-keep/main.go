@@ -69,7 +69,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	cfg, err := keep.LoadConfig(ctx, args.config)
+	cfg, report, err := keep.LoadConfig(ctx, args.config)
 	if err != nil {
 		slog.Error("load config", "error", err)
 		os.Exit(1)
@@ -80,6 +80,8 @@ func main() {
 		os.Exit(1)
 	}
 
+	report.Log("portcullis-keep")
+
 	shutdownTelemetry, err := telemetry.Setup(ctx, cfg.Operations.Telemetry)
 	if err != nil {
 		slog.Error("init telemetry", "error", err)
@@ -87,7 +89,7 @@ func main() {
 	}
 	defer func() { _ = shutdownTelemetry(context.Background()) }()
 
-	srv, err := keep.NewServer(ctx, cfg, args.config)
+	srv, err := keep.NewServer(ctx, cfg)
 	if err != nil {
 		slog.Error("init keep", "error", err)
 		os.Exit(1)

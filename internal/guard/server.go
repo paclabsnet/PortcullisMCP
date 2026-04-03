@@ -58,7 +58,7 @@ type Server struct {
 
 // NewServer creates a Guard server.
 func NewServer(ctx context.Context, cfg Config) (*Server, error) {
-	if err := cfg.Validate(); err != nil {
+	if _, err := cfg.Validate(nil); err != nil {
 		return nil, err
 	}
 

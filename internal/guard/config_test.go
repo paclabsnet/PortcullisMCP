@@ -115,7 +115,7 @@ func TestConfig_Validate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := validBaseConfig()
 			tt.mutate(&cfg)
-			err := cfg.Validate()
+			_, err := cfg.Validate(nil)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
 				return

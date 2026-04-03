@@ -68,7 +68,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	cfg, err := guard.LoadConfig(ctx, args.config)
+	cfg, report, err := guard.LoadConfig(ctx, args.config)
 	if err != nil {
 		slog.Error("load config", "error", err)
 		os.Exit(1)
@@ -78,6 +78,8 @@ func main() {
 		slog.Error("invalid log level", "error", err)
 		os.Exit(1)
 	}
+
+	report.Log("portcullis-guard")
 
 	srv, err := guard.NewServer(ctx, cfg)
 	if err != nil {

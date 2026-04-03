@@ -47,7 +47,7 @@ func wrapResolve(ctx context.Context, raw string, allowlist []string) (string, e
 	s := &struct {
 		Val string `yaml:"val"`
 	}{Val: raw}
-	if err := ResolveConfig(ctx, s, allowlist); err != nil {
+	if _, err := ResolveConfig(ctx, s, allowlist); err != nil {
 		return "", err
 	}
 	return s.Val, nil
@@ -517,7 +517,7 @@ func TestResolveConfig_NestedStruct(t *testing.T) {
 	cfg := &Outer{
 		Inner: Inner{Field: "envvar://NESTED_TEST_VAR"},
 	}
-	if err := ResolveConfig(context.Background(), cfg, nil); err != nil {
+	if _, err := ResolveConfig(context.Background(), cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if cfg.Inner.Field != "nested-resolved" {
@@ -540,7 +540,7 @@ func TestResolveConfig_MapStringString(t *testing.T) {
 			"PLAIN":  "plain-value",
 		},
 	}
-	if err := ResolveConfig(context.Background(), cfg, nil); err != nil {
+	if _, err := ResolveConfig(context.Background(), cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if cfg.Env["MY_KEY"] != "map-resolved-value" {
@@ -568,7 +568,7 @@ func TestResolveConfig_MapStringStruct(t *testing.T) {
 			"mybackend": {Token: "envvar://STRUCT_MAP_VAR"},
 		},
 	}
-	if err := ResolveConfig(context.Background(), cfg, nil); err != nil {
+	if _, err := ResolveConfig(context.Background(), cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if cfg.Backends["mybackend"].Token != "struct-map-resolved" {
@@ -582,7 +582,7 @@ func TestResolveConfig_NonPointer(t *testing.T) {
 	type Cfg struct {
 		Val string `yaml:"val"`
 	}
-	err := ResolveConfig(context.Background(), Cfg{Val: "test"}, nil)
+	_, err := ResolveConfig(context.Background(), Cfg{Val: "test"}, nil)
 	if err == nil {
 		t.Fatal("expected error for non-pointer input, got nil")
 	}
@@ -633,7 +633,7 @@ func TestResolveConfig_SliceElements(t *testing.T) {
 	cfg := &Cfg{
 		Items: []string{"envvar://SLICE_VAR_0", "envvar://SLICE_VAR_1"},
 	}
-	if err := ResolveConfig(context.Background(), cfg, nil); err != nil {
+	if _, err := ResolveConfig(context.Background(), cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if cfg.Items[0] != "slice-value-0" {
