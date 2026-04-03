@@ -46,7 +46,7 @@ expose both fields to policies.
 - priority: medium
 
 
-### Task: Allow multiple sandbox directories in Gate config
+### Task: Allow multiple sandbox directories in Gate config (DONE)
 
 Currently `sandbox.directory` accepts a single path. Users with multiple unrelated
 working trees (e.g. `~/projects/client-a`, `~/projects/client-b`, `/var/data/exports`)
@@ -178,7 +178,7 @@ without a process restart, enabling zero-downtime secret rotation
 
 
 
-### Task: mTLS test coverage for Gate-Keep transport
+### Task: mTLS test coverage for Gate-Keep transport (DONE)
 
 Add test coverage for the mTLS authentication path between Gate and Keep.
 
@@ -242,7 +242,7 @@ So we can turn on debugging and info level logs as appropriate
 - priority: medium-low
 
 
-### Task: Add mTLS support for Gate to Guard
+### Task: Add mTLS support for Gate to Guard (DONE)
 So every path is protected in the same way that the Gate to Keep path is protected. Ideally we re-use the certs we created for Gate, create new certs for Guard and set up
 the config for Guard in a way that is consistent with the mTLS config for Keep. Then 
 write some tests to make sure it works.
