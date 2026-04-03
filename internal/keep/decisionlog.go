@@ -25,6 +25,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
 )
 
 // DecisionLogEntry represents a single policy decision log entry.
@@ -43,13 +45,10 @@ type DecisionLogEntry struct {
 }
 
 // DecisionLogger manages decision log entries and dispatches them to configured sinks.
-// It uses a channel-based architecture where log entries are sent to a buffered channel,
-// and a background worker goroutine receives from the channel, batches entries, and
-// writes them to the remote endpoint at regular intervals.
 type DecisionLogger struct {
 	entryChan     chan *DecisionLogEntry
 	bufferSize    int
-	cfg           DecisionLogConfig
+	cfg           cfgloader.DecisionLogConfig
 	client        *http.Client
 	done          chan struct{}
 	wg            sync.WaitGroup
@@ -60,8 +59,7 @@ type DecisionLogger struct {
 }
 
 // NewDecisionLogger creates a new DecisionLogger instance.
-// If cfg.Enabled is false, returns a no-op logger.
-func NewDecisionLogger(cfg DecisionLogConfig) *DecisionLogger {
+func NewDecisionLogger(cfg cfgloader.DecisionLogConfig) *DecisionLogger {
 	if !cfg.Enabled {
 		return &DecisionLogger{
 			entryChan: make(chan *DecisionLogEntry, 1),
@@ -110,8 +108,6 @@ func NewDecisionLogger(cfg DecisionLogConfig) *DecisionLogger {
 }
 
 // Log adds a decision log entry to the channel.
-// If the channel is full, the entry is dropped to prevent blocking.
-// This is a non-blocking operation.
 func (dl *DecisionLogger) Log(entry *DecisionLogEntry) {
 	if entry == nil || !dl.cfg.Enabled {
 		return
@@ -172,7 +168,6 @@ func (dl *DecisionLogger) worker() {
 }
 
 // drainChannelAndFlush drains any remaining entries from the channel and flushes them.
-// This is called during shutdown to ensure no entries are lost.
 func (dl *DecisionLogger) drainChannelAndFlush(batch *[]*DecisionLogEntry) {
 	// Drain channel
 	for {
@@ -264,7 +259,6 @@ func (dl *DecisionLogger) sendToRemote(ctx context.Context, entries []*DecisionL
 }
 
 // Shutdown gracefully shuts down the decision logger.
-// It is safe to call Shutdown more than once.
 func (dl *DecisionLogger) Shutdown() error {
 	if !dl.cfg.Enabled {
 		return nil

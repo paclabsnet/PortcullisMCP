@@ -1,57 +1,47 @@
-# IMPORTANT: In production, place Guard behind a corporate SSO proxy (Cloudflare
-# Access, Pomerium, nginx+oauth2-proxy, etc.) to prevent agents from self-approving
-# escalations by fetching the approval URL programmatically. The proxy enforces
-# browser-based SSO on /approve; the bearer-token-protected API endpoints
-# (/token/*, /pending) should remain directly reachable by Gate only.
-# See docs/guard-sso-proxy.md for deployment examples.
-listen:
-  address: "0.0.0.0:8444"
+# Portcullis-Guard Example Configuration (Unified Peer Model)
+# See internal/guard/config.go for schema details.
 
-keep:
-  pending_escalation_request_signing_key: "envvar://KEEP_SIGNING_KEY"   # must match keep.signing.key
+server:
+  endpoints:
+    approval_ui:
+      listen: "0.0.0.0:8444"
+      # In production, place this endpoint behind an SSO proxy.
+      # See docs/guard-sso-proxy.md for details.
 
-escalation_token_signing:
-  key: "envvar://GUARD_SIGNING_KEY"          # PDP must be configured to trust tokens signed with this key
-  ttl: 86400                           # escalation token TTL in seconds (default: 86400 = 24h)
+    token_api:
+      listen: "0.0.0.0:8445"
+      auth:
+        type: "bearer"
+        credentials:
+          bearer_token: "envvar://GUARD_BEARER_TOKEN"
 
-templates:
-  dir: "/etc/portcullis/guard/templates"
+responsibility:
+  issuance:
+    approval_request_verification_key: "envvar://KEEP_SIGNING_KEY"   # must match keep's issuance key
+    signing_key: "envvar://GUARD_SIGNING_KEY"                      # PDP must trust tokens signed with this key
+    token_ttl: 86400
 
-#
-# 
-#
-portcullis_gate_management_port: 7777   # gate management API port, shown in post-approval instructions
+  interface:
+    templates: "/etc/portcullis/guard/templates"
+    gate_management_port: 7777
 
-# Authentication for the /token/unclaimed/list and /token/deposit endpoints.
-# bearer_token is required unless allow_unauthenticated is explicitly set to true (development only).
-auth:
-  bearer_token: "envvar://GUARD_BEARER_TOKEN"
-  allow_unauthenticated: false
+operations:
+  storage:
+    backend: "memory"
+    # For HA deployments, use redis:
+    # backend: "redis"
+    # config:
+    #   addr: "redis.internal:6379"
+    #   password: "envvar://REDIS_PASSWORD"
+    #   key_prefix: "portcullis:guard:"
 
-# Token store: selects where pending escalation requests and unclaimed tokens
-# are held.  "memory" (default) is single-instance only; "redis" is required
-# for HA deployments with multiple Guard instances.
-token_store:
-  backend: "memory"      # "memory" or "redis"
-  ttl: 3600              # default token lifetime in seconds when expiry cannot be parsed (default: 3600)
-  cleanup_interval: 300  # how often the memory store prunes expired entries (default: 300); no effect for redis
+  telemetry:
+    exporter: "noop"
+    service_name: "portcullis-guard"
 
-  # Redis settings — required when backend is "redis".
-  # redis:
-  #   addr: "redis.internal:6379"          # host:port of the Redis server
-  #   password: "envvar://REDIS_PASSWORD"  # AUTH password (optional)
-  #   db: 0                                # logical database index (default: 0)
-  #   tls_enabled: false                   # set true for Redis Enterprise / Upstash / TLS-terminated Redis
-  #   tls_skip_verify: false               # disable cert verification (dev only — never use in production)
-  #   tls_ca_cert: ""                      # path to CA PEM for verifying the Redis server cert
-  #   key_prefix: "portcullis:guard:"      # namespace prefix; override to share a Redis instance
+  logging:
+    level: "info"
+    format: "json"
 
-# limits:
-#   max_request_body_bytes: 524288
-#   max_user_id_bytes: 512
-#   max_jti_bytes: 128
-#   max_pending_jwt_bytes: 8192
-#   max_scope_override_bytes: 16384
-#   max_pending_requests: 10000
-#   max_unclaimed_per_user: 10000
-#   max_unclaimed_total: 100000
+  # limits:
+  #   max_request_body_bytes: 524288

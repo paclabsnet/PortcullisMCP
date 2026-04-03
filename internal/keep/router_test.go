@@ -25,7 +25,7 @@ import (
 )
 
 func TestRouter_CallTool_UnknownBackend(t *testing.T) {
-	cfg := map[string]BackendConfig{}
+	cfg := []BackendConfig{}
 	router := NewRouter(cfg)
 
 	_, err := router.CallTool(context.Background(), "nonexistent", "tool", nil)
@@ -93,7 +93,7 @@ func TestRouter_BuildBackendTransport_UnsupportedType(t *testing.T) {
 }
 
 func TestRouter_ListAllTools_EmptyBackends(t *testing.T) {
-	cfg := map[string]BackendConfig{}
+	cfg := []BackendConfig{}
 	router := NewRouter(cfg)
 
 	tools, err := router.ListAllTools(context.Background())
@@ -101,7 +101,6 @@ func TestRouter_ListAllTools_EmptyBackends(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Empty backends returns nil or empty slice
 	if len(tools) != 0 {
 		t.Errorf("expected empty tools list, got %d tools", len(tools))
 	}
@@ -174,8 +173,6 @@ func TestRouter_BuildBackendTransport_SSEMissingURL(t *testing.T) {
 	}
 }
 
-// --- checkBackendURL tests ---
-
 func TestCheckBackendURL_ValidPublicURL(t *testing.T) {
 	if err := checkBackendURL("https://mcp.example.com/mcp", false); err != nil {
 		t.Errorf("valid public URL rejected: %v", err)
@@ -195,7 +192,6 @@ func TestCheckBackendURL_InvalidScheme(t *testing.T) {
 }
 
 func TestCheckBackendURL_PrivateIPRejected(t *testing.T) {
-	// Use IP literals to avoid DNS at test time.
 	privateURLs := []string{
 		"http://10.0.0.1/mcp",
 		"http://172.16.5.10/mcp",
@@ -231,11 +227,9 @@ func TestCheckBackendURL_InvalidURL(t *testing.T) {
 	}
 }
 
-// --- tool aliasing tests ---
-
 func TestRouter_ResolveToolName_NoAlias(t *testing.T) {
-	r := NewRouter(map[string]BackendConfig{
-		"backend": {Type: "stdio", Command: "echo"},
+	r := NewRouter([]BackendConfig{
+		{Name: "backend", Type: "stdio", Command: "echo"},
 	})
 	if got := r.resolveToolName("backend", "query_db"); got != "query_db" {
 		t.Errorf("resolveToolName = %q, want %q", got, "query_db")
@@ -243,27 +237,29 @@ func TestRouter_ResolveToolName_NoAlias(t *testing.T) {
 }
 
 func TestRouter_ResolveToolName_WithAlias(t *testing.T) {
-	r := NewRouter(map[string]BackendConfig{})
+	r := NewRouter([]BackendConfig{})
+	r.mu.Lock()
 	r.backends["backend"] = &backendConn{
-		cfg:         BackendConfig{Type: "stdio", Command: "echo"},
+		cfg:         BackendConfig{Name: "backend", Type: "stdio", Command: "echo"},
 		aliasToReal: map[string]string{"acme_query_db": "query_db"},
 	}
+	r.mu.Unlock()
 	if got := r.resolveToolName("backend", "acme_query_db"); got != "query_db" {
 		t.Errorf("resolveToolName = %q, want %q", got, "query_db")
 	}
 }
 
 func TestRouter_ResolveToolName_UnknownBackend(t *testing.T) {
-	r := NewRouter(map[string]BackendConfig{})
-	// Unknown backend: name is returned unchanged (caller will get "unknown backend" on CallTool).
+	r := NewRouter([]BackendConfig{})
 	if got := r.resolveToolName("nonexistent", "tool"); got != "tool" {
 		t.Errorf("resolveToolName for unknown backend = %q, want %q", got, "tool")
 	}
 }
 
 func TestRouter_Reload_BuildsAliasToReal(t *testing.T) {
-	r := NewRouter(map[string]BackendConfig{
-		"backend": {
+	r := NewRouter([]BackendConfig{
+		{
+			Name:    "backend",
 			Type:    "stdio",
 			Command: "echo",
 			ToolMap: map[string]string{
@@ -271,12 +267,10 @@ func TestRouter_Reload_BuildsAliasToReal(t *testing.T) {
 			},
 		},
 	})
-	// Reload without live backends (survey will fail, but alias maps are built
-	// before the survey). Use a context with a deadline to keep the test fast.
 	ctx := context.Background()
-	// We expect reload to succeed (survey failure is non-fatal).
-	_ = r.Reload(ctx, map[string]BackendConfig{
-		"backend": {
+	_ = r.Reload(ctx, []BackendConfig{
+		{
+			Name:    "backend",
 			Type:    "stdio",
 			Command: "echo",
 			ToolMap: map[string]string{
@@ -295,32 +289,35 @@ func TestRouter_Reload_BuildsAliasToReal(t *testing.T) {
 	if got := conn.aliasToReal["acme_query_database"]; got != "query_database" {
 		t.Errorf("aliasToReal[%q] = %q, want %q", "acme_query_database", got, "query_database")
 	}
-	// Verify resolveToolName works end-to-end.
 	if got := r.resolveToolName("backend", "acme_query_database"); got != "query_database" {
 		t.Errorf("resolveToolName = %q, want %q", got, "query_database")
 	}
 }
 
 func TestRouter_Reload_DuplicateAliasAcrossBackends(t *testing.T) {
-	r := NewRouter(map[string]BackendConfig{
-		"backend_a": {
+	r := NewRouter([]BackendConfig{
+		{
+			Name:    "backend_a",
 			Type:    "stdio",
 			Command: "echo",
 			ToolMap: map[string]string{"tool_a": "shared_alias"},
 		},
-		"backend_b": {
+		{
+			Name:    "backend_b",
 			Type:    "stdio",
 			Command: "echo",
 			ToolMap: map[string]string{"tool_b": "shared_alias"},
 		},
 	})
-	err := r.Reload(context.Background(), map[string]BackendConfig{
-		"backend_a": {
+	err := r.Reload(context.Background(), []BackendConfig{
+		{
+			Name:    "backend_a",
 			Type:    "stdio",
 			Command: "echo",
 			ToolMap: map[string]string{"tool_a": "shared_alias"},
 		},
-		"backend_b": {
+		{
+			Name:    "backend_b",
 			Type:    "stdio",
 			Command: "echo",
 			ToolMap: map[string]string{"tool_b": "shared_alias"},
@@ -335,11 +332,12 @@ func TestRouter_Reload_DuplicateAliasAcrossBackends(t *testing.T) {
 }
 
 func TestRouter_Reload_UpdatesExistingBackendConfig(t *testing.T) {
-	r := NewRouter(map[string]BackendConfig{
-		"backend": {Type: "stdio", Command: "echo"},
+	r := NewRouter([]BackendConfig{
+		{Name: "backend", Type: "stdio", Command: "echo"},
 	})
-	newCfg := map[string]BackendConfig{
-		"backend": {
+	newCfg := []BackendConfig{
+		{
+			Name:    "backend",
 			Type:    "stdio",
 			Command: "echo",
 			ToolMap: map[string]string{"real_tool": "aliased_tool"},
@@ -359,8 +357,6 @@ func TestRouter_Reload_UpdatesExistingBackendConfig(t *testing.T) {
 			"aliased_tool", conn.aliasToReal["aliased_tool"], "real_tool")
 	}
 }
-
-// --- buildToolCache tests ---
 
 func makeTool(name string) *mcp.Tool {
 	return &mcp.Tool{Name: name}
@@ -405,7 +401,6 @@ func TestBuildToolCache_AliasApplied(t *testing.T) {
 }
 
 func TestBuildToolCache_CollisionAliasVsUnaliased(t *testing.T) {
-	// backend "b" has a real tool named "foo"; backend "a" aliases "bar" → "foo".
 	surveys := []backendSurvey{
 		{name: "a", toolMap: map[string]string{"bar": "foo"}, tools: []*mcp.Tool{makeTool("bar")}},
 		{name: "b", tools: []*mcp.Tool{makeTool("foo")}},
@@ -423,7 +418,6 @@ func TestBuildToolCache_CollisionAliasVsUnaliased(t *testing.T) {
 }
 
 func TestBuildToolCache_CollisionUnaliasedVsUnaliased(t *testing.T) {
-	// Two backends each expose "query_db" with no aliasing.
 	surveys := []backendSurvey{
 		{name: "a", tools: []*mcp.Tool{makeTool("query_db")}},
 		{name: "b", tools: []*mcp.Tool{makeTool("query_db")}},
@@ -438,9 +432,6 @@ func TestBuildToolCache_CollisionUnaliasedVsUnaliased(t *testing.T) {
 }
 
 func TestBuildToolCache_CollisionAliasVsAlias(t *testing.T) {
-	// Both backends alias different real tools to the same name.
-	// (This is also caught by the pre-survey check, but buildToolCache
-	// must handle it independently.)
 	surveys := []backendSurvey{
 		{name: "a", toolMap: map[string]string{"tool_a": "shared"}, tools: []*mcp.Tool{makeTool("tool_a")}},
 		{name: "b", toolMap: map[string]string{"tool_b": "shared"}, tools: []*mcp.Tool{makeTool("tool_b")}},
@@ -455,7 +446,6 @@ func TestBuildToolCache_CollisionAliasVsAlias(t *testing.T) {
 }
 
 func TestBuildToolCache_OriginalToolUnmutated(t *testing.T) {
-	// Aliasing must shallow-copy; the original *mcp.Tool must keep its real name.
 	orig := makeTool("real_name")
 	surveys := []backendSurvey{
 		{name: "a", toolMap: map[string]string{"real_name": "alias_name"}, tools: []*mcp.Tool{orig}},
@@ -472,10 +462,7 @@ func TestBuildToolCache_OriginalToolUnmutated(t *testing.T) {
 	}
 }
 
-// --- noRedirectHTTPClient tests ---
-
 func TestNoRedirectHTTPClient_RefusesRedirect(t *testing.T) {
-	// Start a test server that always redirects.
 	redirectTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))

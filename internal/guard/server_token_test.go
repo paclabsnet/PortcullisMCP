@@ -57,7 +57,7 @@ func TestHandleTokenUnclaimedList_EmptyForUnknownUser(t *testing.T) {
 func TestHandleTokenUnclaimedList_ReturnsTokensForUser(t *testing.T) {
 	s := makeServer(t)
 	// Directly seed an unclaimed token.
-	if err := s.unclaimed.AddUnclaimed(context.Background(), UnclaimedToken{
+	if err := s.unclaimedStore.AddUnclaimed(context.Background(), UnclaimedToken{
 		UserID:    "user@example.com",
 		JTI:       "jti-abc",
 		Raw:       "raw-token-value",
@@ -219,7 +219,7 @@ func TestHandleTokenClaim_NotFound(t *testing.T) {
 
 func TestHandleTokenClaim_Success_AndConsumed(t *testing.T) {
 	s := makeServer(t)
-	if err := s.unclaimed.AddUnclaimed(context.Background(), UnclaimedToken{
+	if err := s.unclaimedStore.AddUnclaimed(context.Background(), UnclaimedToken{
 		UserID:    "user@example.com",
 		JTI:       "claim-jti",
 		Raw:       "the-escalation-token",

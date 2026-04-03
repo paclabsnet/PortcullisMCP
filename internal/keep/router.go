@@ -56,12 +56,12 @@ type backendConn struct {
 
 // NewRouter creates a Router from the backend configs but does not yet connect.
 // Connections are established lazily on first use.
-func NewRouter(backends map[string]BackendConfig) *Router {
+func NewRouter(backends []BackendConfig) *Router {
 	r := &Router{
 		backends: make(map[string]*backendConn, len(backends)),
 	}
-	for name, cfg := range backends {
-		r.backends[name] = &backendConn{cfg: cfg}
+	for _, cfg := range backends {
+		r.backends[cfg.Name] = &backendConn{cfg: cfg}
 	}
 	return r
 }
@@ -135,12 +135,17 @@ func (r *Router) ListAllTools(ctx context.Context) ([]shared.AnnotatedTool, erro
 // ToolMap changes take effect immediately on reload. A backend that fails to
 // list tools is logged and skipped so one broken backend does not prevent the
 // rest from being served. Duplicate aliases across backends are a hard error.
-func (r *Router) Reload(ctx context.Context, backends map[string]BackendConfig) error {
+func (r *Router) Reload(ctx context.Context, backends []BackendConfig) error {
 	r.mu.Lock()
+
+	newBackends := make(map[string]BackendConfig, len(backends))
+	for _, b := range backends {
+		newBackends[b.Name] = b
+	}
 
 	// Close and remove backends no longer in config.
 	for name, conn := range r.backends {
-		if _, exists := backends[name]; !exists {
+		if _, exists := newBackends[name]; !exists {
 			if conn.session != nil {
 				conn.session.Close()
 			}
@@ -150,7 +155,7 @@ func (r *Router) Reload(ctx context.Context, backends map[string]BackendConfig) 
 
 	// Register new backends and update configs for existing ones (so ToolMap
 	// and other non-connection settings take effect without a restart).
-	for name, cfg := range backends {
+	for name, cfg := range newBackends {
 		if conn, exists := r.backends[name]; exists {
 			conn.cfg = cfg
 		} else {

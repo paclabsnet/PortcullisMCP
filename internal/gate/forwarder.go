@@ -28,23 +28,24 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 
+	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 )
 
 // Forwarder sends enriched MCP requests to portcullis-keep and returns the result.
 type Forwarder struct {
-	cfg    KeepConfig
+	auth   cfgloader.PeerAuth
 	client *http.Client
 }
 
 // NewForwarder creates a Forwarder configured for the given Keep endpoint.
-func NewForwarder(cfg KeepConfig) (*Forwarder, error) {
-	transport, err := buildTransport(cfg.Auth)
+func NewForwarder(auth cfgloader.PeerAuth) (*Forwarder, error) {
+	transport, err := buildTransport(auth)
 	if err != nil {
 		return nil, fmt.Errorf("build keep transport: %w", err)
 	}
 	return &Forwarder{
-		cfg:    cfg,
+		auth:   auth,
 		client: &http.Client{Transport: transport},
 	}, nil
 }
@@ -108,13 +109,13 @@ func (f *Forwarder) post(ctx context.Context, path string, body, out any) error 
 	if err != nil {
 		return fmt.Errorf("marshal request: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, f.cfg.Endpoint+path, bytes.NewReader(data))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, f.auth.Endpoint+path, bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("build http request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if f.cfg.Auth.Type == "bearer" && f.cfg.Auth.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+f.cfg.Auth.Token)
+	if f.auth.Auth.Type == "bearer" && f.auth.Auth.Credentials.BearerToken != "" {
+		req.Header.Set("Authorization", "Bearer "+f.auth.Auth.Credentials.BearerToken)
 	}
 	// Inject W3C TraceContext headers so Keep continues the same trace.
 	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
@@ -171,7 +172,7 @@ func (f *Forwarder) post(ctx context.Context, path string, body, out any) error 
 }
 
 // buildTransport constructs an http.RoundTripper based on the auth config.
-func buildTransport(auth KeepAuth) (http.RoundTripper, error) {
+func buildTransport(auth cfgloader.PeerAuth) (http.RoundTripper, error) {
 	base := http.DefaultTransport.(*http.Transport).Clone()
 	if base.TLSClientConfig == nil {
 		base.TLSClientConfig = &tls.Config{}
@@ -179,8 +180,8 @@ func buildTransport(auth KeepAuth) (http.RoundTripper, error) {
 
 	// Load a custom server CA for verifying Keep's TLS certificate.
 	// Required when Keep uses a private or enterprise CA not in the system pool.
-	if auth.ServerCA != "" {
-		caData, err := os.ReadFile(auth.ServerCA)
+	if auth.Auth.Credentials.ServerCA != "" {
+		caData, err := os.ReadFile(auth.Auth.Credentials.ServerCA)
 		if err != nil {
 			return nil, fmt.Errorf("read keep server CA: %w", err)
 		}
@@ -191,11 +192,11 @@ func buildTransport(auth KeepAuth) (http.RoundTripper, error) {
 		base.TLSClientConfig.RootCAs = pool
 	}
 
-	if auth.Type == "mtls" {
-		if auth.Cert == "" || auth.Key == "" {
+	if auth.Auth.Type == "mtls" {
+		if auth.Auth.Credentials.Cert == "" || auth.Auth.Credentials.Key == "" {
 			return nil, fmt.Errorf("mtls auth requires cert and key")
 		}
-		cert, err := tls.LoadX509KeyPair(auth.Cert, auth.Key)
+		cert, err := tls.LoadX509KeyPair(auth.Auth.Credentials.Cert, auth.Auth.Credentials.Key)
 		if err != nil {
 			return nil, fmt.Errorf("load mtls keypair: %w", err)
 		}

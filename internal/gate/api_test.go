@@ -24,11 +24,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
 )
 
 // newTestManagementServer creates a ManagementServer with a real TokenStore
 // backed by a temp file, and an OS-sourced IdentityCache.
-func newTestManagementServer(t *testing.T, cfg MgmtAPIConfig) *ManagementServer {
+func newTestManagementServer(t *testing.T, endpoint cfgloader.EndpointConfig, interaction AgentInteractionConfig) *ManagementServer {
 	t.Helper()
 	storePath := filepath.Join(t.TempDir(), "tokens.json")
 	store, err := NewTokenStore(context.Background(), storePath)
@@ -36,13 +38,14 @@ func newTestManagementServer(t *testing.T, cfg MgmtAPIConfig) *ManagementServer 
 		t.Fatalf("NewTokenStore: %v", err)
 	}
 
-	identityCfg := IdentityConfig{Source: "os", UserID: "api-test@example.com"}
+	identityCfg := IdentityConfig{Strategy: "os", Config: map[string]any{"user_id": "api-test@example.com"}}
+	_ = identityCfg.Validate()
 	identity, err := NewIdentityCache(context.Background(), identityCfg)
 	if err != nil {
 		t.Fatalf("NewIdentityCache: %v", err)
 	}
 
-	ms, err := NewManagementServer(store, identity, cfg, nil, "")
+	ms, err := NewManagementServer(store, identity, endpoint, interaction, nil, "")
 	if err != nil {
 		t.Fatalf("NewManagementServer: %v", err)
 	}
@@ -50,7 +53,7 @@ func newTestManagementServer(t *testing.T, cfg MgmtAPIConfig) *ManagementServer 
 }
 
 func TestManagementServer_ListTokens_Empty(t *testing.T) {
-	ms := newTestManagementServer(t, MgmtAPIConfig{})
+	ms := newTestManagementServer(t, cfgloader.EndpointConfig{}, AgentInteractionConfig{})
 
 	req := httptest.NewRequest(http.MethodGet, "/tokens", nil)
 	w := httptest.NewRecorder()
@@ -69,7 +72,7 @@ func TestManagementServer_ListTokens_Empty(t *testing.T) {
 }
 
 func TestManagementServer_AddAndListToken(t *testing.T) {
-	ms := newTestManagementServer(t, MgmtAPIConfig{AllowManualTokens: true})
+	ms := newTestManagementServer(t, cfgloader.EndpointConfig{}, AgentInteractionConfig{AllowManualTokens: true})
 
 	raw := makeTestJWT(map[string]any{"jti": "api-tok", "exp": futureExp(), "granted_by": "boss@corp.com"})
 	body, _ := json.Marshal(map[string]string{"token": raw})
@@ -84,7 +87,7 @@ func TestManagementServer_AddAndListToken(t *testing.T) {
 	}
 
 	var added map[string]string
-	json.NewDecoder(w.Body).Decode(&added)
+	_ = json.NewDecoder(w.Body).Decode(&added)
 	if added["token_id"] != "api-tok" {
 		t.Errorf("token_id = %q, want api-tok", added["token_id"])
 	}
@@ -98,7 +101,7 @@ func TestManagementServer_AddAndListToken(t *testing.T) {
 	ms.server.Handler.ServeHTTP(w2, req2)
 
 	var list []map[string]string
-	json.NewDecoder(w2.Body).Decode(&list)
+	_ = json.NewDecoder(w2.Body).Decode(&list)
 	if len(list) != 1 {
 		t.Fatalf("list returned %d items, want 1", len(list))
 	}
@@ -108,7 +111,7 @@ func TestManagementServer_AddAndListToken(t *testing.T) {
 }
 
 func TestManagementServer_AddToken_InvalidBody(t *testing.T) {
-	ms := newTestManagementServer(t, MgmtAPIConfig{AllowManualTokens: true})
+	ms := newTestManagementServer(t, cfgloader.EndpointConfig{}, AgentInteractionConfig{AllowManualTokens: true})
 
 	req := httptest.NewRequest(http.MethodPost, "/tokens", bytes.NewReader([]byte("not-json")))
 	w := httptest.NewRecorder()
@@ -120,7 +123,7 @@ func TestManagementServer_AddToken_InvalidBody(t *testing.T) {
 }
 
 func TestManagementServer_AddToken_InvalidToken(t *testing.T) {
-	ms := newTestManagementServer(t, MgmtAPIConfig{AllowManualTokens: true})
+	ms := newTestManagementServer(t, cfgloader.EndpointConfig{}, AgentInteractionConfig{AllowManualTokens: true})
 
 	body, _ := json.Marshal(map[string]string{"token": "not.a.jwt"})
 	req := httptest.NewRequest(http.MethodPost, "/tokens", bytes.NewReader(body))
@@ -134,7 +137,7 @@ func TestManagementServer_AddToken_InvalidToken(t *testing.T) {
 }
 
 func TestManagementServer_DeleteToken(t *testing.T) {
-	ms := newTestManagementServer(t, MgmtAPIConfig{AllowManualTokens: true})
+	ms := newTestManagementServer(t, cfgloader.EndpointConfig{}, AgentInteractionConfig{AllowManualTokens: true})
 
 	// Add a token first.
 	raw := makeTestJWT(map[string]any{"jti": "del-api", "exp": futureExp()})
@@ -158,14 +161,14 @@ func TestManagementServer_DeleteToken(t *testing.T) {
 	ms.server.Handler.ServeHTTP(lw, listReq)
 
 	var list []any
-	json.NewDecoder(lw.Body).Decode(&list)
+	_ = json.NewDecoder(lw.Body).Decode(&list)
 	if len(list) != 0 {
 		t.Errorf("expected empty list after delete, got %d items", len(list))
 	}
 }
 
 func TestManagementServer_DeleteToken_NotFound(t *testing.T) {
-	ms := newTestManagementServer(t, MgmtAPIConfig{})
+	ms := newTestManagementServer(t, cfgloader.EndpointConfig{}, AgentInteractionConfig{})
 
 	req := httptest.NewRequest(http.MethodDelete, "/tokens/nonexistent", nil)
 	w := httptest.NewRecorder()
@@ -177,7 +180,7 @@ func TestManagementServer_DeleteToken_NotFound(t *testing.T) {
 }
 
 func TestManagementServer_GetIdentity(t *testing.T) {
-	ms := newTestManagementServer(t, MgmtAPIConfig{})
+	ms := newTestManagementServer(t, cfgloader.EndpointConfig{}, AgentInteractionConfig{})
 
 	req := httptest.NewRequest(http.MethodGet, "/identity", nil)
 	w := httptest.NewRecorder()
@@ -188,7 +191,7 @@ func TestManagementServer_GetIdentity(t *testing.T) {
 	}
 
 	var info map[string]any
-	json.NewDecoder(w.Body).Decode(&info)
+	_ = json.NewDecoder(w.Body).Decode(&info)
 	if info["user_id"] != "api-test@example.com" {
 		t.Errorf("user_id = %v, want api-test@example.com", info["user_id"])
 	}
@@ -202,17 +205,18 @@ func TestManagementServer_UpdateIdentityToken(t *testing.T) {
 	tokenFile := filepath.Join(dir, "oidc-token")
 
 	initialRaw := makeTestJWT(map[string]any{"sub": "old@corp.com", "exp": futureExp()})
-	os.WriteFile(tokenFile, []byte(initialRaw), 0600)
+	_ = os.WriteFile(tokenFile, []byte(initialRaw), 0600)
 
 	identityCfg := IdentityConfig{
-		Source:   "oidc-file",
-		OIDCFile: OIDCFileConfig{TokenFile: tokenFile},
+		Strategy: "oidc-file",
+		Config: map[string]any{"token_file": tokenFile},
 	}
+	_ = identityCfg.Validate()
 	identity, _ := NewIdentityCache(context.Background(), identityCfg)
 
 	storePath := filepath.Join(dir, "tokens.json")
 	store, _ := NewTokenStore(context.Background(), storePath)
-	ms, err := NewManagementServer(store, identity, MgmtAPIConfig{}, nil, "")
+	ms, err := NewManagementServer(store, identity, cfgloader.EndpointConfig{}, AgentInteractionConfig{}, nil, "")
 	if err != nil {
 		t.Fatalf("NewManagementServer: %v", err)
 	}
@@ -228,14 +232,14 @@ func TestManagementServer_UpdateIdentityToken(t *testing.T) {
 		t.Errorf("status = %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
 	}
 	var result map[string]string
-	json.NewDecoder(w.Body).Decode(&result)
+	_ = json.NewDecoder(w.Body).Decode(&result)
 	if result["user_id"] != "new@corp.com" {
 		t.Errorf("user_id = %q, want new@corp.com", result["user_id"])
 	}
 }
 
 func TestManagementServer_UpdateIdentityToken_OSSource(t *testing.T) {
-	ms := newTestManagementServer(t, MgmtAPIConfig{})
+	ms := newTestManagementServer(t, cfgloader.EndpointConfig{}, AgentInteractionConfig{})
 
 	body, _ := json.Marshal(map[string]string{"token": "any"})
 	req := httptest.NewRequest(http.MethodPut, "/identity/token", bytes.NewReader(body))
@@ -250,7 +254,7 @@ func TestManagementServer_UpdateIdentityToken_OSSource(t *testing.T) {
 }
 
 func TestManagementServer_UpdateIdentityToken_EmptyToken(t *testing.T) {
-	ms := newTestManagementServer(t, MgmtAPIConfig{})
+	ms := newTestManagementServer(t, cfgloader.EndpointConfig{}, AgentInteractionConfig{})
 
 	body, _ := json.Marshal(map[string]string{"token": ""})
 	req := httptest.NewRequest(http.MethodPut, "/identity/token", bytes.NewReader(body))
@@ -263,7 +267,12 @@ func TestManagementServer_UpdateIdentityToken_EmptyToken(t *testing.T) {
 }
 
 func TestManagementServer_RequireSecret_ValidToken(t *testing.T) {
-	ms := newTestManagementServer(t, MgmtAPIConfig{SharedSecret: "s3cret"})
+	ms := newTestManagementServer(t, cfgloader.EndpointConfig{
+		Auth: cfgloader.AuthSettings{
+			Type: "bearer",
+			Credentials: cfgloader.AuthCredentials{BearerToken: "s3cret"},
+		},
+	}, AgentInteractionConfig{})
 
 	req := httptest.NewRequest(http.MethodGet, "/tokens", nil)
 	req.Header.Set("Authorization", "Bearer s3cret")
@@ -276,7 +285,12 @@ func TestManagementServer_RequireSecret_ValidToken(t *testing.T) {
 }
 
 func TestManagementServer_RequireSecret_InvalidToken(t *testing.T) {
-	ms := newTestManagementServer(t, MgmtAPIConfig{SharedSecret: "s3cret"})
+	ms := newTestManagementServer(t, cfgloader.EndpointConfig{
+		Auth: cfgloader.AuthSettings{
+			Type: "bearer",
+			Credentials: cfgloader.AuthCredentials{BearerToken: "s3cret"},
+		},
+	}, AgentInteractionConfig{})
 
 	tests := []struct {
 		name   string
@@ -305,7 +319,12 @@ func TestManagementServer_RequireSecret_InvalidToken(t *testing.T) {
 
 func TestManagementServer_UIAlwaysAccessible(t *testing.T) {
 	// UI at GET / should be served even when shared secret is configured.
-	ms := newTestManagementServer(t, MgmtAPIConfig{SharedSecret: "s3cret"})
+	ms := newTestManagementServer(t, cfgloader.EndpointConfig{
+		Auth: cfgloader.AuthSettings{
+			Type: "bearer",
+			Credentials: cfgloader.AuthCredentials{BearerToken: "s3cret"},
+		},
+	}, AgentInteractionConfig{})
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	// No Authorization header.
@@ -321,7 +340,7 @@ func TestManagementServer_UIAlwaysAccessible(t *testing.T) {
 }
 
 func TestManagementServer_AddToken_ManualPostingDisabled(t *testing.T) {
-	ms := newTestManagementServer(t, MgmtAPIConfig{}) // AllowManualTokens defaults to false
+	ms := newTestManagementServer(t, cfgloader.EndpointConfig{}, AgentInteractionConfig{}) // AllowManualTokens defaults to false
 
 	raw := makeTestJWT(map[string]any{"jti": "tok-1", "exp": futureExp()})
 	body, _ := json.Marshal(map[string]string{"token": raw})
@@ -336,7 +355,7 @@ func TestManagementServer_AddToken_ManualPostingDisabled(t *testing.T) {
 }
 
 func TestManagementServer_UI_HidesManualTokenSection(t *testing.T) {
-	ms := newTestManagementServer(t, MgmtAPIConfig{}) // AllowManualTokens: false
+	ms := newTestManagementServer(t, cfgloader.EndpointConfig{}, AgentInteractionConfig{}) // AllowManualTokens: false
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
@@ -355,16 +374,14 @@ func TestNewManagementServer_CallbackPageFile_Override(t *testing.T) {
 	dir := t.TempDir()
 	customHTML := `<!DOCTYPE html><html><body>CUSTOM CALLBACK PAGE {{if .Error}}ERROR{{end}}</body></html>`
 	pageFile := filepath.Join(dir, "callback.html")
-	if err := os.WriteFile(pageFile, []byte(customHTML), 0600); err != nil {
-		t.Fatal(err)
-	}
+	_ = os.WriteFile(pageFile, []byte(customHTML), 0600)
 
 	store, _ := NewTokenStore(context.Background(), filepath.Join(dir, "tokens.json"))
-	identity, _ := NewIdentityCache(context.Background(), IdentityConfig{Source: "os", UserID: "test"})
+	identity, _ := NewIdentityCache(context.Background(), IdentityConfig{Strategy: "os", Config: map[string]any{"user_id": "test"}})
 	sm := NewStateMachine()
 	oidcLogin := NewOIDCLoginManager(OIDCLoginConfig{IssuerURL: "https://idp.example.com", ClientID: "c"}, DefaultManagementAPIPort, 0, sm, nil, nil, nil)
 
-	ms, err := NewManagementServer(store, identity, MgmtAPIConfig{}, oidcLogin, pageFile)
+	ms, err := NewManagementServer(store, identity, cfgloader.EndpointConfig{}, AgentInteractionConfig{}, oidcLogin, pageFile)
 	if err != nil {
 		t.Fatalf("NewManagementServer with custom page file: %v", err)
 	}
@@ -384,11 +401,11 @@ func TestNewManagementServer_CallbackPageFile_Override(t *testing.T) {
 func TestNewManagementServer_CallbackPageFile_Missing(t *testing.T) {
 	dir := t.TempDir()
 	store, _ := NewTokenStore(context.Background(), filepath.Join(dir, "tokens.json"))
-	identity, _ := NewIdentityCache(context.Background(), IdentityConfig{Source: "os", UserID: "test"})
+	identity, _ := NewIdentityCache(context.Background(), IdentityConfig{Strategy: "os", Config: map[string]any{"user_id": "test"}})
 	sm := NewStateMachine()
 	oidcLogin := NewOIDCLoginManager(OIDCLoginConfig{IssuerURL: "https://idp.example.com", ClientID: "c"}, DefaultManagementAPIPort, 0, sm, nil, nil, nil)
 
-	_, err := NewManagementServer(store, identity, MgmtAPIConfig{}, oidcLogin, "/nonexistent/callback.html")
+	_, err := NewManagementServer(store, identity, cfgloader.EndpointConfig{}, AgentInteractionConfig{}, oidcLogin, "/nonexistent/callback.html")
 	if err == nil {
 		t.Fatal("expected error for missing callback page file, got nil")
 	}
@@ -397,11 +414,11 @@ func TestNewManagementServer_CallbackPageFile_Missing(t *testing.T) {
 func TestNewManagementServer_CallbackPageFile_Empty_UsesEmbedded(t *testing.T) {
 	dir := t.TempDir()
 	store, _ := NewTokenStore(context.Background(), filepath.Join(dir, "tokens.json"))
-	identity, _ := NewIdentityCache(context.Background(), IdentityConfig{Source: "os", UserID: "test"})
+	identity, _ := NewIdentityCache(context.Background(), IdentityConfig{Strategy: "os", Config: map[string]any{"user_id": "test"}})
 	sm := NewStateMachine()
 	oidcLogin := NewOIDCLoginManager(OIDCLoginConfig{IssuerURL: "https://idp.example.com", ClientID: "c"}, DefaultManagementAPIPort, 0, sm, nil, nil, nil)
 
-	ms, err := NewManagementServer(store, identity, MgmtAPIConfig{}, oidcLogin, "")
+	ms, err := NewManagementServer(store, identity, cfgloader.EndpointConfig{}, AgentInteractionConfig{}, oidcLogin, "")
 	if err != nil {
 		t.Fatalf("NewManagementServer with empty page file: %v", err)
 	}
@@ -411,7 +428,7 @@ func TestNewManagementServer_CallbackPageFile_Empty_UsesEmbedded(t *testing.T) {
 }
 
 func TestManagementServer_UI_ShowsManualTokenSection(t *testing.T) {
-	ms := newTestManagementServer(t, MgmtAPIConfig{AllowManualTokens: true})
+	ms := newTestManagementServer(t, cfgloader.EndpointConfig{}, AgentInteractionConfig{AllowManualTokens: true})
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()

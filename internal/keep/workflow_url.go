@@ -17,6 +17,8 @@ package keep
 import (
 	"context"
 	"fmt"
+
+	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
 )
 
 // urlWorkflowHandler is the demo workflow plugin.
@@ -24,14 +26,14 @@ import (
 // returns it as the reference, which Keep surfaces to the agent via the MCP
 // error channel so the user can click through and approve.
 type urlWorkflowHandler struct {
-	guardURL string
+	endpoints cfgloader.GuardEndpoints
 }
 
 func newURLWorkflowHandler(cfg URLWorkflowConfig) (*urlWorkflowHandler, error) {
-	if cfg.GuardURL == "" {
-		return nil, fmt.Errorf("url workflow: guard_url is required")
+	if cfg.Endpoints.ApprovalUI == "" {
+		return nil, fmt.Errorf("url workflow: endpoints.approval_ui is required")
 	}
-	return &urlWorkflowHandler{guardURL: cfg.GuardURL}, nil
+	return &urlWorkflowHandler{endpoints: cfg.Endpoints}, nil
 }
 
 // Submit returns an empty workflow reference. Gate is now responsible for

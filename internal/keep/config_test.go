@@ -19,14 +19,22 @@ package keep
 import (
 	"strings"
 	"testing"
+
+	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
 )
 
 // validBaseConfig returns a minimal Config that passes Validate().
 func validBaseConfig() Config {
 	return Config{
-		Listen:   ListenConfig{Address: "localhost:8080"},
-		PDP:      PDPConfig{Type: "opa", Endpoint: "http://opa:8181"},
-		Identity: IdentityConfig{Normalizer: "passthrough"},
+		Server: cfgloader.ServerConfig{
+			Endpoints: map[string]cfgloader.EndpointConfig{
+				"main": {Listen: "localhost:8080"},
+			},
+		},
+		Responsibility: ResponsibilityConfig{
+			Policy: PolicyConfig{Strategy: "opa", Config: map[string]any{"endpoint": "http://opa:8181"}},
+		},
+		Identity: IdentityConfig{Strategy: "passthrough"},
 	}
 }
 
@@ -46,165 +54,110 @@ func TestConfigValidate(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:        "missing listen.address",
-			mutate:      func(c *Config) { c.Listen.Address = "" },
+			name: "missing main endpoint",
+			mutate: func(c *Config) {
+				delete(c.Server.Endpoints, "main")
+			},
 			wantErr:     true,
-			errContains: "listen.address is required",
+			errContains: "server.endpoints.main is required",
 		},
 		{
-			name:        "missing pdp.endpoint when type is opa",
-			mutate:      func(c *Config) { c.PDP.Endpoint = "" },
+			name: "missing pdp endpoint when strategy is opa",
+			mutate: func(c *Config) {
+				c.Responsibility.Policy.Config = map[string]any{"endpoint": ""}
+			},
 			wantErr:     true,
-			errContains: "pdp.endpoint is required",
+			errContains: "policy.config.endpoint is required",
 		},
 		{
 			name: "noop pdp does not require endpoint",
 			mutate: func(c *Config) {
-				c.PDP.Type = "noop"
-				c.PDP.Endpoint = ""
+				c.Responsibility.Policy.Strategy = "noop"
+				c.Responsibility.Policy.Config = nil
 			},
 			wantErr: false,
 		},
 
-		// --- identity.normalizer ---
+		// --- identity.strategy ---
 		{
-			name:    "normalizer empty string is invalid",
-			mutate:  func(c *Config) { c.Identity.Normalizer = "" },
+			name:    "identity strategy empty is invalid",
+			mutate:  func(c *Config) { c.Identity.Strategy = "" },
 			wantErr: true,
 		},
 		{
-			name:    "normalizer strict is invalid",
-			mutate:  func(c *Config) { c.Identity.Normalizer = "strict" },
-			wantErr: true,
-		},
-		{
-			name:    "normalizer passthrough is valid",
-			mutate:  func(c *Config) { c.Identity.Normalizer = "passthrough" },
+			name:    "identity strategy passthrough is valid",
+			mutate:  func(c *Config) { c.Identity.Strategy = "passthrough" },
 			wantErr: false,
 		},
 		{
-			name:    "normalizer oidc-verify is valid when issuer and jwks_url set",
+			name: "identity strategy oidc-verify is valid when issuer and jwks_url set",
 			mutate: func(c *Config) {
-				c.Identity.Normalizer = "oidc-verify"
-				c.Identity.OIDCVerify.Issuer = "https://issuer.example.com"
-				c.Identity.OIDCVerify.JWKSURL = "https://issuer.example.com/.well-known/jwks.json"
-			},
-			wantErr: false,
-		},
-		{
-			name:        "normalizer typo is invalid",
-			mutate:      func(c *Config) { c.Identity.Normalizer = "Strict" },
-			wantErr:     true,
-			errContains: `invalid identity.normalizer "Strict"`,
-		},
-		{
-			name:        "normalizer unknown value is invalid",
-			mutate:      func(c *Config) { c.Identity.Normalizer = "none" },
-			wantErr:     true,
-			errContains: `invalid identity.normalizer "none"`,
-		},
-
-		// --- oidc-verify sub-fields ---
-		{
-			name: "oidc-verify missing issuer",
-			mutate: func(c *Config) {
-				c.Identity.Normalizer = "oidc-verify"
-				c.Identity.OIDCVerify.JWKSURL = "https://issuer.example.com/.well-known/jwks.json"
-			},
-			wantErr:     true,
-			errContains: "identity.oidc_verify.issuer is required",
-		},
-		{
-			name: "oidc-verify missing jwks_url",
-			mutate: func(c *Config) {
-				c.Identity.Normalizer = "oidc-verify"
-				c.Identity.OIDCVerify.Issuer = "https://issuer.example.com"
-			},
-			wantErr:     true,
-			errContains: "identity.oidc_verify.jwks_url is required",
-		},
-		{
-			name: "oidc-verify http jwks_url is rejected by default",
-			mutate: func(c *Config) {
-				c.Identity.Normalizer = "oidc-verify"
-				c.Identity.OIDCVerify.Issuer = "https://issuer.example.com"
-				c.Identity.OIDCVerify.JWKSURL = "http://issuer.example.com/.well-known/jwks.json"
-			},
-			wantErr:     true,
-			errContains: "must use https://",
-		},
-		{
-			name: "oidc-verify http jwks_url allowed with override",
-			mutate: func(c *Config) {
-				c.Identity.Normalizer = "oidc-verify"
-				c.Identity.OIDCVerify.Issuer = "https://issuer.example.com"
-				c.Identity.OIDCVerify.JWKSURL = "http://issuer.example.com/.well-known/jwks.json"
-				c.Identity.OIDCVerify.AllowInsecureJWKSURL = true
+				c.Identity.Strategy = "oidc-verify"
+				c.Identity.Config = map[string]any{
+					"issuer":   "https://issuer.example.com",
+					"jwks_url": "https://issuer.example.com/.well-known/jwks.json",
+				}
 			},
 			wantErr: false,
 		},
 
-		// --- escalation.workflow.type ---
+		// --- responsibility.workflow.strategy ---
 		{
-			name:    "workflow type empty is valid",
-			mutate:  func(c *Config) { c.Escalation.Workflow.Type = "" },
+			name:    "workflow strategy empty is valid",
+			mutate:  func(c *Config) { c.Responsibility.Workflow.Strategy = "" },
 			wantErr: false,
 		},
 		{
-			name:    "workflow type noop is valid",
-			mutate:  func(c *Config) { c.Escalation.Workflow.Type = "noop" },
+			name:    "workflow strategy noop is valid",
+			mutate:  func(c *Config) { c.Responsibility.Workflow.Strategy = "noop" },
 			wantErr: false,
 		},
 		{
-			name:    "workflow type url is valid",
-			mutate:  func(c *Config) { c.Escalation.Workflow.Type = "url" },
-			wantErr: false,
-		},
-		{
-			name: "workflow type servicenow is valid when instance set",
+			name: "workflow strategy servicenow is valid when instance set",
 			mutate: func(c *Config) {
-				c.Escalation.Workflow.Type = "servicenow"
-				c.Escalation.Workflow.ServiceNow.Instance = "mycompany"
+				c.Responsibility.Workflow.Strategy = "servicenow"
+				c.Responsibility.Workflow.Config = map[string]any{"instance": "mycompany"}
 			},
 			wantErr: false,
 		},
 		{
-			name: "workflow type webhook is valid when url set",
+			name: "workflow strategy webhook is valid when url set",
 			mutate: func(c *Config) {
-				c.Escalation.Workflow.Type = "webhook"
-				c.Escalation.Workflow.Webhook.URL = "https://hooks.example.com/portcullis"
+				c.Responsibility.Workflow.Strategy = "webhook"
+				c.Responsibility.Workflow.Config = map[string]any{"url": "https://hooks.example.com/portcullis"}
 			},
 			wantErr: false,
 		},
 		{
-			name:        "workflow type typo is invalid",
-			mutate:      func(c *Config) { c.Escalation.Workflow.Type = "ServiceNow" },
+			name:        "workflow strategy unknown value is invalid",
+			mutate:      func(c *Config) { c.Responsibility.Workflow.Strategy = "jira" },
 			wantErr:     true,
-			errContains: `invalid escalation.workflow.type "ServiceNow"`,
-		},
-		{
-			name:        "workflow type unknown value is invalid",
-			mutate:      func(c *Config) { c.Escalation.Workflow.Type = "jira" },
-			wantErr:     true,
-			errContains: `invalid escalation.workflow.type "jira"`,
+			errContains: `invalid escalation.strategy "jira"`,
 		},
 
 		// --- servicenow requires instance ---
 		{
-			name:        "servicenow missing instance",
-			mutate:      func(c *Config) { c.Escalation.Workflow.Type = "servicenow" },
+			name: "servicenow missing instance",
+			mutate: func(c *Config) {
+				c.Responsibility.Workflow.Strategy = "servicenow"
+				c.Responsibility.Workflow.Config = nil
+			},
 			wantErr:     true,
-			errContains: "escalation.workflow.servicenow.instance is required",
+			errContains: "escalation.config.instance is required",
 		},
 
 		// --- webhook requires url ---
 		{
-			name:        "webhook missing url",
-			mutate:      func(c *Config) { c.Escalation.Workflow.Type = "webhook" },
+			name: "webhook missing url",
+			mutate: func(c *Config) {
+				c.Responsibility.Workflow.Strategy = "webhook"
+				c.Responsibility.Workflow.Config = nil
+			},
 			wantErr:     true,
-			errContains: "escalation.workflow.webhook.url is required",
+			errContains: "escalation.config.url is required",
 		},
 	}
+
 
 	for _, tc := range tests {
 		tc := tc

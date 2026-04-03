@@ -52,7 +52,7 @@ func (g *Gate) buildStatusReport(ctx context.Context) (msg string, isErr bool) {
 		case StateAuthenticated:
 			gateStatus = "operating normally"
 		case StateUnauthenticated:
-			if g.cfg.Identity.Source == "oidc-login" {
+			if g.cfg.Identity.Strategy == "oidc-login" {
 				gateStatus = "unauthenticated — use portcullis_login to log in"
 				isErr = true
 			} else {
@@ -67,11 +67,11 @@ func (g *Gate) buildStatusReport(ctx context.Context) (msg string, isErr bool) {
 		}
 	}
 
-	keepStatus := pingReadiness(ctx, g.cfg.Keep.Endpoint)
+	keepStatus := pingReadiness(ctx, g.cfg.Peers.Keep.Endpoint)
 
 	guardStatus := "not configured"
-	if g.cfg.Guard.EscalationApprovalEndpoint != "" {
-		guardStatus = pingReadiness(ctx, g.cfg.Guard.EscalationApprovalEndpoint)
+	if g.cfg.Peers.Guard.Endpoints.ApprovalUI != "" {
+		guardStatus = pingReadiness(ctx, g.cfg.Peers.Guard.Endpoints.ApprovalUI)
 	}
 
 	msg = fmt.Sprintf(

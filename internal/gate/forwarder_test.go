@@ -35,13 +35,14 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 )
 
 // newTestForwarder creates a Forwarder pointing at the given test server URL.
 func newTestForwarder(t *testing.T, srv *httptest.Server) *Forwarder {
 	t.Helper()
-	f, err := NewForwarder(KeepConfig{Endpoint: srv.URL})
+	f, err := NewForwarder(cfgloader.PeerAuth{Endpoint: srv.URL})
 	if err != nil {
 		t.Fatalf("NewForwarder: %v", err)
 	}
@@ -51,7 +52,7 @@ func newTestForwarder(t *testing.T, srv *httptest.Server) *Forwarder {
 // ---- buildTransport ---------------------------------------------------------
 
 func TestBuildTransport_NoAuth(t *testing.T) {
-	transport, err := buildTransport(KeepAuth{})
+	transport, err := buildTransport(cfgloader.PeerAuth{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -62,7 +63,13 @@ func TestBuildTransport_NoAuth(t *testing.T) {
 
 func TestBuildTransport_BearerAuth(t *testing.T) {
 	// Bearer auth does not affect the transport itself (header is added per-request).
-	transport, err := buildTransport(KeepAuth{Type: "bearer", Token: "my-token"})
+	auth := cfgloader.PeerAuth{
+		Auth: cfgloader.AuthSettings{
+			Type: "bearer",
+			Credentials: cfgloader.AuthCredentials{BearerToken: "my-token"},
+		},
+	}
+	transport, err := buildTransport(auth)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -72,32 +79,54 @@ func TestBuildTransport_BearerAuth(t *testing.T) {
 }
 
 func TestBuildTransport_MtlsMissingCert(t *testing.T) {
-	_, err := buildTransport(KeepAuth{Type: "mtls", Cert: "", Key: ""})
+	auth := cfgloader.PeerAuth{
+		Auth: cfgloader.AuthSettings{
+			Type: "mtls",
+			Credentials: cfgloader.AuthCredentials{Cert: "", Key: ""},
+		},
+	}
+	_, err := buildTransport(auth)
 	if err == nil {
 		t.Fatal("expected error for mTLS with missing cert/key, got nil")
 	}
 }
 
 func TestBuildTransport_MtlsMissingKey(t *testing.T) {
-	_, err := buildTransport(KeepAuth{Type: "mtls", Cert: "/some/cert.pem", Key: ""})
+	auth := cfgloader.PeerAuth{
+		Auth: cfgloader.AuthSettings{
+			Type: "mtls",
+			Credentials: cfgloader.AuthCredentials{Cert: "/some/cert.pem", Key: ""},
+		},
+	}
+	_, err := buildTransport(auth)
 	if err == nil {
 		t.Fatal("expected error for mTLS with missing key, got nil")
 	}
 }
 
 func TestBuildTransport_MtlsCertFileNotFound(t *testing.T) {
-	_, err := buildTransport(KeepAuth{
-		Type: "mtls",
-		Cert: "/does/not/exist.crt",
-		Key:  "/does/not/exist.key",
-	})
+	auth := cfgloader.PeerAuth{
+		Auth: cfgloader.AuthSettings{
+			Type: "mtls",
+			Credentials: cfgloader.AuthCredentials{
+				Cert: "/does/not/exist.crt",
+				Key:  "/does/not/exist.key",
+			},
+		},
+	}
+	_, err := buildTransport(auth)
 	if err == nil {
 		t.Fatal("expected error for nonexistent mTLS cert/key files, got nil")
 	}
 }
 
 func TestBuildTransport_ServerCANotFound(t *testing.T) {
-	_, err := buildTransport(KeepAuth{ServerCA: "/does/not/exist/ca.pem"})
+	auth := cfgloader.PeerAuth{
+		Auth: cfgloader.AuthSettings{
+			Credentials: cfgloader.AuthCredentials{ServerCA: "/does/not/exist/ca.pem"},
+		},
+	}
+	_, err := buildTransport(auth)
 	if err == nil {
 		t.Fatal("expected error for nonexistent CA file, got nil")
 	}
@@ -106,9 +135,14 @@ func TestBuildTransport_ServerCANotFound(t *testing.T) {
 func TestBuildTransport_ServerCAInvalidPEM(t *testing.T) {
 	dir := t.TempDir()
 	caFile := filepath.Join(dir, "bad-ca.pem")
-	os.WriteFile(caFile, []byte("this is not a valid PEM certificate"), 0644)
+	_ = os.WriteFile(caFile, []byte("this is not a valid PEM certificate"), 0644)
 
-	_, err := buildTransport(KeepAuth{ServerCA: caFile})
+	auth := cfgloader.PeerAuth{
+		Auth: cfgloader.AuthSettings{
+			Credentials: cfgloader.AuthCredentials{ServerCA: caFile},
+		},
+	}
+	_, err := buildTransport(auth)
 	if err == nil {
 		t.Fatal("expected error for invalid CA PEM data, got nil")
 	}
@@ -121,7 +155,12 @@ func TestBuildTransport_ServerCAValid(t *testing.T) {
 	caFile := filepath.Join(dir, "ca.pem")
 	os.WriteFile(caFile, certPEM, 0644)
 
-	transport, err := buildTransport(KeepAuth{ServerCA: caFile})
+	auth := cfgloader.PeerAuth{
+		Auth: cfgloader.AuthSettings{
+			Credentials: cfgloader.AuthCredentials{ServerCA: caFile},
+		},
+	}
+	transport, err := buildTransport(auth)
 	if err != nil {
 		t.Fatalf("unexpected error with valid CA: %v", err)
 	}
@@ -136,14 +175,19 @@ func TestBuildTransport_MtlsValid(t *testing.T) {
 	dir := t.TempDir()
 	certFile := filepath.Join(dir, "client.crt")
 	keyFile := filepath.Join(dir, "client.key")
-	os.WriteFile(certFile, certPEM, 0644)
-	os.WriteFile(keyFile, keyPEM, 0600)
+	_ = os.WriteFile(certFile, certPEM, 0644)
+	_ = os.WriteFile(keyFile, keyPEM, 0600)
 
-	transport, err := buildTransport(KeepAuth{
-		Type: "mtls",
-		Cert: certFile,
-		Key:  keyFile,
-	})
+	auth := cfgloader.PeerAuth{
+		Auth: cfgloader.AuthSettings{
+			Type: "mtls",
+			Credentials: cfgloader.AuthCredentials{
+				Cert: certFile,
+				Key:  keyFile,
+			},
+		},
+	}
+	transport, err := buildTransport(auth)
 	if err != nil {
 		t.Fatalf("unexpected error with valid mTLS keypair: %v", err)
 	}
@@ -169,14 +213,14 @@ func TestCallTool_Allow(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(expected)
+		_ = json.NewEncoder(w).Encode(expected)
 	}))
 	defer srv.Close()
 
 	f := newTestForwarder(t, srv)
 	result, err := f.CallTool(context.Background(), shared.EnrichedMCPRequest{
 		ToolName: "read_file",
-		TraceID: "req-1",
+		TraceID:  "req-1",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -190,7 +234,7 @@ func TestCallTool_Deny(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
-		json.NewEncoder(w).Encode(map[string]string{
+		_ = json.NewEncoder(w).Encode(map[string]string{
 			"error":    "user not in approved group",
 			"trace_id": "keep-trace-deny",
 		})
@@ -221,7 +265,7 @@ func TestCallTool_Deny(t *testing.T) {
 func TestCallTool_EscalationPending(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
-		json.NewEncoder(w).Encode(map[string]string{
+		_ = json.NewEncoder(w).Encode(map[string]string{
 			"reason":             "manager approval required",
 			"workflow_reference": "https://guard.example.com/approve?token=xyz",
 		})
@@ -250,7 +294,7 @@ func TestCallTool_EscalationPending_WithJWT(t *testing.T) {
 	// in EscalationPendingError so Gate can build the approval URL.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
-		json.NewEncoder(w).Encode(map[string]string{
+		_ = json.NewEncoder(w).Encode(map[string]string{
 			"reason":         "manager approval required",
 			"escalation_jti": "test-jti-abc",
 			"pending_jwt":    "header.payload.signature",
@@ -278,7 +322,7 @@ func TestCallTool_EscalationPending_WithJWT(t *testing.T) {
 func TestCallTool_EscalationPending_TraceIDDecoded(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
-		json.NewEncoder(w).Encode(map[string]string{
+		_ = json.NewEncoder(w).Encode(map[string]string{
 			"reason":   "approval required",
 			"trace_id": "keep-trace-esc-42",
 		})
@@ -312,7 +356,7 @@ func TestCallTool_PDPUnavailable(t *testing.T) {
 func TestCallTool_UnexpectedStatus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": "internal server error"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "internal server error"})
 	}))
 	defer srv.Close()
 
@@ -325,7 +369,7 @@ func TestCallTool_UnexpectedStatus(t *testing.T) {
 
 func TestCallTool_NetworkError(t *testing.T) {
 	// Point at a port nothing is listening on.
-	f, _ := NewForwarder(KeepConfig{Endpoint: "http://127.0.0.1:1"})
+	f, _ := NewForwarder(cfgloader.PeerAuth{Endpoint: "http://127.0.0.1:1"})
 	_, err := f.CallTool(context.Background(), shared.EnrichedMCPRequest{TraceID: "req-net"})
 	if err == nil {
 		t.Fatal("expected network error, got nil")
@@ -363,12 +407,12 @@ func TestListTools_Success(t *testing.T) {
 		var body struct {
 			UserIdentity shared.UserIdentity `json:"user_identity"`
 		}
-		json.NewDecoder(r.Body).Decode(&body)
+		_ = json.NewDecoder(r.Body).Decode(&body)
 		if body.UserIdentity.UserID != "u@corp.com" {
 			t.Errorf("request user_identity.user_id = %q, want u@corp.com", body.UserIdentity.UserID)
 		}
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(tools)
+		_ = json.NewEncoder(w).Encode(tools)
 	}))
 	defer srv.Close()
 
@@ -393,12 +437,12 @@ func TestListTools_WithEscalationTokens(t *testing.T) {
 		var body struct {
 			EscalationTokens []shared.EscalationToken `json:"escalation_tokens"`
 		}
-		json.NewDecoder(r.Body).Decode(&body)
+		_ = json.NewDecoder(r.Body).Decode(&body)
 		if len(body.EscalationTokens) != 1 || body.EscalationTokens[0].TokenID != "tok-1" {
 			t.Errorf("escalation tokens not forwarded correctly: %v", body.EscalationTokens)
 		}
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode([]shared.AnnotatedTool{})
+		_ = json.NewEncoder(w).Encode([]shared.AnnotatedTool{})
 	}))
 	defer srv.Close()
 
@@ -413,7 +457,7 @@ func TestListTools_WithEscalationTokens(t *testing.T) {
 func TestListTools_EmptyResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode([]shared.AnnotatedTool{})
+		_ = json.NewEncoder(w).Encode([]shared.AnnotatedTool{})
 	}))
 	defer srv.Close()
 
@@ -430,7 +474,7 @@ func TestListTools_EmptyResponse(t *testing.T) {
 func TestListTools_ServerError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": "internal"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "internal"})
 	}))
 	defer srv.Close()
 
@@ -472,9 +516,9 @@ func TestSendLogs_Success(t *testing.T) {
 		if r.URL.Path != "/log" {
 			t.Errorf("path = %q, want /log", r.URL.Path)
 		}
-		json.NewDecoder(r.Body).Decode(&receivedBatch)
+		_ = json.NewDecoder(r.Body).Decode(&receivedBatch)
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]any{"status": "accepted", "count": 2})
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "accepted", "count": 2})
 	}))
 	defer srv.Close()
 
@@ -497,7 +541,7 @@ func TestSendLogs_Success(t *testing.T) {
 func TestSendLogs_ServerError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": "storage full"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "storage full"})
 	}))
 	defer srv.Close()
 
@@ -516,15 +560,18 @@ func TestPost_BearerTokenHeader(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeader = r.Header.Get("Authorization")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]any{})
+		_ = json.NewEncoder(w).Encode(map[string]any{})
 	}))
 	defer srv.Close()
 
-	f, _ := NewForwarder(KeepConfig{
+	f, _ := NewForwarder(cfgloader.PeerAuth{
 		Endpoint: srv.URL,
-		Auth:     KeepAuth{Type: "bearer", Token: "super-secret"},
+		Auth: cfgloader.AuthSettings{
+			Type:        "bearer",
+			Credentials: cfgloader.AuthCredentials{BearerToken: "super-secret"},
+		},
 	})
-	f.ListTools(context.Background(), shared.UserIdentity{}, nil)
+	_, _ = f.ListTools(context.Background(), shared.UserIdentity{}, nil)
 
 	if authHeader != "Bearer super-secret" {
 		t.Errorf("Authorization = %q, want Bearer super-secret", authHeader)
@@ -536,12 +583,12 @@ func TestPost_NoAuthHeaderWhenNotConfigured(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeader = r.Header.Get("Authorization")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode([]shared.AnnotatedTool{})
+		_ = json.NewEncoder(w).Encode([]shared.AnnotatedTool{})
 	}))
 	defer srv.Close()
 
 	f := newTestForwarder(t, srv)
-	f.ListTools(context.Background(), shared.UserIdentity{}, nil)
+	_, _ = f.ListTools(context.Background(), shared.UserIdentity{}, nil)
 
 	if authHeader != "" {
 		t.Errorf("expected no Authorization header, got %q", authHeader)
@@ -553,12 +600,12 @@ func TestPost_ContentTypeJSON(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ct = r.Header.Get("Content-Type")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode([]shared.AnnotatedTool{})
+		_ = json.NewEncoder(w).Encode([]shared.AnnotatedTool{})
 	}))
 	defer srv.Close()
 
 	f := newTestForwarder(t, srv)
-	f.ListTools(context.Background(), shared.UserIdentity{}, nil)
+	_, _ = f.ListTools(context.Background(), shared.UserIdentity{}, nil)
 
 	if ct != "application/json" {
 		t.Errorf("Content-Type = %q, want application/json", ct)
@@ -704,7 +751,12 @@ func TestGateMTLS_TrustedServerCA_ConnectsSuccessfully(t *testing.T) {
 		t.Fatalf("write CA file: %v", err)
 	}
 
-	transport, err := buildTransport(KeepAuth{ServerCA: caFile})
+	auth := cfgloader.PeerAuth{
+		Auth: cfgloader.AuthSettings{
+			Credentials: cfgloader.AuthCredentials{ServerCA: caFile},
+		},
+	}
+	transport, err := buildTransport(auth)
 	if err != nil {
 		t.Fatalf("buildTransport: %v", err)
 	}
@@ -728,11 +780,14 @@ func TestGateMTLS_UntrustedServerCA_ConnectionFails(t *testing.T) {
 	// A completely separate CA — the server cert was not signed by this.
 	differentCACertPEM, _, _ := generateServerCerts(t)
 	caFile := filepath.Join(t.TempDir(), "ca.crt")
-	if err := os.WriteFile(caFile, differentCACertPEM, 0644); err != nil {
-		t.Fatalf("write CA file: %v", err)
-	}
+	_ = os.WriteFile(caFile, differentCACertPEM, 0644)
 
-	transport, err := buildTransport(KeepAuth{ServerCA: caFile})
+	auth := cfgloader.PeerAuth{
+		Auth: cfgloader.AuthSettings{
+			Credentials: cfgloader.AuthCredentials{ServerCA: caFile},
+		},
+	}
+	transport, err := buildTransport(auth)
 	if err != nil {
 		t.Fatalf("buildTransport: %v", err)
 	}

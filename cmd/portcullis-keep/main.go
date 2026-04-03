@@ -42,7 +42,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	shutdownTelemetry, err := telemetry.Setup(ctx, cfg.Telemetry)
+	shutdownTelemetry, err := telemetry.Setup(ctx, cfg.Operations.Telemetry)
 	if err != nil {
 		slog.Error("init telemetry", "error", err)
 		os.Exit(1)

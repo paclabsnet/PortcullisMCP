@@ -1,5 +1,5 @@
 #
-#  OIDC Login Version
+#  OIDC Login Version (Unified Peer Model)
 #
 #  This is the version of gate.yaml that is compatible with the docker-sandbox deployment. 
 #  It will require a login to the portcullis-dex container, collect an oidc-token from
@@ -17,90 +17,74 @@
 #  4. Start up your agent
 #  5. Tell your agent that you'd like to log in to Portcullis.  It should be able to figure out the rest
 #
-#
 
 # portcullis-gate minimal config — for local development/evaluation
 # MCP client config: { "command": "portcullis-gate", "args": ["-config", "~/.portcullis/gate.yaml"] }
 
-keep:
-  endpoint: "http://localhost:8080"
-  auth:
-    type: "bearer"
-    token: "dev-secret-token"   # must match keep's bearer_token setting
-
-
+server:
+  endpoints:
+    management_ui:
+      listen: "localhost:7777"
+      auth:
+        type: "none"
 
 identity:
-  source: "oidc-login"
-
-  oidc_login:
+  strategy: "oidc-login"
+  config:
     issuer_url: "http://localhost:5556/dex" # Use your Dex or other OIDC provider URL
     client_id: "portcullis-gate"
     client_secret: "portcullis-gate-secret"
     scopes: ["openid", "profile", "email", "groups", "audience:server:client_id:portcullis-keep"]
     flow: "authorization_code"
-  
   login_callback_timeout_seconds: 300
 
+peers:
+  keep:
+    endpoint: "http://localhost:8080"
+    auth:
+      type: "bearer"
+      credentials:
+        bearer_token: "dev-secret-token" # must match keep's bearer_token setting
 
+  guard:
+    endpoints:
+      approval_ui: "http://localhost:8444"
+      token_api: "http://localhost:8445"
 
-management_api:
-  port: 7777                  
+responsibility:
+  workspace:
+    directory: "~" # files under home dir are fast-pathed (no Keep round-trip)
+  escalation:
+    strategy: "proactive"
+    token_store: "~/.portcullis/tokens.json"
+  agent_interaction:
+    instructions:
+      require_approval: |
+        Action required: {reason}
 
+        Ask the user to open the following link to approve this request:
+        {url}  
 
-sandbox:
-  directory: "~"                # files under home dir are fast-pathed (no Keep round-trip)
+        Make sure you copy the URL exactly. A single missed character can make it invalid.
 
+        Once approved, retry the operation.
+      deny: |
+        This action is not permitted: {reason}
+        Reference trace ID {trace_id} when contacting your security team.
 
-
-
-# Guard endpoint for automatic escalation token collection.
-# When configured, Gate will automatically claim tokens approved via the Guard
-# without the user needing to paste tokens manually.
-guard:
-  escalation_approval_endpoint: "http://localhost:8444"
-  # bearer_token: "dev-guard-bearer-token" # not needed if guard has no bearer_token set
-
-  # in the proactive strategy, when Portcullis-Gate receives an escalation response from Keep
-  # it immediately sends the Pending JWT associated with that response to Guard. Why? Because
-  # it shortens the URL that the Agent has to provide to the User to include just the JTI of said JWT.
-  #
-  # We tried sending the entire Pending JWT as part of the URL to the Agent to give to the User,
-  # but the Agent would mangle the URL about 20% of the time, destroying the escalation flow.
-  approval_management_strategy: "proactive"
-  
-
-
-#
-# These messages can be customized to your preference
-#
-agent:
-   require_approval:
-     instructions: |
-       Action required: {reason}
- 
-       Ask the user to open the following link to approve this request:
-       {url}  
-
-       Make sure you copy the URL exactly. A single missed character can make it invalid.
-
-       Once approved, retry the operation.
-  
-
-   deny:                       # message shown when a request is denied by policy
-     instructions: |
-       This action is not permitted: {reason}
-       Reference trace ID {trace_id} when contacting your security team.
-
-
-
-# protected_paths:              # always denied, regardless of sandbox; defaults to ~/.ssh and ~/.portcullis
+# restrictions:              # always denied, regardless of workspace; defaults to ~/.ssh and ~/.portcullis
 #   - "~/.ssh"
 #   - "~/.portcullis"
 
 # token_store: "~/.portcullis/tokens.json"   # where escalation tokens are persisted
 
-
 # decision_logs:
 #   flush_interval: 30          # seconds between batched sends to Keep (default: 30)
 #   max_batch_size: 100         # max entries per batch (default: 100)
+
+operations:
+  telemetry:
+    exporter: "noop"
+  logging:
+    level: "info"
+    format: "text"

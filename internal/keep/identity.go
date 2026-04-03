@@ -32,27 +32,14 @@ import (
 )
 
 // IdentityNormalizer is an alias for identity.Normalizer.
-// Kept here so existing Keep code and tests compile without changes.
 type IdentityNormalizer = identity.Normalizer
 
-// NormalizerFactory is an alias for identity.NormalizerFactory.
-// Kept here so existing Keep code and tests compile without changes.
-type NormalizerFactory = identity.NormalizerFactory
-
-// RegisterNormalizer adds a new identity normalizer implementation to the global
-// registry. It is a thin wrapper around identity.Register.
-func RegisterNormalizer(name string, factory NormalizerFactory) {
-	identity.Register(name, factory)
-}
-
 func init() {
-	RegisterNormalizer("passthrough", func(cfg IdentityConfig) (IdentityNormalizer, error) {
+	identity.Register("passthrough", func(cfg identity.NormalizerConfig) (identity.Normalizer, error) {
 		return &passthroughNormalizer{silenced: cfg.AcceptForgedIdentities}, nil
 	})
 
-	// both oidc-login and oidc-file use this verification path
-	//
-	RegisterNormalizer("oidc-verify", func(cfg IdentityConfig) (IdentityNormalizer, error) {
+	identity.Register("oidc-verify", func(cfg identity.NormalizerConfig) (identity.Normalizer, error) {
 		if cfg.OIDCVerify.Issuer == "" {
 			return nil, fmt.Errorf("normalizer oidc-verify requires identity.oidc_verify.issuer to be set")
 		}
@@ -70,9 +57,7 @@ func init() {
 	})
 }
 
-// passthroughNormalizer accepts all identity fields as-is. Intended for local
-// evaluation and sandbox deployments only. Logs a warning on every request
-// unless silenced is true.
+// passthroughNormalizer accepts all identity fields as-is.
 type passthroughNormalizer struct {
 	silenced bool
 }
@@ -100,9 +85,7 @@ func (n *passthroughNormalizer) Normalize(_ context.Context, id shared.UserIdent
 	}, nil
 }
 
-// oidcVerifyingNormalizer validates OIDC token claims before forwarding to
-// the PDP. It rejects expired tokens and tokens not issued by the configured
-// issuer. OS-sourced identities are stripped to user_id + source_type only.
+// oidcVerifyingNormalizer validates OIDC token claims before forwarding to the PDP.
 type oidcVerifyingNormalizer struct {
 	issuer             string
 	jwksURL            string
@@ -144,9 +127,6 @@ func (n *oidcVerifyingNormalizer) Normalize(ctx context.Context, id shared.UserI
 		return shared.Principal{}, fmt.Errorf("oidc identity missing raw token")
 	}
 
-	// 1. Verify signature and parse claims.
-	// keyFunc is a per-call closure so the request context propagates into
-	// the JWKS fetch (timeout, cancellation).
 	keyFn := func(token *jwt.Token) (interface{}, error) {
 		return n.keyFuncCtx(ctx, token)
 	}
@@ -160,13 +140,11 @@ func (n *oidcVerifyingNormalizer) Normalize(ctx context.Context, id shared.UserI
 		return shared.Principal{}, fmt.Errorf("invalid oidc token claims")
 	}
 
-	// 2. Validate Issuer
 	iss, _ := claims.GetIssuer()
 	if n.issuer != "" && iss != n.issuer {
 		return shared.Principal{}, fmt.Errorf("oidc token issuer %q does not match configured issuer %q", iss, n.issuer)
 	}
 
-	// 3. Extract Subject (UserID)
 	sub, err := claims.GetSubject()
 	if err != nil {
 		return shared.Principal{}, fmt.Errorf("parse oidc token subject: %w", err)
@@ -175,7 +153,6 @@ func (n *oidcVerifyingNormalizer) Normalize(ctx context.Context, id shared.UserI
 		return shared.Principal{}, fmt.Errorf("oidc token missing sub claim")
 	}
 
-	// 4. Validate Audiences
 	if len(n.audiences) > 0 {
 		aud, _ := claims.GetAudience()
 		found := false
@@ -195,7 +172,6 @@ func (n *oidcVerifyingNormalizer) Normalize(ctx context.Context, id shared.UserI
 		}
 	}
 
-	// 5. Validate Expiry
 	exp, err := claims.GetExpirationTime()
 	if err != nil {
 		return shared.Principal{}, fmt.Errorf("parse oidc token expiry: %w", err)
@@ -208,10 +184,6 @@ func (n *oidcVerifyingNormalizer) Normalize(ctx context.Context, id shared.UserI
 		return shared.Principal{}, fmt.Errorf("oidc token is expired (exp=%v)", exp.Time)
 	}
 
-	// 6. Enforce max token age (measured from iat claim).
-	// Fails closed: if max_token_age_secs is configured and iat is absent or
-	// unparsable, the token is rejected. Silently skipping enforcement when iat
-	// is missing would allow an attacker to bypass the control by stripping the claim.
 	if n.maxTokenAgeSecs > 0 {
 		iat, iatErr := claims.GetIssuedAt()
 		if iatErr != nil {
@@ -227,7 +199,6 @@ func (n *oidcVerifyingNormalizer) Normalize(ctx context.Context, id shared.UserI
 		}
 	}
 
-	// Use claims from the verified token
 	email, _ := claims["email"].(string)
 	displayName, _ := claims["name"].(string)
 
@@ -269,7 +240,7 @@ func (n *oidcVerifyingNormalizer) Normalize(ctx context.Context, id shared.UserI
 	}
 
 	return shared.Principal{
-		UserID:            sub, // Use verified subject from token
+		UserID:            sub,
 		Email:             email,
 		DisplayName:       displayName,
 		Groups:            groups,
@@ -293,7 +264,6 @@ func (n *oidcVerifyingNormalizer) keyFuncCtx(ctx context.Context, token *jwt.Tok
 		return nil, fmt.Errorf("missing kid in token header")
 	}
 
-	// 1. Try with cached JWKS
 	keys, err := n.getJWKS(ctx, false)
 	if err != nil {
 		return nil, fmt.Errorf("fetch JWKS: %w", err)
@@ -305,7 +275,6 @@ func (n *oidcVerifyingNormalizer) keyFuncCtx(ctx context.Context, token *jwt.Tok
 		}
 	}
 
-	// 2. Kid miss: force immediate refresh and retry
 	slog.Info("JWKS kid miss; forcing immediate refresh", "kid", kid)
 	keys, err = n.getJWKS(ctx, true)
 	if err != nil {
@@ -318,14 +287,11 @@ func (n *oidcVerifyingNormalizer) keyFuncCtx(ctx context.Context, token *jwt.Tok
 		}
 	}
 
-	// Kid not found after refresh: wrap as IdentityVerificationError so Gate
-	// knows this is a token/identity issue (401), not a PDP unavailability (503).
 	reason := fmt.Sprintf("kid %q not found in JWKS after refresh; token may be expired or issued by a restarted IdP", kid)
 	return nil, &shared.IdentityVerificationError{Reason: reason}
 }
 
 func (n *oidcVerifyingNormalizer) buildRSAPublicKey(k jwk) (*rsa.PublicKey, error) {
-	// Construct RSA Public Key from JWK
 	nBytes, err := base64.RawURLEncoding.DecodeString(k.N)
 	if err != nil {
 		return nil, fmt.Errorf("decode JWK n: %w", err)
@@ -359,7 +325,6 @@ func (n *oidcVerifyingNormalizer) getJWKS(ctx context.Context, force bool) (*jwk
 	n.jwksMu.Lock()
 	defer n.jwksMu.Unlock()
 
-	// Re-check after acquiring lock (unless forced)
 	if !force && n.jwks != nil && time.Since(n.last) < 1*time.Hour {
 		return n.jwks, nil
 	}
@@ -388,30 +353,7 @@ func (n *oidcVerifyingNormalizer) getJWKS(ctx context.Context, force bool) (*jwk
 	return n.jwks, nil
 }
 
-/*
-@TODO: 2026-04-02 : remove
-// jwtIssuer extracts the iss claim from a JWT without verifying the signature.
-func jwtIssuer(token string) (string, error) {
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		return "", fmt.Errorf("not a JWT: expected 3 parts, got %d", len(parts))
-	}
-	decoded, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return "", fmt.Errorf("decode jwt payload: %w", err)
-	}
-	var claims struct {
-		Issuer string `json:"iss"`
-	}
-	if err := json.Unmarshal(decoded, &claims); err != nil {
-		return "", fmt.Errorf("unmarshal jwt claims: %w", err)
-	}
-	return claims.Issuer, nil
-}
-*/
-
-// buildIdentityNormalizer constructs the configured IdentityNormalizer using
-// the global registry. It is a thin wrapper around identity.Build.
-func buildIdentityNormalizer(cfg IdentityConfig) (IdentityNormalizer, error) {
-	return identity.Build(cfg)
+// buildIdentityNormalizer constructs the configured IdentityNormalizer using the global registry.
+func buildIdentityNormalizer(cfg *IdentityConfig) (IdentityNormalizer, error) {
+	return identity.Build(cfg.Normalizer)
 }

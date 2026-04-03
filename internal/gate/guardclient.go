@@ -25,6 +25,8 @@ import (
 	"net/url"
 	"os"
 	"time"
+
+	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
 )
 
 // GuardClient calls the portcullis-guard token API on behalf of Gate.
@@ -40,45 +42,43 @@ type GuardClient struct {
 // If auth.mtls is configured, the client uses mutual TLS; otherwise plain HTTPS
 // with an optional bearer token.
 // Returns an error if TLS material cannot be loaded.
-func NewGuardClient(cfg GuardConfig) (*GuardClient, error) {
-	transport, err := buildGuardTransport(cfg.Auth.Mtls)
+func NewGuardClient(cfg GateSpecificGuardConfig) (*GuardClient, error) {
+	transport, err := buildGuardTransport(cfg.Auth.Credentials)
 	if err != nil {
 		return nil, fmt.Errorf("build guard transport: %w", err)
 	}
 	return &GuardClient{
 		endpoint:    cfg.resolvedAPIEndpoint(),
-		bearerToken: cfg.Auth.BearerToken,
+		bearerToken: cfg.Auth.Credentials.BearerToken,
 		client:      &http.Client{Timeout: 10 * time.Second, Transport: transport},
 	}, nil
 }
 
 // buildGuardTransport builds an http.RoundTripper for Guard API calls.
-// When mtls.client_cert and mtls.client_key are set, mTLS is enabled.
-// When mtls.server_ca is set, Guard's server certificate is verified against that CA.
-func buildGuardTransport(mtls MtlsClientConfig) (http.RoundTripper, error) {
+func buildGuardTransport(creds cfgloader.AuthCredentials) (http.RoundTripper, error) {
 	base := http.DefaultTransport.(*http.Transport).Clone()
 	if base.TLSClientConfig == nil {
 		base.TLSClientConfig = &tls.Config{} //nolint:gosec // MinVersion set on Guard server
 	}
 	base.TLSClientConfig.MinVersion = tls.VersionTLS13
 
-	if mtls.ServerCA != "" {
-		caData, err := os.ReadFile(mtls.ServerCA)
+	if creds.ServerCA != "" {
+		caData, err := os.ReadFile(creds.ServerCA)
 		if err != nil {
-			return nil, fmt.Errorf("read guard server CA %q: %w", mtls.ServerCA, err)
+			return nil, fmt.Errorf("read guard server CA %q: %w", creds.ServerCA, err)
 		}
 		pool := x509.NewCertPool()
 		if !pool.AppendCertsFromPEM(caData) {
-			return nil, fmt.Errorf("parse guard server CA %q: no valid certificates found", mtls.ServerCA)
+			return nil, fmt.Errorf("parse guard server CA %q: no valid certificates found", creds.ServerCA)
 		}
 		base.TLSClientConfig.RootCAs = pool
 	}
 
-	if mtls.ClientCert != "" || mtls.ClientKey != "" {
-		if mtls.ClientCert == "" || mtls.ClientKey == "" {
+	if creds.Cert != "" || creds.Key != "" {
+		if creds.Cert == "" || creds.Key == "" {
 			return nil, fmt.Errorf("guard auth.mtls requires both client_cert and client_key")
 		}
-		cert, err := tls.LoadX509KeyPair(mtls.ClientCert, mtls.ClientKey)
+		cert, err := tls.LoadX509KeyPair(creds.Cert, creds.Key)
 		if err != nil {
 			return nil, fmt.Errorf("load guard client keypair: %w", err)
 		}
@@ -96,9 +96,7 @@ type unclaimedTokenInfo struct {
 }
 
 // ListUnclaimedTokens returns all tokens that Guard holds for userID but have
-// not yet been claimed. These include tokens approved via the web UI or by a
-// remote workflow (e.g. ServiceNow posting to /token/deposit).
-// Requires auth: bearer token.
+// not yet been claimed.
 func (g *GuardClient) ListUnclaimedTokens(ctx context.Context, userID string) ([]unclaimedTokenInfo, error) {
 	u, err := url.Parse(g.endpoint + "/token/unclaimed/list")
 	if err != nil {
@@ -137,12 +135,7 @@ func (g *GuardClient) ListUnclaimedTokens(ctx context.Context, userID string) ([
 	return tokens, nil
 }
 
-// RegisterPending pushes a Keep-signed pending escalation JWT to Guard so that
-// Guard can serve a short ?jti= approval URL rather than embedding the full JWT
-// in the query string. Guard validates the JWT signature on receipt to prevent
-// rogue Gate instances from registering arbitrary JWTs.
-// POST /pending  body: {"jti": "...", "jwt": "..."}
-// Requires bearer auth.
+// RegisterPending pushes a Keep-signed pending escalation JWT to Guard.
 func (g *GuardClient) RegisterPending(ctx context.Context, jti, jwt string) error {
 	u := g.endpoint + "/pending"
 
@@ -177,9 +170,7 @@ func (g *GuardClient) RegisterPending(ctx context.Context, jti, jwt string) erro
 }
 
 // ClaimToken atomically removes the token identified by jti from Guard's
-// unclaimed list and returns its raw JWT. Returns an empty string (and no
-// error) when the token does not exist in the unclaimed list — this is the
-// normal case when the user has not yet approved the escalation request.
+// unclaimed list and returns its raw JWT.
 func (g *GuardClient) ClaimToken(ctx context.Context, jti string) (string, error) {
 	u := g.endpoint + "/token/claim"
 

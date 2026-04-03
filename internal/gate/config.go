@@ -18,23 +18,20 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/mitchellh/mapstructure"
 	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
-	telemetrycfg "github.com/paclabsnet/PortcullisMCP/internal/telemetry"
 )
 
 // SecretAllowlist lists the config fields eligible for vault:// and other
 // restricted secret URI schemes. envvar:// and filevar:// may be used on any field.
 var SecretAllowlist = []string{
-	"keep.auth.token",
-	"keep.auth.cert",
-	"keep.auth.key",
-	"keep.auth.server_ca",
-	"guard.auth.bearer_token",
-	"guard.auth.mtls.client_cert",
-	"guard.auth.mtls.client_key",
-	"guard.auth.mtls.server_ca",
-	"management_api.shared_secret",
-	"identity.oidc_login.client_secret",
+	"peers.keep.auth.credentials.bearer_token",
+	"peers.keep.auth.credentials.cert",
+	"peers.keep.auth.credentials.key",
+	"peers.keep.auth.credentials.server_ca",
+	"peers.guard.auth.credentials.bearer_token",
+	"server.endpoints.management_ui.auth.credentials.bearer_token",
+	"identity.config.client_secret",
 }
 
 // LoadConfig reads, parses, resolves secrets in, and validates a gate config file.
@@ -42,85 +39,179 @@ var SecretAllowlist = []string{
 // cause a configuration error at startup. ~ in path is expanded to the
 // user home directory.
 func LoadConfig(ctx context.Context, path string) (Config, error) {
-	return cfgloader.Load[Config](ctx, path, SecretAllowlist)
+	// Use *Config so Validate() can populate derived fields in IdentityConfig.
+	cfg, err := cfgloader.Load[*Config](ctx, path, SecretAllowlist)
+	if err != nil {
+		return Config{}, err
+	}
+	return *cfg, nil
 }
 
 // Config holds the full portcullis-gate configuration loaded from gate.yaml.
 type Config struct {
-	Keep           KeepConfig             `yaml:"keep"`
-	Guard          GuardConfig            `yaml:"guard"`
-	Identity       IdentityConfig         `yaml:"identity"`
-	Sandbox        SandboxConfig          `yaml:"sandbox"`
-	ProtectedPaths []string               `yaml:"protected_paths"`
-	ManagementAPI  MgmtAPIConfig          `yaml:"management_api"`
-	TokenStore     string                 `yaml:"token_store"`
-	DecisionLogs   DecisionLogBatchConfig `yaml:"decision_logs"`
-	Telemetry      telemetrycfg.Config    `yaml:"telemetry"`
-	Agent          AgentConfig            `yaml:"agent"`
+	Server         cfgloader.ServerConfig     `yaml:"server"`
+	Identity       IdentityConfig             `yaml:"identity"`
+	Peers          PeersConfig                `yaml:"peers"`
+	Responsibility ResponsibilityConfig       `yaml:"responsibility"`
+	Operations     cfgloader.OperationsConfig `yaml:"operations"`
+
+	// Deprecated / Backwards compatibility for internal usage only
+	Agent AgentConfig `yaml:"agent"`
 }
 
-type KeepConfig struct {
-	Endpoint string   `yaml:"endpoint"`
-	Auth     KeepAuth `yaml:"auth"`
+// Validate returns an error if the configuration contains invalid values.
+func (c *Config) Validate() error {
+	if c.Peers.Keep.Endpoint == "" {
+		return fmt.Errorf("peers.keep.endpoint is required")
+	}
+	if err := c.Identity.Validate(); err != nil {
+		return err
+	}
+	if err := c.Peers.Guard.Validate(); err != nil {
+		return err
+	}
+
+	// Validate escalation strategy
+	switch c.Responsibility.Escalation.Strategy {
+	case "", "user-driven", "proactive":
+		// valid
+	default:
+		return fmt.Errorf("invalid responsibility.escalation.strategy %q: must be \"user-driven\" or \"proactive\"", c.Responsibility.Escalation.Strategy)
+	}
+	if c.Responsibility.Escalation.Strategy == "proactive" && c.Peers.Guard.Endpoints.ApprovalUI == "" {
+		return fmt.Errorf("peers.guard.endpoints.approval_ui is required when escalation strategy is \"proactive\"")
+	}
+
+	return nil
 }
 
-type KeepAuth struct {
-	Type     string `yaml:"type"`      // "mtls" | "bearer"
-	Cert     string `yaml:"cert"`      // client certificate for mTLS
-	Key      string `yaml:"key"`       // client key for mTLS
-	Token    string `yaml:"token"`     // bearer token
-	ServerCA string `yaml:"server_ca"` // CA cert for verifying Keep's TLS certificate (enterprise/private CA)
+type PeersConfig struct {
+	Keep  cfgloader.PeerAuth      `yaml:"keep"`
+	Guard GateSpecificGuardConfig `yaml:"guard"`
+}
+
+// GateSpecificGuardConfig holds connection settings for Portcullis-Guard.
+// Behavioral settings (strategy, poll_interval) are in Responsibility.Escalation.
+type GateSpecificGuardConfig struct {
+	cfgloader.GuardPeerConfig `yaml:",inline"`
+}
+
+// resolvedAPIEndpoint returns the endpoint Gate should use for machine-to-machine
+// Guard API calls.
+func (c GateSpecificGuardConfig) resolvedAPIEndpoint() string {
+	if c.Endpoints.TokenAPI != "" {
+		return c.Endpoints.TokenAPI
+	}
+	return c.Endpoints.ApprovalUI
+}
+
+// Validate returns an error if the guard connection config contains invalid values.
+func (c GateSpecificGuardConfig) Validate() error {
+	return nil
 }
 
 type IdentityConfig struct {
-	Source                   string          `yaml:"source"` // "oidc-file" | "oidc-login" | "os"
-	OIDCFile                 OIDCFileConfig  `yaml:"oidc_file"`
-	OIDCLogin                OIDCLoginConfig `yaml:"oidc_login"`
-	LoginCallbackTimeoutSecs int    `yaml:"login_callback_timeout_seconds"` // seconds user has to complete login after StartLogin; default 600
-	LoginCallbackPageFile    string `yaml:"login_callback_page_file"`       // default: embedded
-	UserID                string   `yaml:"user_id"`                  // optional: override user ID when source is "os" (for testing)
-	DisplayName              string          `yaml:"display_name"`                   // optional: override display name when source is "os" (for testing)
-	Groups                   []string        `yaml:"groups"`                         // optional: groups to assign when source is "os" (for testing)
+	Strategy                 string         `yaml:"strategy"` // "oidc-file" | "oidc-login" | "os"
+	Config                   map[string]any `yaml:"config"`
+	LoginCallbackTimeoutSecs int            `yaml:"login_callback_timeout_seconds"` // seconds user has to complete login after StartLogin; default 600
+	LoginCallbackPageFile    string         `yaml:"login_callback_page_file"`       // default: embedded
+
+	// Derived fields populated from Config map during Validate()
+	OIDCFile  OIDCFileConfig  `yaml:"-"`
+	OIDCLogin OIDCLoginConfig `yaml:"-"`
+	OS        OSConfig        `yaml:"-"`
 }
 
 // Validate returns an error if the identity config contains invalid values.
-func (c IdentityConfig) Validate() error {
-	switch c.Source {
+func (c *IdentityConfig) Validate() error {
+	if c.Config != nil {
+		switch c.Strategy {
+		case "oidc-file":
+			if err := mapstructure.Decode(c.Config, &c.OIDCFile); err != nil {
+				return fmt.Errorf("decode identity.config for oidc-file: %w", err)
+			}
+		case "oidc-login":
+			if err := mapstructure.Decode(c.Config, &c.OIDCLogin); err != nil {
+				return fmt.Errorf("decode identity.config for oidc-login: %w", err)
+			}
+		case "os":
+			if err := mapstructure.Decode(c.Config, &c.OS); err != nil {
+				return fmt.Errorf("decode identity.config for os: %w", err)
+			}
+		}
+	}
+
+	switch c.Strategy {
 	case "", "os":
 		// valid
 	case "oidc-file":
 		if c.OIDCFile.TokenFile == "" {
-			return fmt.Errorf("identity.oidc_file.token_file is required when identity.source is \"oidc-file\"")
+			return fmt.Errorf("identity.config.token_file is required when identity.strategy is \"oidc-file\"")
 		}
 	case "oidc-login":
 		if c.OIDCLogin.IssuerURL == "" {
-			return fmt.Errorf("identity.oidc_login.issuer_url is required when identity.source is \"oidc-login\"")
+			return fmt.Errorf("identity.config.issuer_url is required when identity.strategy is \"oidc-login\"")
 		}
 		if c.OIDCLogin.ClientID == "" {
-			return fmt.Errorf("identity.oidc_login.client_id is required when identity.source is \"oidc-login\"")
+			return fmt.Errorf("identity.config.client_id is required when identity.strategy is \"oidc-login\"")
 		}
 		if c.OIDCLogin.Flow != "" && c.OIDCLogin.Flow != "authorization_code" {
-			return fmt.Errorf("identity.oidc_login.flow %q is not supported; only \"authorization_code\" is valid", c.OIDCLogin.Flow)
+			return fmt.Errorf("identity.config.flow %q is not supported; only \"authorization_code\" is valid", c.OIDCLogin.Flow)
 		}
 	default:
-		return fmt.Errorf("invalid identity.source %q: must be \"oidc-file\", \"oidc-login\", or \"os\"", c.Source)
+		return fmt.Errorf("invalid identity.strategy %q: must be \"oidc-file\", \"oidc-login\", or \"os\"", c.Strategy)
 	}
 	return nil
 }
 
 // OIDCFileConfig holds settings for the oidc-file identity source.
 type OIDCFileConfig struct {
-	TokenFile string `yaml:"token_file"`
+	TokenFile string `yaml:"token_file" mapstructure:"token_file"`
 }
 
 // OIDCLoginConfig holds settings for the oidc-login interactive login flow.
 type OIDCLoginConfig struct {
-	IssuerURL    string   `yaml:"issuer_url"`
-	RedirectURI  string   `yaml:"redirect_uri"`  // if blank: http://localhost:{mgmt_port}/auth/callback
-	ClientID     string   `yaml:"client_id"`
-	ClientSecret string   `yaml:"client_secret"` // supports envvar:// etc
-	Scopes       []string `yaml:"scopes"`
-	Flow         string   `yaml:"flow"` // must be "authorization_code"
+	IssuerURL    string   `yaml:"issuer_url" mapstructure:"issuer_url"`
+	RedirectURI  string   `yaml:"redirect_uri" mapstructure:"redirect_uri"`
+	ClientID     string   `yaml:"client_id" mapstructure:"client_id"`
+	ClientSecret string   `yaml:"client_secret" mapstructure:"client_secret"`
+	Scopes       []string `yaml:"scopes" mapstructure:"scopes"`
+	Flow         string   `yaml:"flow" mapstructure:"flow"`
+}
+
+// OSConfig holds overrides for the OS identity source.
+type OSConfig struct {
+	UserID      string   `yaml:"user_id" mapstructure:"user_id"`
+	DisplayName string   `yaml:"display_name" mapstructure:"display_name"`
+	Groups      []string `yaml:"groups" mapstructure:"groups"`
+}
+
+type ResponsibilityConfig struct {
+	Workspace        SandboxConfig          `yaml:"workspace"`
+	Forbidden        ForbiddenConfig        `yaml:"forbidden"`
+	AgentInteraction AgentInteractionConfig `yaml:"agent_interaction"`
+	Escalation       EscalationConfig       `yaml:"escalation"`
+	DecisionLogs     DecisionLogBatchConfig `yaml:"decision_logs"`
+}
+
+type EscalationConfig struct {
+	Strategy     string `yaml:"strategy"`      // "proactive" | "user-driven" (default: "user-driven")
+	PollInterval int    `yaml:"poll_interval"` // seconds between polls (default: 60)
+	TokenStore   string `yaml:"token_store"`
+}
+
+type ForbiddenConfig struct {
+	Directories []string `yaml:"directories"`
+}
+
+type AgentInteractionConfig struct {
+	Instructions      AgentInstructionsConfig `yaml:"instructions"`
+	AllowManualTokens bool                    `yaml:"allow_manual_tokens"`
+}
+
+type AgentInstructionsConfig struct {
+	RequireApproval string `yaml:"require_approval"`
+	Deny            string `yaml:"deny"`
 }
 
 type SandboxConfig struct {
@@ -129,8 +220,6 @@ type SandboxConfig struct {
 }
 
 // EffectiveDirs returns the deduplicated list of configured sandbox directories.
-// Directory is included as the first entry when set and not already present in
-// Directories. Paths are returned as-is; callers are responsible for ~ expansion.
 func (c SandboxConfig) EffectiveDirs() []string {
 	seen := make(map[string]bool)
 	var out []string
@@ -147,133 +236,32 @@ func (c SandboxConfig) EffectiveDirs() []string {
 	return out
 }
 
-// DefaultManagementAPIPort is the port used for the Gate management API when
-// management_api.port is not set in the config.
-const DefaultManagementAPIPort = 7777
-
-type MgmtAPIConfig struct {
-	Port              int    `yaml:"port"`
-	SharedSecret      string `yaml:"shared_secret"`       // optional; empty = no auth
-	AllowManualTokens bool   `yaml:"allow_manual_tokens"` // default false; set true to allow POST /tokens from the UI
-}
-
 type DecisionLogBatchConfig struct {
 	FlushInterval int `yaml:"flush_interval"` // seconds between flushes (default: 30)
 	MaxBatchSize  int `yaml:"max_batch_size"` // max entries per batch (default: 100)
 }
 
-// GuardConfig holds connection settings for the portcullis-guard token claim API.
-// Guard is required to be able to create escalation tokens that can be trusted by
-// the PDP, which is the core of the system. Having said that, a Portcullis system
-// without a Guard can still handle accept / deny (and possibly workflow) responses
-// from the PDP. In essence, Guard is what gives a human the ability to escalate the
-// Agents' authorization privileges for a short time
-//
-// to make this explicit: if you do not have a Portcullis-Guard configuration, we
-// do not offer escalation as an option for the Agent. Without access to Guard, an escalation
-// response from Portcullis-Keep will be treated as a deny.
-//
-// using the metaphor of an actual castle:
-//
-// An agent for a nearby lord walks up to the Gate of Castle Evermoor and seeks to enter to deliver
-// a message to Viscount Evermoor .  But it is late, and the policy is not to let anyone in after
-// dark unless the matter is urgent.  So the agent goes back to his lord, and acquires a signed
-// affadivit indicating that this request is, in fact urgent.
-//   - if there is a Guard at the Gate, the Guard can let the user into the Keep so he can visit the Lord
-//     and deliver the message
-//   - if there is no Guard on duty, it doesn't matter that the agent has a signed affadavit - the Portcullis
-//     is closed, and the agent is denied.
-//
-// Note: technically, a very knowledgeable user with access to the necessary secrets
-// can still make escalation work manually, but it requires creating a JWT by hand using
-// deep knowledge of the Rego structures and policies, and the capabilities
-// of PortcullisGate's web interface
-// GuardAuth holds authentication settings for Gate→Guard machine-to-machine calls.
-type GuardAuth struct {
-	BearerToken string          `yaml:"bearer_token"` // shared secret for Bearer auth; supports envvar:// etc
-	Mtls        MtlsClientConfig `yaml:"mtls"`
-}
+// DefaultManagementAPIPort is the port used for the Gate management API when
+// responsibility.agent_interaction.port is not set.
+const DefaultManagementAPIPort = 7777
 
-// MtlsClientConfig holds the TLS material Gate uses as a client when connecting to Guard.
-type MtlsClientConfig struct {
-	ServerCA   string `yaml:"server_ca"`   // CA cert that signed Guard's server cert; empty = system pool
-	ClientCert string `yaml:"client_cert"` // Gate's client certificate for mTLS
-	ClientKey  string `yaml:"client_key"`  // Gate's client private key for mTLS
-}
+// ManagementUIEndpoint is the key in the server.endpoints map for the Gate
+// management interface.
+const ManagementUIEndpoint = "management_ui"
 
-type GuardConfig struct {
-	// EscalationApprovalEndpoint is the human-facing base URL of portcullis-guard,
-	// used to construct the /approve link shown to the user and their agent.
-	// In production this should be the SSO-proxy-protected address
-	// (e.g. "https://guard.corp.example.com") so that agents cannot self-approve
-	// escalations by fetching the URL programmatically.
-	// See docs/guard-sso-proxy.md for deployment guidance.
-	EscalationApprovalEndpoint string `yaml:"escalation_approval_endpoint"`
+// GuardConfig is an alias for GateSpecificGuardConfig for backward compatibility.
+type GuardConfig = GateSpecificGuardConfig
 
-	// TokenAPIEndpoint is the machine-to-machine base URL used by Gate for
-	// /token/unclaimed/list, /token/claim, and /pending API calls.
-	// Set this to the internal Guard API address when the SSO proxy is on
-	// a separate hostname from the API. Defaults to EscalationApprovalEndpoint
-	// when unset, which is correct for single-hostname deployments.
-	TokenAPIEndpoint string `yaml:"token_api_endpoint"`
-
-	Auth                       GuardAuth `yaml:"auth"`
-	PollInterval               int       `yaml:"poll_interval"`                // seconds between polls of /token/unclaimed/list (default: 60)
-	ApprovalManagementStrategy string    `yaml:"approval_management_strategy"` // "proactive" | "user-driven" (default: "user-driven")
-}
-
-// resolvedAPIEndpoint returns the endpoint Gate should use for machine-to-machine
-// Guard API calls. It returns TokenAPIEndpoint if set, and falls back to
-// EscalationApprovalEndpoint for single-hostname deployments.
-func (c GuardConfig) resolvedAPIEndpoint() string {
-	if c.TokenAPIEndpoint != "" {
-		return c.TokenAPIEndpoint
-	}
-	return c.EscalationApprovalEndpoint
-}
-
-// Validate returns an error if the guard connection config contains invalid values.
-func (c GuardConfig) Validate() error {
-	switch c.ApprovalManagementStrategy {
-	case "", "user-driven", "proactive":
-		// valid
-	default:
-		return fmt.Errorf("invalid approval_management_strategy %q: must be \"user-driven\" or \"proactive\"", c.ApprovalManagementStrategy)
-	}
-	if c.ApprovalManagementStrategy == "proactive" && c.EscalationApprovalEndpoint == "" {
-		return fmt.Errorf("guard.escalation_approval_endpoint is required when approval_management_strategy is \"proactive\"")
-	}
-	return nil
-}
-
-// Validate returns an error if the configuration contains invalid values.
-func (c Config) Validate() error {
-	if c.Keep.Endpoint == "" {
-		return fmt.Errorf("keep.endpoint is required")
-	}
-	if err := c.Identity.Validate(); err != nil {
-		return err
-	}
-	return c.Guard.Validate()
-}
-
-// AgentConfig holds settings that control how Gate communicates with the MCP agent.
+// Deprecated / Backwards compatibility types
 type AgentConfig struct {
 	RequireApproval AgentRequireApprovalConfig `yaml:"require_approval"`
 	Deny            AgentDenyConfig            `yaml:"deny"`
 }
 
-// AgentRequireApprovalConfig controls the message Gate returns to the agent when
-// escalation or workflow approval is required. Supports {reason}, {url}, and
-// {trace_id} template placeholders. If empty, a built-in default is used.
 type AgentRequireApprovalConfig struct {
 	Instructions string `yaml:"instructions"`
 }
 
-// AgentDenyConfig controls the message Gate returns to the agent when a
-// request is denied by policy. Supports {reason} and {trace_id} template
-// placeholders. Omit either placeholder to hide that information from the
-// agent. If empty, a built-in default (including both) is used.
 type AgentDenyConfig struct {
 	Instructions string `yaml:"instructions"`
 }

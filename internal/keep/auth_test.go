@@ -22,13 +22,20 @@ import (
 	"testing"
 
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
+	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
 )
 
 func TestAuthMiddleware_ValidToken(t *testing.T) {
 	cfg := Config{
-		Listen: ListenConfig{
-			Auth: AuthConfig{
-				BearerToken: "test-secret-token",
+		Server: cfgloader.ServerConfig{
+			Endpoints: map[string]cfgloader.EndpointConfig{
+				"main": {
+					Auth: cfgloader.AuthSettings{
+						Credentials: cfgloader.AuthCredentials{
+							BearerToken: "test-secret-token",
+						},
+					},
+				},
 			},
 		},
 	}
@@ -38,7 +45,7 @@ func TestAuthMiddleware_ValidToken(t *testing.T) {
 		pdp:         &mockPDP{decision: "allow", reason: "test"},
 		router:      &mockRouter{},
 		workflow:    &mockWorkflow{},
-		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
+		decisionLog: NewDecisionLogger(cfgloader.DecisionLogConfig{Enabled: false}),
 		normalizer:  &passthroughNormalizer{silenced: true},
 	}
 
@@ -49,7 +56,7 @@ func TestAuthMiddleware_ValidToken(t *testing.T) {
 	reqBody := shared.EnrichedMCPRequest{
 		ServerName: "test",
 		ToolName:   "test-tool",
-		TraceID:  "req-123",
+		TraceID:    "req-123",
 	}
 	body, _ := json.Marshal(reqBody)
 
@@ -66,9 +73,15 @@ func TestAuthMiddleware_ValidToken(t *testing.T) {
 
 func TestAuthMiddleware_InvalidToken(t *testing.T) {
 	cfg := Config{
-		Listen: ListenConfig{
-			Auth: AuthConfig{
-				BearerToken: "test-secret-token",
+		Server: cfgloader.ServerConfig{
+			Endpoints: map[string]cfgloader.EndpointConfig{
+				"main": {
+					Auth: cfgloader.AuthSettings{
+						Credentials: cfgloader.AuthCredentials{
+							BearerToken: "test-secret-token",
+						},
+					},
+				},
 			},
 		},
 	}
@@ -78,7 +91,7 @@ func TestAuthMiddleware_InvalidToken(t *testing.T) {
 		pdp:         &mockPDP{decision: "allow", reason: "test"},
 		router:      &mockRouter{},
 		workflow:    &mockWorkflow{},
-		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
+		decisionLog: NewDecisionLogger(cfgloader.DecisionLogConfig{Enabled: false}),
 		normalizer:  &passthroughNormalizer{silenced: true},
 	}
 
@@ -89,7 +102,7 @@ func TestAuthMiddleware_InvalidToken(t *testing.T) {
 	reqBody := shared.EnrichedMCPRequest{
 		ServerName: "test",
 		ToolName:   "test-tool",
-		TraceID:  "req-123",
+		TraceID:    "req-123",
 	}
 	body, _ := json.Marshal(reqBody)
 
@@ -139,9 +152,15 @@ func TestAuthMiddleware_InvalidToken(t *testing.T) {
 
 func TestAuthMiddleware_Disabled(t *testing.T) {
 	cfg := Config{
-		Listen: ListenConfig{
-			Auth: AuthConfig{
-				BearerToken: "", // Empty = auth disabled
+		Server: cfgloader.ServerConfig{
+			Endpoints: map[string]cfgloader.EndpointConfig{
+				"main": {
+					Auth: cfgloader.AuthSettings{
+						Credentials: cfgloader.AuthCredentials{
+							BearerToken: "", // Empty = auth disabled
+						},
+					},
+				},
 			},
 		},
 	}
@@ -151,29 +170,25 @@ func TestAuthMiddleware_Disabled(t *testing.T) {
 		pdp:         &mockPDP{decision: "allow", reason: "test"},
 		router:      &mockRouter{},
 		workflow:    &mockWorkflow{},
-		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
+		decisionLog: NewDecisionLogger(cfgloader.DecisionLogConfig{Enabled: false}),
 		normalizer:  &passthroughNormalizer{silenced: true},
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /call", srv.handleCall)
 
-	// When bearer_token is empty, authMiddleware should not be applied
-	// So we test directly with mux, not wrapped
 	reqBody := shared.EnrichedMCPRequest{
 		ServerName: "test",
 		ToolName:   "test-tool",
-		TraceID:  "req-123",
+		TraceID:    "req-123",
 	}
 	body, _ := json.Marshal(reqBody)
 
 	req := httptest.NewRequest(http.MethodPost, "/call", bytes.NewReader(body))
-	// No Authorization header
 	w := httptest.NewRecorder()
 
 	mux.ServeHTTP(w, req)
 
-	// Should not return 401 when auth is disabled
 	if w.Code == http.StatusUnauthorized {
 		t.Error("request should pass when bearer auth is disabled")
 	}

@@ -23,7 +23,7 @@ import (
 )
 
 func TestNewEscalationSigner_NoKey(t *testing.T) {
-	signer, err := NewEscalationSigner(SigningConfig{})
+	signer, err := NewEscalationSigner(IssuanceConfig{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -33,7 +33,7 @@ func TestNewEscalationSigner_NoKey(t *testing.T) {
 }
 
 func TestNewEscalationSigner_WithKey(t *testing.T) {
-	signer, err := NewEscalationSigner(SigningConfig{Key: "secret-key", TTL: 3600})
+	signer, err := NewEscalationSigner(IssuanceConfig{SigningKey: "secret-key", TTL: 3600})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestNewEscalationSigner_WithKey(t *testing.T) {
 }
 
 func TestEscalationSigner_Sign(t *testing.T) {
-	signer, _ := NewEscalationSigner(SigningConfig{Key: "test-signing-key", TTL: 3600})
+	signer, _ := NewEscalationSigner(IssuanceConfig{SigningKey: "test-signing-key", TTL: 3600})
 
 	req := shared.EnrichedMCPRequest{
 		ServerName: "github",
@@ -110,7 +110,7 @@ func TestEscalationSigner_Sign(t *testing.T) {
 
 func TestEscalationSigner_Sign_DefaultTTL(t *testing.T) {
 	// TTL=0 should default to 24 hours.
-	signer, _ := NewEscalationSigner(SigningConfig{Key: "k", TTL: 0})
+	signer, _ := NewEscalationSigner(IssuanceConfig{SigningKey: "k", TTL: 0})
 	req := shared.EnrichedMCPRequest{
 		ServerName: "s",
 		ToolName:   "t",
@@ -141,7 +141,7 @@ func TestEscalationSigner_Sign_DefaultTTL(t *testing.T) {
 }
 
 func TestEscalationSigner_Sign_CustomTTL(t *testing.T) {
-	signer, _ := NewEscalationSigner(SigningConfig{Key: "k", TTL: 7200}) // 2 hours
+	signer, _ := NewEscalationSigner(IssuanceConfig{SigningKey: "k", TTL: 7200}) // 2 hours
 	req := shared.EnrichedMCPRequest{
 		ServerName: "s",
 		ToolName:   "t",
@@ -174,7 +174,7 @@ func TestEscalationSigner_Sign_NilSigner(t *testing.T) {
 
 func TestEscalationSigner_Sign_NilScope(t *testing.T) {
 	// nil scope should produce a valid token with no scope field.
-	signer, _ := NewEscalationSigner(SigningConfig{Key: "k", TTL: 60})
+	signer, _ := NewEscalationSigner(IssuanceConfig{SigningKey: "k", TTL: 60})
 	req := shared.EnrichedMCPRequest{
 		ServerName: "s",
 		ToolName:   "t",

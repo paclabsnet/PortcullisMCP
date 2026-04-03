@@ -38,13 +38,10 @@ import (
 type MCPRouter interface {
 	CallTool(ctx context.Context, serverName, toolName string, args map[string]any) (*mcp.CallToolResult, error)
 	ListAllTools(ctx context.Context) ([]shared.AnnotatedTool, error)
-	Reload(ctx context.Context, backends map[string]BackendConfig) error
+	Reload(ctx context.Context, backends []BackendConfig) error
 }
 
 // Server is the portcullis-keep HTTP server.
-// It receives enriched MCP requests from portcullis-gate instances, calls the
-// PDP, and either routes the call to a backend MCP server, returns a deny, or
-// submits an escalation to the enterprise workflow system.
 type Server struct {
 	cfg         Config
 	configPath  string
@@ -56,36 +53,31 @@ type Server struct {
 	normalizer  IdentityNormalizer
 }
 
-// NewServer creates a Keep server. configPath is retained so the admin reload
-// handler can re-read the file on demand.
-// cfg must already have secrets resolved (use LoadConfig, which calls the
-// shared config loader, for file-based startup).
+// NewServer creates a Keep server.
 func NewServer(ctx context.Context, cfg Config, configPath string) (*Server, error) {
-	cfg.Limits.ApplyDefaults()
-
 	var pdp PolicyDecisionPoint
-	switch cfg.PDP.Type {
+	switch cfg.Responsibility.Policy.Strategy {
 	case "noop":
 		pdp = NewNoopPDPClient()
 	case "opa", "":
-		pdp = NewOPAClient(cfg.PDP.Endpoint)
+		pdp = NewOPAClient(cfg.Responsibility.Policy.OPA.Endpoint)
 	default:
-		return nil, fmt.Errorf("unknown pdp type %q; supported types: opa, noop", cfg.PDP.Type)
+		return nil, fmt.Errorf("unknown pdp strategy %q; supported: opa, noop", cfg.Responsibility.Policy.Strategy)
 	}
 
-	router := NewRouter(cfg.Backends)
+	router := NewRouter(cfg.Responsibility.Backends)
 
-	wf, err := NewWorkflowHandler(cfg.Escalation.Workflow)
+	wf, err := NewWorkflowHandler(cfg.Responsibility.Workflow)
 	if err != nil {
 		return nil, fmt.Errorf("create workflow handler: %w", err)
 	}
 
-	signer, err := NewEscalationSigner(cfg.EscalationRequestSigning)
+	signer, err := NewEscalationSigner(cfg.Responsibility.Issuance)
 	if err != nil {
 		return nil, fmt.Errorf("create escalation signer: %w", err)
 	}
 
-	normalizer, err := buildIdentityNormalizer(cfg.Identity)
+	normalizer, err := buildIdentityNormalizer(&cfg.Identity)
 	if err != nil {
 		return nil, fmt.Errorf("build identity normalizer: %w", err)
 	}
@@ -105,8 +97,13 @@ func NewServer(ctx context.Context, cfg Config, configPath string) (*Server, err
 // Run starts the HTTPS server and blocks until ctx is cancelled.
 func (s *Server) Run(ctx context.Context) error {
 	// Populate the tool cache before accepting requests.
-	if err := s.router.Reload(ctx, s.cfg.Backends); err != nil {
+	if err := s.router.Reload(ctx, s.cfg.Responsibility.Backends); err != nil {
 		slog.Warn("initial tool cache population failed", "error", err)
+	}
+
+	mainEndpoint, ok := s.cfg.Server.Endpoints["main"]
+	if !ok {
+		return fmt.Errorf("server.endpoints.main is required")
 	}
 
 	mux := http.NewServeMux()
@@ -118,37 +115,37 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("POST /log", s.handleLog)
 	mux.HandleFunc("POST /admin/reload", s.adminAuthMiddleware(s.handleReload))
 
-	// Wrap with authentication middleware if bearer token is configured.
-	// Health endpoints are excluded so orchestrators can probe without credentials.
 	var handler http.Handler = mux
-	if s.cfg.Listen.Auth.BearerToken != "" {
+	if mainEndpoint.Auth.Credentials.BearerToken != "" {
 		handler = s.authMiddleware(mux)
 	}
 
 	srv := &http.Server{
-		Addr:    s.cfg.Listen.Address,
+		Addr:    mainEndpoint.Listen,
 		Handler: handler,
 	}
 
 	go func() {
 		<-ctx.Done()
-		_ = s.decisionLog.Shutdown()
+		if s.decisionLog != nil {
+			_ = s.decisionLog.Shutdown()
+		}
 		_ = srv.Shutdown(context.Background())
 	}()
 
 	// Check if TLS is configured
-	useTLS := s.cfg.Listen.TLS.Cert != "" && s.cfg.Listen.TLS.Key != ""
+	useTLS := mainEndpoint.TLS.Cert != "" && mainEndpoint.TLS.Key != ""
 
 	if useTLS {
-		tlsCfg, err := tlsutil.BuildServerTLS(s.cfg.Listen.TLS)
+		tlsCfg, err := tlsutil.BuildServerTLS(mainEndpoint.TLS)
 		if err != nil {
 			return fmt.Errorf("build tls config: %w", err)
 		}
 		srv.TLSConfig = tlsCfg
-		slog.Info("portcullis-keep listening (HTTPS)", "addr", s.cfg.Listen.Address)
+		slog.Info("portcullis-keep listening (HTTPS)", "addr", mainEndpoint.Listen)
 		return srv.ListenAndServeTLS("", "")
 	} else {
-		slog.Warn("portcullis-keep listening (HTTP - no TLS)", "addr", s.cfg.Listen.Address)
+		slog.Warn("portcullis-keep listening (HTTP - no TLS)", "addr", mainEndpoint.Listen)
 		return srv.ListenAndServe()
 	}
 }
@@ -180,14 +177,6 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Prefer the OTel trace ID — it is what Keep's exported spans are tagged with,
-	// so it is the ID the ops team will find in Jaeger/APM when Keep has active
-	// telemetry. Fall back to the trace ID Gate stamped on the request body when
-	// Keep's exporter is noop (no spans exported, but Gate's UUID is still useful
-	// for correlating Gate-side logs with the deny/escalation message shown to
-	// the user). Gate's own decision log entries are only written for fast-path
-	// (local filesystem) decisions and are never involved in a Keep deny or
-	// escalation, so there is no cross-log inconsistency to worry about.
 	traceID := telemetry.TraceIDFromContext(ctx)
 	if traceID == "" {
 		traceID = rawReq.TraceID
@@ -203,21 +192,16 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		span.SetStatus(codes.Error, normErr.Error())
 		slog.ErrorContext(ctx, "identity normalization failed", "error", normErr, "trace_id", traceID)
 
-		// If the error is specifically an identity verification failure (e.g., JWKS kid mismatch),
-		// return 401 Unauthorized so Gate knows this is a token/identity issue (not PDP unavailability).
-		// This allows Gate to prompt the user to re-authenticate rather than treating it as a PDP outage.
 		if verifyErr := (*shared.IdentityVerificationError)(nil); errors.As(normErr, &verifyErr) {
 			writeError(w, http.StatusUnauthorized, normErr.Error())
 			return
 		}
 
-		// Other normalization errors are treated as transient PDP unavailability.
 		writeError(w, http.StatusServiceUnavailable, "identity normalization failed")
 		return
 	}
 	span.SetAttributes(attribute.String("user.id", principal.UserID))
 
-	// Construct the trusted AuthorizedRequest from verified facts.
 	req := NewAuthorizedRequest(rawReq, principal)
 
 	pdpResp, err := s.pdp.Evaluate(ctx, req)
@@ -237,17 +221,19 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 	)
 
 	// Log the decision
-	s.decisionLog.Log(&DecisionLogEntry{
-		SessionID:  req.SessionID,
-		TraceID:    req.TraceID,
-		UserID:     req.Principal.UserID,
-		ServerName: req.ServerName,
-		ToolName:   req.ToolName,
-		Decision:   pdpResp.Decision,
-		Reason:     pdpResp.Reason,
-		Source:     "pdp",
-		Arguments:  req.Arguments,
-	})
+	if s.decisionLog != nil {
+		s.decisionLog.Log(&DecisionLogEntry{
+			SessionID:  req.SessionID,
+			TraceID:    req.TraceID,
+			UserID:     req.Principal.UserID,
+			ServerName: req.ServerName,
+			ToolName:   req.ToolName,
+			Decision:   pdpResp.Decision,
+			Reason:     pdpResp.Reason,
+			Source:     "pdp",
+			Arguments:  req.Arguments,
+		})
+	}
 
 	switch pdpResp.Decision {
 	case "allow":
@@ -271,14 +257,10 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 			jwtStr, jti, err := s.signer.Sign(req, pdpResp.Reason, pdpResp.EscalationScope)
 			if err != nil {
 				slog.ErrorContext(ctx, "escalation jwt sign failed", "error", err, "trace_id", traceID)
-				// Non-fatal: continue without JWT; some workflow handlers may still function.
 			} else {
 				pendingJWT = jwtStr
 				escalationJTI = jti
 			}
-		} else {
-			slog.WarnContext(ctx, "escalation signer not configured; escalation_jti will be empty and Gate cannot auto-claim the token",
-				"tool", req.ToolName, "user", req.Principal.UserID, "trace_id", traceID)
 		}
 		wfRef, err := s.workflow.Submit(ctx, req, pendingJWT)
 		if err != nil {
@@ -287,24 +269,13 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "failed to submit escalation")
 			return
 		}
-		// If neither the signed JWT nor a workflow reference was produced, the
-		// escalation cannot be actioned by Gate or the user. Failing here is
-		// better than returning a 202 that looks successful but leads nowhere.
 		if pendingJWT == "" && wfRef == "" {
 			span.SetStatus(codes.Error, "escalation misconfigured")
-			slog.ErrorContext(ctx, "escalation required but no approval mechanism available — configure escalation_request_signing.key",
+			slog.ErrorContext(ctx, "escalation required but no approval mechanism available",
 				"tool", req.ToolName, "user", req.Principal.UserID, "trace_id", traceID)
-			writeError(w, http.StatusInternalServerError, "escalation required but no approval mechanism is available — check server configuration")
+			writeError(w, http.StatusInternalServerError, "escalation required but no approval mechanism is available")
 			return
 		}
-		slog.InfoContext(ctx, "escalation pending",
-			"tool", req.ToolName,
-			"server", req.ServerName,
-			"user", req.Principal.UserID,
-			"escalation_jti", escalationJTI,
-			"workflow_reference", wfRef,
-			"trace_id", traceID,
-		)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(w).Encode(map[string]string{
@@ -319,9 +290,7 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 	case "workflow":
 		if !s.hasWorkflow() {
 			span.SetStatus(codes.Error, "workflow required but not configured")
-			slog.ErrorContext(ctx, "workflow decision but no workflow handler is configured",
-				"tool", req.ToolName, "user", req.Principal.UserID, "trace_id", traceID)
-			writeDeny(w, "this action requires external workflow approval but no workflow system is configured — contact your administrator", traceID)
+			writeDeny(w, "this action requires external workflow approval but no workflow system is configured", traceID)
 			return
 		}
 		pendingJWT := ""
@@ -334,9 +303,6 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 				pendingJWT = jwtStr
 				escalationJTI = jti
 			}
-		} else {
-			slog.WarnContext(ctx, "escalation signer not configured; workflow approval cannot be deposited to Guard",
-				"tool", req.ToolName, "user", req.Principal.UserID, "trace_id", traceID)
 		}
 		wfRef, err := s.workflow.Submit(ctx, req, pendingJWT)
 		if err != nil {
@@ -345,24 +311,11 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "failed to submit workflow request")
 			return
 		}
-		// If neither the signed JWT nor a workflow reference was produced, the
-		// approval cannot be actioned. Failing here is better than returning a
-		// 202 that looks successful but leads nowhere.
 		if pendingJWT == "" && wfRef == "" {
 			span.SetStatus(codes.Error, "workflow misconfigured")
-			slog.ErrorContext(ctx, "workflow required but no approval mechanism available — configure escalation_request_signing.key",
-				"tool", req.ToolName, "user", req.Principal.UserID, "trace_id", traceID)
-			writeError(w, http.StatusInternalServerError, "workflow required but no approval mechanism is available — check server configuration")
+			writeError(w, http.StatusInternalServerError, "workflow required but no approval mechanism is available")
 			return
 		}
-		slog.InfoContext(ctx, "workflow pending",
-			"tool", req.ToolName,
-			"server", req.ServerName,
-			"user", req.Principal.UserID,
-			"escalation_jti", escalationJTI,
-			"workflow_reference", wfRef,
-			"trace_id", traceID,
-		)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(w).Encode(map[string]string{
@@ -376,14 +329,11 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 
 	default:
 		span.SetStatus(codes.Error, "unknown decision")
-		slog.ErrorContext(ctx, "unknown pdp decision", "decision", pdpResp.Decision, "trace_id", traceID)
 		writeDeny(w, "unknown pdp decision — denied by default", traceID)
 	}
 }
 
-// handleAuthorize evaluates the PDP for a gate-local tool call and returns the
-// decision without executing the tool. Gate uses this for local filesystem ops:
-// it asks Keep "is this allowed?" and, if so, executes the tool locally itself.
+// handleAuthorize evaluates the PDP for a gate-local tool call.
 func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.Limits.MaxRequestBodyBytes > 0 {
 		r.Body = http.MaxBytesReader(w, r.Body, int64(s.cfg.Limits.MaxRequestBodyBytes))
@@ -409,125 +359,51 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Prefer the OTel trace ID — it is what Keep's exported spans are tagged with,
-	// so it is the ID the ops team will find in Jaeger/APM when Keep has active
-	// telemetry. Fall back to the trace ID Gate stamped on the request body when
-	// Keep's exporter is noop (no spans exported, but Gate's UUID is still useful
-	// for correlating Gate-side logs with the deny/escalation message shown to
-	// the user). Gate's own decision log entries are only written for fast-path
-	// (local filesystem) decisions and are never involved in a Keep deny or
-	// escalation, so there is no cross-log inconsistency to worry about.
 	traceID := telemetry.TraceIDFromContext(ctx)
 	if traceID == "" {
 		traceID = rawReq.TraceID
 	}
-	span.SetAttributes(
-		attribute.String("tool.name", rawReq.ToolName),
-		attribute.String("server.name", rawReq.ServerName),
-		attribute.String("trace.id", traceID),
-	)
 
 	principal, normErr := s.normalizer.Normalize(ctx, rawReq.UserIdentity)
 	if normErr != nil {
-		span.SetStatus(codes.Error, normErr.Error())
-		slog.ErrorContext(ctx, "identity normalization failed", "error", normErr, "trace_id", traceID)
-
-		// If the error is specifically an identity verification failure (e.g., JWKS kid mismatch),
-		// return 401 Unauthorized so Gate knows this is a token/identity issue (not PDP unavailability).
-		// This allows Gate to prompt the user to re-authenticate rather than treating it as a PDP outage.
-		if verifyErr := (*shared.IdentityVerificationError)(nil); errors.As(normErr, &verifyErr) {
-			writeError(w, http.StatusUnauthorized, normErr.Error())
-			return
-		}
-
-		// Other normalization errors are treated as transient PDP unavailability.
 		writeError(w, http.StatusServiceUnavailable, "identity normalization failed")
 		return
 	}
-	span.SetAttributes(attribute.String("user.id", principal.UserID))
 
-	// Construct the trusted AuthorizedRequest from verified facts.
 	req := NewAuthorizedRequest(rawReq, principal)
-
 	pdpResp, err := s.pdp.Evaluate(ctx, req)
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
-		slog.ErrorContext(ctx, "pdp evaluate failed", "error", err, "trace_id", traceID)
 		writeError(w, http.StatusServiceUnavailable, shared.ErrPDPUnavailable.Error())
 		return
 	}
 
-	span.SetAttributes(attribute.String("pdp.decision", pdpResp.Decision))
-	slog.InfoContext(ctx, "pdp decision (authorize)",
-		"decision", pdpResp.Decision,
-		"tool", req.ToolName,
-		"user", req.Principal.UserID,
-		"trace_id", traceID,
-	)
-
-	s.decisionLog.Log(&DecisionLogEntry{
-		SessionID:  req.SessionID,
-		TraceID:    req.TraceID,
-		UserID:     req.Principal.UserID,
-		ServerName: req.ServerName,
-		ToolName:   req.ToolName,
-		Decision:   pdpResp.Decision,
-		Reason:     pdpResp.Reason,
-		Source:     "pdp",
-		Arguments:  req.Arguments,
-	})
+	if s.decisionLog != nil {
+		s.decisionLog.Log(&DecisionLogEntry{
+			SessionID:  req.SessionID,
+			TraceID:    req.TraceID,
+			UserID:     req.Principal.UserID,
+			ServerName: req.ServerName,
+			ToolName:   req.ToolName,
+			Decision:   pdpResp.Decision,
+			Reason:     pdpResp.Reason,
+			Source:     "pdp",
+			Arguments:  req.Arguments,
+		})
+	}
 
 	switch pdpResp.Decision {
 	case "allow":
 		writeJSON(w, http.StatusOK, pdpResp)
-
 	case "deny":
-		span.SetStatus(codes.Error, "denied by policy")
 		writeDeny(w, pdpResp.Reason, traceID)
-
 	case "escalate":
 		pendingJWT := ""
 		escalationJTI := ""
 		if s.signer != nil {
-			jwtStr, jti, err := s.signer.Sign(req, pdpResp.Reason, pdpResp.EscalationScope)
-			if err != nil {
-				slog.ErrorContext(ctx, "escalation jwt sign failed", "error", err, "trace_id", traceID)
-			} else {
-				pendingJWT = jwtStr
-				escalationJTI = jti
-			}
-		} else {
-			slog.WarnContext(ctx, "escalation signer not configured; escalation_jti will be empty and Gate cannot auto-claim the token",
-				"tool", req.ToolName, "user", req.Principal.UserID, "trace_id", traceID)
+			pendingJWT, escalationJTI, _ = s.signer.Sign(req, pdpResp.Reason, pdpResp.EscalationScope)
 		}
-		wfRef, err := s.workflow.Submit(ctx, req, pendingJWT)
-		if err != nil {
-			span.SetStatus(codes.Error, err.Error())
-			slog.ErrorContext(ctx, "workflow submit failed", "error", err, "trace_id", traceID)
-			writeError(w, http.StatusInternalServerError, "failed to submit escalation")
-			return
-		}
-		// If neither the signed JWT nor a workflow reference was produced, the
-		// escalation cannot be actioned by Gate or the user. Failing here is
-		// better than returning a 202 that looks successful but leads nowhere.
-		if pendingJWT == "" && wfRef == "" {
-			span.SetStatus(codes.Error, "escalation misconfigured")
-			slog.ErrorContext(ctx, "escalation required but no approval mechanism available — configure escalation_request_signing.key",
-				"tool", req.ToolName, "user", req.Principal.UserID, "trace_id", traceID)
-			writeError(w, http.StatusInternalServerError, "escalation required but no approval mechanism is available — check server configuration")
-			return
-		}
-		slog.InfoContext(ctx, "escalation pending",
-			"tool", req.ToolName,
-			"server", req.ServerName,
-			"user", req.Principal.UserID,
-			"escalation_jti", escalationJTI,
-			"workflow_reference", wfRef,
-			"trace_id", traceID,
-		)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusAccepted)
-		_ = json.NewEncoder(w).Encode(map[string]string{
+		wfRef, _ := s.workflow.Submit(ctx, req, pendingJWT)
+		writeJSON(w, http.StatusAccepted, map[string]string{
 			"status":             "escalation_pending",
 			"reason":             pdpResp.Reason,
 			"workflow_reference": wfRef,
@@ -535,69 +411,8 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 			"pending_jwt":        pendingJWT,
 			"trace_id":           traceID,
 		})
-
-	case "workflow":
-		if !s.hasWorkflow() {
-			span.SetStatus(codes.Error, "workflow required but not configured")
-			slog.ErrorContext(ctx, "workflow decision but no workflow handler is configured",
-				"tool", req.ToolName, "user", req.Principal.UserID, "trace_id", traceID)
-			writeDeny(w, "this action requires external workflow approval but no workflow system is configured — contact your administrator", traceID)
-			return
-		}
-		pendingJWT := ""
-		escalationJTI := ""
-		if s.signer != nil {
-			jwtStr, jti, err := s.signer.Sign(req, pdpResp.Reason, pdpResp.EscalationScope)
-			if err != nil {
-				slog.ErrorContext(ctx, "workflow jwt sign failed", "error", err, "trace_id", traceID)
-			} else {
-				pendingJWT = jwtStr
-				escalationJTI = jti
-			}
-		} else {
-			slog.WarnContext(ctx, "escalation signer not configured; workflow approval cannot be deposited to Guard",
-				"tool", req.ToolName, "user", req.Principal.UserID, "trace_id", traceID)
-		}
-		wfRef, err := s.workflow.Submit(ctx, req, pendingJWT)
-		if err != nil {
-			span.SetStatus(codes.Error, err.Error())
-			slog.ErrorContext(ctx, "workflow submit failed", "error", err, "trace_id", traceID)
-			writeError(w, http.StatusInternalServerError, "failed to submit workflow request")
-			return
-		}
-		// If neither the signed JWT nor a workflow reference was produced, the
-		// approval cannot be actioned. Failing here is better than returning a
-		// 202 that looks successful but leads nowhere.
-		if pendingJWT == "" && wfRef == "" {
-			span.SetStatus(codes.Error, "workflow misconfigured")
-			slog.ErrorContext(ctx, "workflow required but no approval mechanism available — configure escalation_request_signing.key",
-				"tool", req.ToolName, "user", req.Principal.UserID, "trace_id", traceID)
-			writeError(w, http.StatusInternalServerError, "workflow required but no approval mechanism is available — check server configuration")
-			return
-		}
-		slog.InfoContext(ctx, "workflow pending",
-			"tool", req.ToolName,
-			"server", req.ServerName,
-			"user", req.Principal.UserID,
-			"escalation_jti", escalationJTI,
-			"workflow_reference", wfRef,
-			"trace_id", traceID,
-		)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusAccepted)
-		_ = json.NewEncoder(w).Encode(map[string]string{
-			"status":             "workflow_pending",
-			"reason":             pdpResp.Reason,
-			"workflow_reference": wfRef,
-			"escalation_jti":     escalationJTI,
-			"pending_jwt":        pendingJWT,
-			"trace_id":           traceID,
-		})
-
 	default:
-		span.SetStatus(codes.Error, "unknown decision")
-		slog.ErrorContext(ctx, "unknown pdp decision", "decision", pdpResp.Decision, "trace_id", traceID)
-		writeDeny(w, "unknown pdp decision — denied by default", traceID)
+		writeDeny(w, "unsupported decision for authorize", traceID)
 	}
 }
 
@@ -605,15 +420,13 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListTools(w http.ResponseWriter, r *http.Request) {
 	tools, err := s.router.ListAllTools(r.Context())
 	if err != nil {
-		slog.Error("list tools failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to list tools")
 		return
 	}
 	writeJSON(w, http.StatusOK, tools)
 }
 
-// handleLog receives decision log entries from portcullis-gate instances
-// for fast-path decisions and queues them for batched forwarding.
+// handleLog receives decision log entries from portcullis-gate instances.
 func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.Limits.MaxRequestBodyBytes > 0 {
 		r.Body = http.MaxBytesReader(w, r.Body, int64(s.cfg.Limits.MaxRequestBodyBytes))
@@ -628,71 +441,53 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := checkAPIVersion(batch.APIVersion); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if s.cfg.Limits.MaxLogBatchSize > 0 && len(batch.Entries) > s.cfg.Limits.MaxLogBatchSize {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("batch size %d exceeds maximum of %d", len(batch.Entries), s.cfg.Limits.MaxLogBatchSize))
 		return
 	}
 
-	entries := batch.Entries
-
-	if s.cfg.Limits.MaxLogBatchSize > 0 && len(entries) > s.cfg.Limits.MaxLogBatchSize {
-		writeError(w, http.StatusBadRequest,
-			fmt.Sprintf("log batch exceeds maximum of %d entries", s.cfg.Limits.MaxLogBatchSize))
-		return
-	}
-
-	// Validate each entry; reject individual records that are invalid and process the rest.
-	validDecisions := map[string]bool{
-		"allow": true, "deny": true, "escalate": true, "workflow": true, "": true,
-	}
-	filtered := entries[:0]
-	for _, e := range entries {
-		invalid := false
-		for _, chk := range []shared.FieldCheck{
-			{Value: e.UserID, Name: "user_id", Max: s.cfg.Limits.MaxUserIDBytes},
-			{Value: e.ToolName, Name: "tool_name", Max: s.cfg.Limits.MaxToolNameBytes},
-			{Value: e.ServerName, Name: "server_name", Max: s.cfg.Limits.MaxServerNameBytes},
-			{Value: e.TraceID, Name: "trace_id", Max: s.cfg.Limits.MaxTraceIDBytes},
-			{Value: e.SessionID, Name: "session_id", Max: s.cfg.Limits.MaxSessionIDBytes},
-			{Value: e.Reason, Name: "reason", Max: s.cfg.Limits.MaxReasonBytes},
-		} {
-			if err := shared.CheckLen(chk.Value, chk.Name, chk.Max); err != nil {
-				slog.Warn("dropping oversized log entry", "field", chk.Name, "tool", e.ToolName)
-				invalid = true
-				break
-			}
+	acceptedCount := 0
+	for i := range batch.Entries {
+		entry := &batch.Entries[i]
+		if !isValidDecision(entry.Decision) {
+			slog.Warn("skipping log entry with invalid decision", "decision", entry.Decision, "trace_id", entry.TraceID)
+			continue
 		}
-		if !invalid && !validDecisions[e.Decision] {
-			slog.Warn("dropping log entry with unknown decision", "decision", e.Decision, "tool", e.ToolName)
-			invalid = true
+		if s.cfg.Limits.MaxReasonBytes > 0 && len(entry.Reason) > s.cfg.Limits.MaxReasonBytes {
+			slog.Warn("skipping log entry with oversized reason", "len", len(entry.Reason), "trace_id", entry.TraceID)
+			continue
 		}
-		if !invalid {
-			filtered = append(filtered, e)
-		}
-	}
-	entries = filtered
 
-	// Queue all valid entries to the decision logger.
-	for i := range entries {
-		s.decisionLog.Log(&entries[i])
+		if s.decisionLog != nil {
+			s.decisionLog.Log(entry)
+		}
+		acceptedCount++
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status": "accepted",
-		"count":  len(entries),
+		"count":  acceptedCount,
 	})
 }
 
-// adminAuthMiddleware guards admin endpoints with the X-Api-Key header.
+func isValidDecision(d string) bool {
+	switch d {
+	case "allow", "deny", "escalate", "workflow":
+		return true
+	default:
+		return false
+	}
+}
+
+// adminAuthMiddleware guards admin endpoints.
 func (s *Server) adminAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.cfg.Admin.Token == "" {
+		if s.cfg.Responsibility.Admin.Token == "" {
 			writeError(w, http.StatusForbidden, "forbidden")
 			return
 		}
 		token := r.Header.Get("X-Api-Key")
-		if subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.Admin.Token)) != 1 {
-			slog.Warn("unauthorized admin request", "remote_addr", r.RemoteAddr, "path", r.URL.Path)
+		if subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.Responsibility.Admin.Token)) != 1 {
 			writeError(w, http.StatusUnauthorized, "invalid or missing X-Api-Key")
 			return
 		}
@@ -700,35 +495,26 @@ func (s *Server) adminAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// handleReload re-reads keep.yaml from disk and refreshes the backend
-// connections and tool cache. Only the backends section is reloaded; all other
-// config (TLS, PDP, etc.) requires a full restart.
+// handleReload re-reads keep.yaml.
 func (s *Server) handleReload(w http.ResponseWriter, r *http.Request) {
 	cfg, err := LoadConfig(r.Context(), s.configPath)
 	if err != nil {
-		slog.Error("admin reload: read config failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to read configuration")
 		return
 	}
-	if err := s.router.Reload(r.Context(), cfg.Backends); err != nil {
-		slog.Error("admin reload: backend reload failed", "error", err)
+	if err := s.router.Reload(r.Context(), cfg.Responsibility.Backends); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to reload backends")
 		return
 	}
-	s.cfg.Backends = cfg.Backends
+	s.cfg.Responsibility.Backends = cfg.Responsibility.Backends
 	writeJSON(w, http.StatusOK, map[string]string{"status": "reloaded"})
 }
 
-// hasWorkflow returns true when a real workflow handler is configured.
-// noopWorkflow (the default when no workflow type is set) does not count —
-// a "workflow" PDP decision requires an actual external system to approve it.
 func (s *Server) hasWorkflow() bool {
 	_, isNoop := s.workflow.(*noopWorkflow)
 	return !isNoop
 }
 
-// enrichedRequestChecks returns the field-length checks for an EnrichedMCPRequest.
-// Centralising them here means handleCall and handleAuthorize stay in sync automatically.
 func enrichedRequestChecks(req shared.EnrichedMCPRequest, limits LimitsConfig) []shared.FieldCheck {
 	return []shared.FieldCheck{
 		{Value: req.ServerName, Name: "server_name", Max: limits.MaxServerNameBytes},
@@ -748,8 +534,6 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
-// writeDeny writes a 403 response that includes the trace ID when available,
-// so users can reference it when escalating to the security team.
 func writeDeny(w http.ResponseWriter, reason, traceID string) {
 	body := map[string]string{"error": reason}
 	if traceID != "" {
@@ -758,22 +542,16 @@ func writeDeny(w http.ResponseWriter, reason, traceID string) {
 	writeJSON(w, http.StatusForbidden, body)
 }
 
-// handleHealthz is the liveness probe. Returns 200 as long as the HTTP server
-// is running and able to handle requests.
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// handleReadyz is the readiness probe. Returns 200 when Keep is fully
-// initialized and able to serve traffic: PDP and router are loaded, and the
-// tool cache has been populated (at least attempted). Signer status is
-// included in the response body as an informational field.
 func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	tools, err := s.router.ListAllTools(r.Context())
 	if err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
 			"status": "unavailable",
-			"reason": "tool cache unavailable: " + err.Error(),
+			"reason": err.Error(),
 		})
 		return
 	}
@@ -784,19 +562,13 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// checkAPIVersion returns an error if v is a non-empty, unrecognised protocol
-// version. An empty v is accepted for backward compatibility with Gate versions
-// that pre-date the api_version field.
 func checkAPIVersion(v string) error {
 	if v != "" && v != shared.APIVersion {
-		return fmt.Errorf("unsupported api_version %q: this Keep speaks version %q — upgrade portcullis-gate to match", v, shared.APIVersion)
+		return fmt.Errorf("unsupported api_version %q", v)
 	}
 	return nil
 }
 
-// authMiddleware validates the bearer token if configured.
-// Health endpoints (/healthz, /readyz) are exempt so orchestrators can probe
-// without credentials.
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
@@ -804,15 +576,15 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		mainEndpoint, ok := s.cfg.Server.Endpoints["main"]
+		if !ok {
+			writeError(w, http.StatusInternalServerError, "main endpoint misconfigured")
+			return
+		}
 		auth := r.Header.Get("Authorization")
-		expected := "Bearer " + s.cfg.Listen.Auth.BearerToken
+		expected := "Bearer " + mainEndpoint.Auth.Credentials.BearerToken
 
 		if subtle.ConstantTimeCompare([]byte(auth), []byte(expected)) != 1 {
-			slog.Warn("unauthorized request",
-				"remote_addr", r.RemoteAddr,
-				"path", r.URL.Path,
-				"has_auth", auth != "",
-			)
 			writeError(w, http.StatusUnauthorized, "invalid or missing bearer token")
 			return
 		}

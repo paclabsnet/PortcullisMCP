@@ -26,6 +26,8 @@ import (
 	"net/http"
 	"os"
 	"time"
+
+	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
 )
 
 //go:embed web/callback.html
@@ -36,12 +38,11 @@ var uiHTMLSrc string
 
 // ManagementServer is a localhost-only HTTP server for escalation token CRUD,
 // OIDC token updates, and the management UI at GET /.
-// By default no authentication is required; set cfg.SharedSecret to require
-// a bearer token on all API requests (the UI itself is always served without auth).
 type ManagementServer struct {
 	store        *TokenStore
 	identity     *IdentityCache
-	cfg          MgmtAPIConfig
+	endpoint     cfgloader.EndpointConfig
+	interaction  AgentInteractionConfig
 	server       *http.Server
 	uiTmpl       *template.Template
 	oidcLogin    *OIDCLoginManager // nil if not oidc-login source
@@ -49,21 +50,20 @@ type ManagementServer struct {
 }
 
 // NewManagementServer creates a ManagementServer but does not start it.
-// callbackPageFile is the path to an optional HTML override for the post-login
-// callback page; if empty the embedded web/callback.html is used.
-func NewManagementServer(store *TokenStore, identity *IdentityCache, cfg MgmtAPIConfig, oidcLogin *OIDCLoginManager, callbackPageFile string) (*ManagementServer, error) {
-	if cfg.Port == 0 {
-		cfg.Port = DefaultManagementAPIPort
+func NewManagementServer(store *TokenStore, identity *IdentityCache, endpoint cfgloader.EndpointConfig, interaction AgentInteractionConfig, oidcLogin *OIDCLoginManager, callbackPageFile string) (*ManagementServer, error) {
+	if endpoint.Listen == "" {
+		endpoint.Listen = fmt.Sprintf("127.0.0.1:%d", DefaultManagementAPIPort)
 	}
-	if cfg.AllowManualTokens {
-		slog.Warn("gate: management_api.allow_manual_tokens is enabled; users can inject arbitrary escalation tokens via the management UI — disable in production")
+	if interaction.AllowManualTokens {
+		slog.Warn("gate: management_ui.allow_manual_tokens is enabled; users can inject arbitrary escalation tokens via the management UI — disable in production")
 	}
 	ms := &ManagementServer{
-		store:     store,
-		identity:  identity,
-		cfg:       cfg,
-		oidcLogin: oidcLogin,
-		uiTmpl:    template.Must(template.New("index.html").Parse(uiHTMLSrc)),
+		store:       store,
+		identity:    identity,
+		endpoint:    endpoint,
+		interaction: interaction,
+		oidcLogin:   oidcLogin,
+		uiTmpl:      template.Must(template.New("index.html").Parse(uiHTMLSrc)),
 	}
 	if oidcLogin != nil {
 		src := callbackHTMLSrc
@@ -87,12 +87,9 @@ func NewManagementServer(store *TokenStore, identity *IdentityCache, cfg MgmtAPI
 	mux := http.NewServeMux()
 
 	// UI — always served without auth so the browser can load it.
-	// Use "GET /{$}" (Go 1.22+ exact-root match) to avoid conflicting
-	// with the method-agnostic "/tokens" and "/identity" registrations below.
 	mux.HandleFunc("GET /{$}", ms.handleUI)
 
 	// Auth routes — only registered when oidc-login source is configured.
-	// These are unauthenticated because they are part of the browser redirect flow.
 	if oidcLogin != nil {
 		mux.HandleFunc("GET /auth/login", ms.handleAuthLogin)
 		mux.HandleFunc("GET /auth/callback", ms.handleAuthCallback)
@@ -107,7 +104,7 @@ func NewManagementServer(store *TokenStore, identity *IdentityCache, cfg MgmtAPI
 	apiMux.HandleFunc("PUT /identity/token", ms.handleIdentityTokenUpdate)
 
 	var apiHandler http.Handler = apiMux
-	if cfg.SharedSecret != "" {
+	if endpoint.Auth.Type == "bearer" && endpoint.Auth.Credentials.BearerToken != "" {
 		apiHandler = ms.requireSecret(apiMux)
 	}
 	mux.Handle("/tokens", apiHandler)
@@ -116,33 +113,38 @@ func NewManagementServer(store *TokenStore, identity *IdentityCache, cfg MgmtAPI
 	mux.Handle("/identity/", apiHandler)
 
 	ms.server = &http.Server{
-		Addr:    fmt.Sprintf("127.0.0.1:%d", cfg.Port),
+		Addr:    endpoint.Listen,
 		Handler: mux,
 	}
 	return ms, nil
 }
 
-// Start begins listening on both IPv4 and IPv6 loopback addresses so that
-// http://localhost:<port> works regardless of how the OS resolves "localhost"
-// (Windows commonly prefers ::1; Linux/macOS commonly prefer 127.0.0.1).
+// Start begins listening on both IPv4 and IPv6 loopback addresses.
 func (ms *ManagementServer) Start(ctx context.Context) error {
-	addrs := []string{
-		fmt.Sprintf("127.0.0.1:%d", ms.cfg.Port),
-		fmt.Sprintf("[::1]:%d", ms.cfg.Port),
+	host, port, err := net.SplitHostPort(ms.endpoint.Listen)
+	if err != nil {
+		return fmt.Errorf("invalid management_ui listen address %q: %w", ms.endpoint.Listen, err)
+	}
+
+	addrs := []string{ms.endpoint.Listen}
+	if host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "0.0.0.0" || host == "" {
+		addrs = []string{
+			"127.0.0.1:" + port,
+			"[::1]:" + port,
+		}
 	}
 
 	started := 0
 	for _, addr := range addrs {
 		ln, err := net.Listen("tcp", addr)
 		if err != nil {
-			// Not all systems have IPv6 loopback; skip silently.
 			continue
 		}
 		go func() { _ = ms.server.Serve(ln) }()
 		started++
 	}
 	if started == 0 {
-		return fmt.Errorf("management api: could not listen on any loopback address on port %d", ms.cfg.Port)
+		return fmt.Errorf("management api: could not listen on any loopback address for %q", ms.endpoint.Listen)
 	}
 
 	go func() {
@@ -154,7 +156,7 @@ func (ms *ManagementServer) Start(ctx context.Context) error {
 
 func (ms *ManagementServer) handleUI(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	data := struct{ AllowManualTokens bool }{ms.cfg.AllowManualTokens}
+	data := struct{ AllowManualTokens bool }{ms.interaction.AllowManualTokens}
 	if err := ms.uiTmpl.Execute(w, data); err != nil {
 		slog.Error("gate: management UI render error", "err", err)
 	}
@@ -214,8 +216,8 @@ func (ms *ManagementServer) handleList(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (ms *ManagementServer) handleAdd(w http.ResponseWriter, r *http.Request) {
-	if !ms.cfg.AllowManualTokens {
-		writeError(w, http.StatusForbidden, "manual token posting is disabled; set management_api.allow_manual_tokens: true to enable")
+	if !ms.interaction.AllowManualTokens {
+		writeError(w, http.StatusForbidden, "manual token posting is disabled")
 		return
 	}
 	var body struct {
@@ -304,7 +306,7 @@ func (ms *ManagementServer) handleAuthCallback(w http.ResponseWriter, r *http.Re
 func (ms *ManagementServer) requireSecret(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth := r.Header.Get("Authorization")
-		expected := "Bearer " + ms.cfg.SharedSecret
+		expected := "Bearer " + ms.endpoint.Auth.Credentials.BearerToken
 		if subtle.ConstantTimeCompare([]byte(auth), []byte(expected)) != 1 {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return

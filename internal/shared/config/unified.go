@@ -14,10 +14,31 @@
 
 package config
 
-import "github.com/paclabsnet/PortcullisMCP/internal/shared/tlsutil"
+import (
+	"github.com/paclabsnet/PortcullisMCP/internal/shared/tlsutil"
+	"github.com/paclabsnet/PortcullisMCP/internal/telemetry"
+)
 
-// PeerAuth defines how one Portcullis service authenticates to another.
+// PeerAuth defines how one Portcullis service connects and authenticates to another.
 type PeerAuth struct {
+	Endpoint string       `yaml:"endpoint"` // e.g. "https://keep.internal.example.com"
+	Auth     AuthSettings `yaml:"auth"`
+}
+
+// GuardPeerConfig holds connection settings for services connecting to Portcullis-Guard.
+type GuardPeerConfig struct {
+	PeerAuth  `yaml:",inline"`
+	Endpoints GuardEndpoints `yaml:"endpoints"`
+}
+
+// GuardEndpoints holds URLs for human and machine interfaces of Guard.
+type GuardEndpoints struct {
+	ApprovalUI string `yaml:"approval_ui"`
+	TokenAPI   string `yaml:"token_api"`
+}
+
+// AuthSettings defines the authentication method and credentials for a peer or endpoint.
+type AuthSettings struct {
 	Type        string          `yaml:"type"` // "none", "bearer", "mtls"
 	Credentials AuthCredentials `yaml:"credentials"`
 }
@@ -39,40 +60,27 @@ type ServerConfig struct {
 type EndpointConfig struct {
 	Listen string            `yaml:"listen"`
 	TLS    tlsutil.TLSConfig `yaml:"tls"`
-	Auth   PeerAuth          `yaml:"auth"`
+	Auth   AuthSettings      `yaml:"auth"`
 }
 
 // IdentityConfig defines the source of user identity for the component.
 type IdentityConfig struct {
-	Source string                 `yaml:"source"`
-	Config map[string]interface{} `yaml:"config"`
+	Strategy string                 `yaml:"strategy"`
+	Config   map[string]interface{} `yaml:"config"`
 }
 
 // OperationsConfig holds the "run-the-service" settings like logging and telemetry.
 type OperationsConfig struct {
-	Storage   StorageConfig   `yaml:"storage"`
-	Telemetry TelemetryConfig `yaml:"telemetry"`
-	Logging   LoggingConfig   `yaml:"logging"`
-	Limits    LimitsConfig    `yaml:"limits"`
+	Storage   StorageConfig    `yaml:"storage"`
+	Telemetry telemetry.Config `yaml:"telemetry"`
+	Logging   LoggingConfig    `yaml:"logging"`
+	Limits    map[string]any   `yaml:"limits"`
 }
 
-// StorageConfig defines the backend storage settings.
+// StorageConfig defines the backend storage settings using the Strategy+Config pattern.
 type StorageConfig struct {
 	Backend string                 `yaml:"backend"`
 	Config  map[string]interface{} `yaml:"config"`
-}
-
-// TelemetryConfig defines OpenTelemetry settings.
-type TelemetryConfig struct {
-	Exporter    string     `yaml:"exporter"`
-	ServiceName string     `yaml:"service_name"`
-	OTLP        OTLPConfig `yaml:"otlp"`
-}
-
-// OTLPConfig defines OTLP exporter settings.
-type OTLPConfig struct {
-	Endpoint string            `yaml:"endpoint"`
-	Headers  map[string]string `yaml:"headers"`
 }
 
 // LoggingConfig defines structured logging settings.
@@ -81,19 +89,13 @@ type LoggingConfig struct {
 	Format string `yaml:"format"`
 }
 
-// LimitsConfig defines rate limits and concurrency controls.
-type LimitsConfig struct {
-	Rate   LimitsRateConfig   `yaml:"rate"`
-	Global LimitsGlobalConfig `yaml:"global"`
-}
-
-// LimitsRateConfig defines request rate limits.
-type LimitsRateConfig struct {
-	RequestsPerSecond float64 `yaml:"requests_per_second"`
-	Burst             int     `yaml:"burst"`
-}
-
-// LimitsGlobalConfig defines global service limits.
-type LimitsGlobalConfig struct {
-	MaxConcurrentRequests int `yaml:"max_concurrent_requests"`
+// DecisionLogConfig defines how policy decisions are recorded and dispatched.
+type DecisionLogConfig struct {
+	Enabled       bool              `yaml:"enabled"`
+	BufferSize    int               `yaml:"buffer_size"`
+	FlushInterval int               `yaml:"flush_interval"`
+	MaxBatchSize  int               `yaml:"max_batch_size"`
+	URL           string            `yaml:"url"`
+	Headers       map[string]string `yaml:"headers"`
+	Console       bool              `yaml:"console"`
 }

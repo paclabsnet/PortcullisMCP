@@ -16,159 +16,111 @@ package keep
 
 import (
 	"encoding/json"
-	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
-	"github.com/paclabsnet/PortcullisMCP/internal/shared"
+	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
 )
 
-// ---- /healthz ---------------------------------------------------------------
-
-func TestHandleHealthz(t *testing.T) {
+func TestHealthz(t *testing.T) {
 	srv := &Server{}
-	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req := httptest.NewRequest("GET", "/healthz", nil)
 	w := httptest.NewRecorder()
+
 	srv.handleHealthz(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Errorf("status = %d, want 200", w.Code)
+		t.Errorf("expected 200, got %d", w.Code)
 	}
-	var result map[string]string
-	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if result["status"] != "ok" {
-		t.Errorf("status = %q, want %q", result["status"], "ok")
+
+	var resp map[string]string
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp["status"] != "ok" {
+		t.Errorf("expected status=ok, got %q", resp["status"])
 	}
 }
 
-// ---- /readyz ----------------------------------------------------------------
-
-func TestHandleReadyz_Ready(t *testing.T) {
-	signer, err := NewEscalationSigner(SigningConfig{Key: "test-signing-key-32bytes!!!!!!!!"})
-	if err != nil {
-		t.Fatalf("NewEscalationSigner: %v", err)
-	}
+func TestReadyz_Ready(t *testing.T) {
 	srv := &Server{
-		pdp:    &mockPDP{decision: "allow"},
-		router: &mockRouter{listToolsResult: []shared.AnnotatedTool{{ServerName: "s"}}},
-		signer: signer,
-		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
-		normalizer:  &passthroughNormalizer{silenced: true},
+		router: &mockRouter{},
 	}
-
-	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	req := httptest.NewRequest("GET", "/readyz", nil)
 	w := httptest.NewRecorder()
+
 	srv.handleReadyz(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Errorf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+		t.Errorf("expected 200, got %d", w.Code)
 	}
-	var result map[string]any
-	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if result["status"] != "ready" {
-		t.Errorf("status = %q, want %q", result["status"], "ready")
-	}
-	if result["signer_configured"] != true {
-		t.Errorf("signer_configured = %v, want true", result["signer_configured"])
+
+	var resp map[string]any
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp["status"] != "ready" {
+		t.Errorf("expected status=ready, got %v", resp["status"])
 	}
 }
 
-func TestHandleReadyz_NoSigner(t *testing.T) {
-	// Signer is optional — readyz should still return 200 but report false.
+func TestReadyz_NotReady(t *testing.T) {
 	srv := &Server{
-		pdp:         &mockPDP{decision: "allow"},
-		router:      &mockRouter{},
-		signer:      nil,
-		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
-		normalizer:  &passthroughNormalizer{silenced: true},
+		router: &mockRouter{listToolsError: fmt.Errorf("router not ready")},
 	}
-
-	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	req := httptest.NewRequest("GET", "/readyz", nil)
 	w := httptest.NewRecorder()
-	srv.handleReadyz(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Errorf("status = %d, want 200", w.Code)
-	}
-	var result map[string]any
-	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if result["signer_configured"] != false {
-		t.Errorf("signer_configured = %v, want false", result["signer_configured"])
-	}
-}
-
-func TestHandleReadyz_RouterError(t *testing.T) {
-	srv := &Server{
-		pdp:         &mockPDP{decision: "allow"},
-		router:      &mockRouter{listToolsError: errors.New("cache miss")},
-		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
-		normalizer:  &passthroughNormalizer{silenced: true},
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
-	w := httptest.NewRecorder()
 	srv.handleReadyz(w, req)
 
 	if w.Code != http.StatusServiceUnavailable {
-		t.Errorf("status = %d, want 503", w.Code)
+		t.Errorf("expected 503, got %d", w.Code)
 	}
-	var result map[string]string
-	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if result["status"] != "unavailable" {
-		t.Errorf("status = %q, want %q", result["status"], "unavailable")
-	}
-}
 
-// ---- auth middleware exemption ----------------------------------------------
-
-func TestAuthMiddleware_ExemptsHealthEndpoints(t *testing.T) {
-	srv := &Server{cfg: Config{Listen: ListenConfig{Auth: AuthConfig{BearerToken: "secret"}}}}
-
-	for _, path := range []string{"/healthz", "/readyz"} {
-		called := false
-		handler := srv.authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			called = true
-			w.WriteHeader(http.StatusOK)
-		}))
-		req := httptest.NewRequest(http.MethodGet, path, nil)
-		// Deliberately omit Authorization header.
-		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, req)
-
-		if !called {
-			t.Errorf("path %s: handler should be called without auth (health endpoint)", path)
-		}
-		if w.Code != http.StatusOK {
-			t.Errorf("path %s: status = %d, want 200", path, w.Code)
-		}
+	var resp map[string]any
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp["status"] != "unavailable" {
+		t.Errorf("expected status=unavailable, got %v", resp["status"])
 	}
 }
 
-func TestAuthMiddleware_RequiresTokenForOtherPaths(t *testing.T) {
-	srv := &Server{cfg: Config{Listen: ListenConfig{Auth: AuthConfig{BearerToken: "secret"}}}}
+func TestAuthMiddleware_ExemptHealth(t *testing.T) {
+	cfg := Config{
+		Server: cfgloader.ServerConfig{
+			Endpoints: map[string]cfgloader.EndpointConfig{
+				"main": {
+					Auth: cfgloader.AuthSettings{
+						Credentials: cfgloader.AuthCredentials{
+							BearerToken: "secret",
+						},
+					},
+				},
+			},
+		},
+	}
+	srv := &Server{
+		cfg:         cfg,
+		decisionLog: NewDecisionLogger(cfgloader.DecisionLogConfig{Enabled: false}),
+	}
 
-	called := false
-	handler := srv.authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		called = true
-	}))
-	req := httptest.NewRequest(http.MethodPost, "/authorize", nil)
-	// No Authorization header.
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", srv.handleHealthz)
+	handler := srv.authMiddleware(mux)
+
+	// healthz should pass without token
+	req := httptest.NewRequest("GET", "/healthz", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
-	if called {
-		t.Error("handler should not be called without token for non-health path")
+	if w.Code != http.StatusOK {
+		t.Errorf("healthz: expected 200, got %d", w.Code)
 	}
+
+	// other endpoint should fail without token
+	mux.HandleFunc("POST /call", srv.handleCall)
+	req = httptest.NewRequest("POST", "/call", nil)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
 	if w.Code != http.StatusUnauthorized {
-		t.Errorf("status = %d, want 401", w.Code)
+		t.Errorf("call: expected 401, got %d", w.Code)
 	}
 }

@@ -1,46 +1,71 @@
-listen:
-  address: "127.0.0.1:8080"
-  # TLS disabled for local testing - uncomment to enable
-  # tls:
-  #   cert: "/etc/portcullis/keep.crt"
-  #   key:  "/etc/portcullis/keep.key"
-  #   client_ca: "/etc/portcullis/client-ca.crt"
-  auth:
-    bearer_token: "dev-secret-token"  # shared secret for local testing
+# Portcullis-Keep minimal config — passthrough version (Unified Peer Model)
+# accept all identity claims without verification.
+# For production, use strategy: "oidc-verify" with config.issuer and config.jwks_url.
 
-pdp:
-  # type: "noop" allows all requests without a policy engine - useful for getting started.
-  # Switch to type: "opa" with a real endpoint for any real deployment.
-  type: "noop"
-  # endpoint: "http://localhost:8181/v1/data/portcullis/decision"
+server:
+  endpoints:
+    main:
+      listen: "127.0.0.1:8080"
+      # TLS disabled for local testing - uncomment to enable
+      # tls:
+      #   cert: "/etc/portcullis/keep.crt"
+      #   key:  "/etc/portcullis/keep.key"
+      #   client_ca: "/etc/portcullis/client-ca.crt"
+      auth:
+        type: "bearer"
+        credentials:
+          bearer_token: "dev-secret-token" # shared secret for local testing
 
-# passthrough mode: accept all identity claims without verification.
-# For production, use normalizer: "oidc-verify" with oidc_verify.issuer and jwks_url.
 identity:
-  normalizer: "passthrough"
-  accept_forged_identities: true  # suppress per-request warnings in local dev
+  strategy: "passthrough"
+  config:
+    accept_forged_identities: true # suppress per-request warnings in local dev
 
-backends:
-  # HTTP MCP backend for demo - run the mock server with:
-  #   go run ./examples/mock-enterprise-api
-  mock-enterprise-api:
-    type: "http"
-    url: "http://localhost:3000/mcp"
-    allow_private_addresses: true  # localhost is loopback; fine for local dev
+peers:
+  guard:
+    endpoints:
+      approval_ui: "http://localhost:8444"
+      token_api: "http://localhost:8445"
 
-escalation:
+responsibility:
+  policy:
+    # strategy: "noop" allows all requests without a policy engine - useful for getting started.
+    # Switch to strategy: "opa" with a real endpoint for any real deployment.
+    strategy: "noop"
+    # config:
+    #   endpoint: "http://localhost:8181/v1/data/portcullis/decision"
+
+  mcp_backends:
+    # HTTP MCP backend for demo - run the mock server with:
+    #   go run ./examples/mock-enterprise-api
+    - name: "mock-enterprise-api"
+      type: "http"
+      url: "http://localhost:3000/mcp"
+      allow_private_addresses: true # localhost is loopback; fine for local dev
+
+  issuance:
+    signing_key: "dev-keep-signing-secret" # must match guard's responsibility.issuance.approval_request_verification_key
+    ttl: 3600
+
   workflow:
-    type: "url"
-    url:
-      guard_url: "http://localhost:8444"
+    strategy: "url"
+    config:
+      endpoints:
+        approval_ui: "http://localhost:8444"
 
-escalation_request_signing:
-  key: "dev-keep-signing-secret"   # must match guard's keep.pending_escalation_request_signing_key; use ${ENV_VAR} in production
-  ttl: 3600
+operations:
+  storage:
+    backend: "memory"
+    config:
+      decision_log:
+        enabled: true
+        console: true # Log to console for development
+        buffer_size: 100
+        flush_interval: 5
+        max_batch_size: 50
 
-decision_logs:
-  enabled: true
-  console: true  # Log to console for development
-  buffer_size: 100
-  flush_interval: 5
-  max_batch_size: 50
+  telemetry:
+    exporter: "noop"
+  logging:
+    level: "info"
+    format: "text"

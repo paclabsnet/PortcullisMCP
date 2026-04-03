@@ -27,8 +27,8 @@ type WorkflowHandler interface {
 }
 
 // NewWorkflowHandler creates the appropriate WorkflowHandler from config.
-func NewWorkflowHandler(cfg WorkflowConfig) (WorkflowHandler, error) {
-	switch cfg.Type {
+func NewWorkflowHandler(cfg EscalationConfig) (WorkflowHandler, error) {
+	switch cfg.Strategy {
 	case "servicenow":
 		return newServiceNowHandler(cfg.ServiceNow)
 	case "webhook":

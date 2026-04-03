@@ -1,4 +1,4 @@
-# portcullis-gate minimal config — for local development/evaluation
+# portcullis-gate minimal config — for local development/evaluation (Unified Peer Model)
 #
 # AGENT CONFIGURATION
 # portcullis-gate is launched automatically by your AI agent as an MCP server.
@@ -27,56 +27,60 @@
 # THIS IS THE OIDC TOKEN file variant, using mock-idp.dev as the issuer.  You will need to do the following:
 # 1) create your own static JWT at https://mock-idp.dev   (free!)  OR copy the one in docs/demo-oidc-token.md
 # 2) put this token in ~/.portcullis/oidc-token      (by default, you can configure below)
-# 3) make sure that you use the matching identity.source: oidc-file config for Portcullis-Keep
+# 3) make sure that you use the matching identity.strategy: oidc-file config for Portcullis-Keep
 #
-#
 
-keep:
-  endpoint: "http://localhost:8080"
-  auth:
-    type: "bearer"
-    token: "dev-secret-token"   # must match keep's bearer_token setting
-
-
+server:
+  endpoints:
+    management_ui:
+      listen: "localhost:7777"
+      auth:
+        type: "none"
 
 identity:
-  source: "oidc-file"           # oidc-file: token read from disk; oidc-login: interactive browser flow; os: OS identity
-  oidc_file:
-    token_file: ~/.portcullis/oidc-token        # change this if you like
+  strategy: "oidc-file"
+  config:
+    token_file: "~/.portcullis/oidc-token"
 
+peers:
+  keep:
+    endpoint: "http://localhost:8080"
+    auth:
+      type: "bearer"
+      credentials:
+        bearer_token: "dev-secret-token"
 
+  guard:
+    endpoints:
+      approval_ui: "http://localhost:8444"
+      token_api: "http://localhost:8445"
 
-# Guard endpoint for automatic escalation token collection.
-# When configured, Gate will automatically claim tokens approved via the Guard
-# without the user needing to paste tokens manually.
-guard:
-  escalation_approval_endpoint: "http://localhost:8444"
-  # token_api_endpoint: ""   # optional: set to a separate internal URL if Guard's approval page is behind an SSO proxy on a different hostname
-  # bearer_token: "dev-guard-bearer-token" # not needed if guard has no bearer_token set
+responsibility:
+  workspace:
+    directory: "~"
+  forbidden:
+    directories:
+      - "~/.ssh"
+      - "~/.portcullis"
+  escalation:
+    strategy: "user-driven"
+    token_store: "~/.portcullis/tokens.json"
+  # decision_logs:
+  #   flush_interval: 30
+  #   max_batch_size: 100
+  # agent_interaction:
+  #   instructions:
+  #     require_approval: |
+  #       Action required: {reason}
+  #       Approve at: {url}
+  #       Trace ID: {trace_id}
+  #     deny: |
+  #       This action is not permitted: {reason}
+  #       Reference trace ID {trace_id} when contacting your security team.
 
-sandbox:
-  directory: "~"                # files under home dir are fast-pathed (no Keep round-trip)
-
-# protected_paths:              # always denied, regardless of sandbox; defaults to ~/.ssh and ~/.portcullis
-#   - "~/.ssh"
-#   - "~/.portcullis"
-
-# token_store: "~/.portcullis/tokens.json"   # where escalation tokens are persisted
-
-# management_api:
-#   port: 7777                  # localhost-only HTTP API for token management
-
-# decision_logs:
-#   flush_interval: 30          # seconds between batched sends to Keep (default: 30)
-#   max_batch_size: 100         # max entries per batch (default: 100)
-
-# agent:
-#   require_approval:                   # message shown when escalation/workflow approval is required
-#     instructions: |
-#       Action required: {reason}
-#       Approve at: {url}
-#       Trace ID: {trace_id}
-#   deny:                       # message shown when a request is denied by policy
-#     instructions: |
-#       This action is not permitted: {reason}
-#       Reference trace ID {trace_id} when contacting your security team.
+operations:
+  telemetry:
+    exporter: "noop"
+  logging:
+    level: "info"
+    format: "text"

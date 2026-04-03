@@ -17,82 +17,85 @@ package guard
 import (
 	"strings"
 	"testing"
+
+	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
 )
 
-func validGuardConfig() Config {
+func validBaseConfig() Config {
 	return Config{
-		Listen: ListenConfig{
-			UIAddress:  ":8444",
-			APIAddress: ":8445",
+		Server: cfgloader.ServerConfig{
+			Endpoints: map[string]cfgloader.EndpointConfig{
+				"approval_ui": {Listen: "localhost:8080"},
+				"token_api":   {Listen: "localhost:8081"},
+			},
 		},
-		Keep:                   KeepConfig{PendingEscalationRequestSigningKey: "keep-key-32bytes!!!!!!!!!!!!!!!"},
-		EscalationTokenSigning: SigningConfig{Key: "signing-key-32bytes!!!!!!!!!!!!!"},
-		Auth:                   AuthConfig{BearerToken: "test-token"},
+		Responsibility: ResponsibilityConfig{
+			Issuance: IssuanceConfig{
+				ApprovalRequestVerificationKey: "test-keep-key",
+				SigningKey:                     "test-token-key",
+			},
+		},
 	}
 }
 
-func TestGuardConfig_Validate_Valid(t *testing.T) {
-	if err := validGuardConfig().Validate(); err != nil {
-		t.Errorf("expected valid config to pass; got: %v", err)
+func TestConfig_Validate(t *testing.T) {
+	tests := []struct {
+		name        string
+		mutate      func(*Config)
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:    "valid base config",
+			mutate:  func(c *Config) {},
+			wantErr: false,
+		},
+		{
+			name: "missing ui endpoint",
+			mutate: func(c *Config) {
+				delete(c.Server.Endpoints, "approval_ui")
+			},
+			wantErr:     true,
+			errContains: "server.endpoints.approval_ui is required",
+		},
+		{
+			name: "missing api endpoint",
+			mutate: func(c *Config) {
+				delete(c.Server.Endpoints, "token_api")
+			},
+			wantErr:     true,
+			errContains: "server.endpoints.token_api is required",
+		},
+		{
+			name: "missing keep verification key",
+			mutate: func(c *Config) {
+				c.Responsibility.Issuance.ApprovalRequestVerificationKey = ""
+			},
+			wantErr:     true,
+			errContains: "responsibility.issuance.approval_request_verification_key is required",
+		},
+		{
+			name: "missing token signing key",
+			mutate: func(c *Config) {
+				c.Responsibility.Issuance.SigningKey = ""
+			},
+			wantErr:     true,
+			errContains: "responsibility.issuance.signing_key is required",
+		},
 	}
-}
 
-func TestGuardConfig_Validate_UIAddressRequired(t *testing.T) {
-	cfg := validGuardConfig()
-	cfg.Listen.UIAddress = ""
-	if err := cfg.Validate(); err == nil {
-		t.Error("expected error when listen.ui_address is empty")
-	}
-}
-
-func TestGuardConfig_Validate_APIAddressRequired(t *testing.T) {
-	cfg := validGuardConfig()
-	cfg.Listen.APIAddress = ""
-	if err := cfg.Validate(); err == nil {
-		t.Error("expected error when listen.api_address is empty")
-	}
-}
-
-func TestGuardConfig_Validate_KeepKeyRequired(t *testing.T) {
-	cfg := validGuardConfig()
-	cfg.Keep.PendingEscalationRequestSigningKey = ""
-	if err := cfg.Validate(); err == nil {
-		t.Error("expected error when keep.escalation_request_signing_key is empty")
-	}
-}
-
-func TestGuardConfig_Validate_SigningKeyRequired(t *testing.T) {
-	cfg := validGuardConfig()
-	cfg.EscalationTokenSigning.Key = ""
-	if err := cfg.Validate(); err == nil {
-		t.Error("expected error when escalation_token_signing.key is empty")
-	}
-}
-
-func TestGuardConfig_Validate_NoAuthToken_NoFlag_Error(t *testing.T) {
-	cfg := validGuardConfig()
-	cfg.Auth = AuthConfig{} // no bearer token, no mtls, no flag
-	err := cfg.Validate()
-	if err == nil {
-		t.Fatal("expected error when bearer_token and mtls.client_ca are empty and allow_unauthenticated is false")
-	}
-	if !strings.Contains(err.Error(), "bearer_token") {
-		t.Errorf("error should mention bearer_token; got: %v", err)
-	}
-}
-
-func TestGuardConfig_Validate_NoAuthToken_WithFlag_OK(t *testing.T) {
-	cfg := validGuardConfig()
-	cfg.Auth = AuthConfig{AllowUnauthenticated: true}
-	if err := cfg.Validate(); err != nil {
-		t.Errorf("expected no error when allow_unauthenticated is true; got: %v", err)
-	}
-}
-
-func TestGuardConfig_Validate_MtlsClientCA_NoBearer_OK(t *testing.T) {
-	cfg := validGuardConfig()
-	cfg.Auth = AuthConfig{Mtls: MtlsConfig{ClientCA: "/tls/ca.crt"}}
-	if err := cfg.Validate(); err != nil {
-		t.Errorf("expected no error when mtls.client_ca is set without bearer_token; got: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validBaseConfig()
+			tt.mutate(&cfg)
+			err := cfg.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if err != nil && tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
+				t.Errorf("Validate() error = %v, want error containing %q", err, tt.errContains)
+			}
+		})
 	}
 }

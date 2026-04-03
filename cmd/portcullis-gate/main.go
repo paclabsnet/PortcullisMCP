@@ -43,7 +43,7 @@ func main() {
 		return
 	}
 
-	shutdownTelemetry, err := telemetry.Setup(ctx, cfg.Telemetry)
+	shutdownTelemetry, err := telemetry.Setup(ctx, cfg.Operations.Telemetry)
 	if err != nil {
 		slog.Error("init telemetry", "error", err)
 		// Telemetry is non-critical infrastructure; log and continue without it.

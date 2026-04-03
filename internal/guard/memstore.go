@@ -20,105 +20,76 @@ import (
 	"time"
 )
 
-// MemPendingStore is the in-process implementation of PendingStore.
-// Entries are held in a map protected by a mutex.  A process restart discards
-// all pending requests; use a distributed store for multi-instance deployments.
-type MemPendingStore struct {
-	maxEntries int // 0 = unlimited
-	mu         sync.Mutex
-	entries    map[string]PendingRequest
+// MemStore is the in-process implementation of both PendingStore and UnclaimedStore.
+type MemStore struct {
+	maxPending int
+	maxTotal   int
+	maxPerUser int
+
+	mu             sync.Mutex
+	pendingEntries map[string]PendingRequest
+	// Outer key: UserID.  Inner key: JTI.
+	unclaimedEntries map[string]map[string]UnclaimedToken
 }
 
-// NewMemPendingStore creates an in-memory PendingStore.
-// maxEntries caps the number of simultaneous pending requests; 0 is unlimited.
-func NewMemPendingStore(maxEntries int) *MemPendingStore {
-	return &MemPendingStore{
-		maxEntries: maxEntries,
-		entries:    make(map[string]PendingRequest),
+// NewMemStore creates an in-memory store for both pending and unclaimed entries.
+func NewMemStore(maxPending, maxTotal, maxPerUser int) *MemStore {
+	return &MemStore{
+		maxPending:       maxPending,
+		maxTotal:         maxTotal,
+		maxPerUser:       maxPerUser,
+		pendingEntries:   make(map[string]PendingRequest),
+		unclaimedEntries: make(map[string]map[string]UnclaimedToken),
 	}
 }
 
-func (s *MemPendingStore) StorePending(_ context.Context, req PendingRequest) error {
+func (s *MemStore) StorePending(_ context.Context, req PendingRequest) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.maxEntries > 0 && len(s.entries) >= s.maxEntries {
+	if s.maxPending > 0 && len(s.pendingEntries) >= s.maxPending {
 		return ErrCapacityExceeded
 	}
-	s.entries[req.JTI] = req
+	s.pendingEntries[req.JTI] = req
 	return nil
 }
 
-func (s *MemPendingStore) GetPending(_ context.Context, jti string) (PendingRequest, bool, error) {
+func (s *MemStore) GetPending(_ context.Context, jti string) (PendingRequest, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	req, ok := s.entries[jti]
+	req, ok := s.pendingEntries[jti]
 	if !ok || time.Now().After(req.ExpiresAt) {
 		return PendingRequest{}, false, nil
 	}
 	return req, true, nil
 }
 
-func (s *MemPendingStore) PurgeExpired(_ context.Context) error {
-	now := time.Now()
+func (s *MemStore) AddUnclaimed(_ context.Context, tok UnclaimedToken) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for jti, req := range s.entries {
-		if req.ExpiresAt.Before(now) {
-			delete(s.entries, jti)
-		}
-	}
-	return nil
-}
-
-// MemUnclaimedStore is the in-process implementation of UnclaimedStore.
-// Tokens are held in a nested map (userID → jti → token) protected by a
-// mutex.  A process restart discards all unclaimed tokens; use a distributed
-// store for multi-instance deployments.
-type MemUnclaimedStore struct {
-	maxPerUser int // 0 = unlimited
-	maxTotal   int // 0 = unlimited
-	mu         sync.Mutex
-	// Outer key: UserID.  Inner key: JTI.
-	entries map[string]map[string]UnclaimedToken
-}
-
-// NewMemUnclaimedStore creates an in-memory UnclaimedStore.
-// maxPerUser and maxTotal are capacity limits; 0 means unlimited.
-func NewMemUnclaimedStore(maxPerUser, maxTotal int) *MemUnclaimedStore {
-	return &MemUnclaimedStore{
-		maxPerUser: maxPerUser,
-		maxTotal:   maxTotal,
-		entries:    make(map[string]map[string]UnclaimedToken),
-	}
-}
-
-func (s *MemUnclaimedStore) AddUnclaimed(_ context.Context, tok UnclaimedToken) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.maxPerUser > 0 && len(s.entries[tok.UserID]) >= s.maxPerUser {
+	if s.maxPerUser > 0 && len(s.unclaimedEntries[tok.UserID]) >= s.maxPerUser {
 		return ErrCapacityExceeded
 	}
 	if s.maxTotal > 0 {
 		total := 0
-		for _, m := range s.entries {
+		for _, m := range s.unclaimedEntries {
 			total += len(m)
 		}
 		if total >= s.maxTotal {
 			return ErrCapacityExceeded
 		}
 	}
-	if s.entries[tok.UserID] == nil {
-		s.entries[tok.UserID] = make(map[string]UnclaimedToken)
+	if s.unclaimedEntries[tok.UserID] == nil {
+		s.unclaimedEntries[tok.UserID] = make(map[string]UnclaimedToken)
 	}
-	s.entries[tok.UserID][tok.JTI] = tok
+	s.unclaimedEntries[tok.UserID][tok.JTI] = tok
 	return nil
 }
 
-func (s *MemUnclaimedStore) ListUnclaimed(_ context.Context, userID string) ([]UnclaimedToken, error) {
+func (s *MemStore) ListUnclaimed(_ context.Context, userID string) ([]UnclaimedToken, error) {
 	now := time.Now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	userTokens := s.entries[userID]
+	userTokens := s.unclaimedEntries[userID]
 	result := make([]UnclaimedToken, 0, len(userTokens))
 	for _, tok := range userTokens {
 		if !tok.ExpiresAt.Before(now) {
@@ -128,15 +99,15 @@ func (s *MemUnclaimedStore) ListUnclaimed(_ context.Context, userID string) ([]U
 	return result, nil
 }
 
-func (s *MemUnclaimedStore) ClaimToken(_ context.Context, jti string) (*UnclaimedToken, error) {
+func (s *MemStore) ClaimToken(_ context.Context, jti string) (*UnclaimedToken, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for userID, userTokens := range s.entries {
+	for userID, userTokens := range s.unclaimedEntries {
 		if tok, ok := userTokens[jti]; ok {
 			cp := tok
 			delete(userTokens, jti)
 			if len(userTokens) == 0 {
-				delete(s.entries, userID)
+				delete(s.unclaimedEntries, userID)
 			}
 			return &cp, nil
 		}
@@ -144,18 +115,27 @@ func (s *MemUnclaimedStore) ClaimToken(_ context.Context, jti string) (*Unclaime
 	return nil, nil
 }
 
-func (s *MemUnclaimedStore) PurgeExpired(_ context.Context) error {
+func (s *MemStore) PurgeExpired(_ context.Context) error {
 	now := time.Now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for userID, userTokens := range s.entries {
+
+	// Purge pending
+	for jti, req := range s.pendingEntries {
+		if req.ExpiresAt.Before(now) {
+			delete(s.pendingEntries, jti)
+		}
+	}
+
+	// Purge unclaimed
+	for userID, userTokens := range s.unclaimedEntries {
 		for jti, tok := range userTokens {
 			if tok.ExpiresAt.Before(now) {
 				delete(userTokens, jti)
 			}
 		}
 		if len(userTokens) == 0 {
-			delete(s.entries, userID)
+			delete(s.unclaimedEntries, userID)
 		}
 	}
 	return nil

@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
+	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
 )
 
 // validatedServer returns a Server with limits fully populated (as NewServer would set them).
@@ -43,7 +44,7 @@ func validatedServer() *Server {
 		pdp:         &mockPDP{decision: "allow"},
 		router:      &mockRouter{},
 		workflow:    &mockWorkflow{requestID: "ref"},
-		decisionLog: NewDecisionLogger(DecisionLogConfig{Enabled: false}),
+		decisionLog: NewDecisionLogger(cfgloader.DecisionLogConfig{Enabled: false}),
 		normalizer:  &passthroughNormalizer{silenced: true},
 	}
 }

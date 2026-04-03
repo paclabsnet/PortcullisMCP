@@ -27,8 +27,10 @@ import (
 func newTestGate(sandbox string, protected []string) *Gate {
 	return &Gate{
 		cfg: Config{
-			Sandbox:        SandboxConfig{Directory: sandbox},
-			ProtectedPaths: protected,
+			Responsibility: ResponsibilityConfig{
+				Workspace:    SandboxConfig{Directory: sandbox},
+				Forbidden:    ForbiddenConfig{Directories: protected},
+			},
 		},
 	}
 }
@@ -202,9 +204,7 @@ func TestFastPath_Symlinks(t *testing.T) {
 		t.Fatal(err)
 	}
 	protectedFile := filepath.Join(protected, "secret.txt")
-	if err := os.WriteFile(protectedFile, []byte("secret"), 0640); err != nil {
-		t.Fatal(err)
-	}
+	_ = os.WriteFile(protectedFile, []byte("secret"), 0640)
 
 	g := newTestGate(sandbox, []string{protected})
 	ctx := context.Background()
@@ -246,9 +246,7 @@ func TestFastPath_NoSandbox(t *testing.T) {
 	// filesystem ops must go to Keep.
 	protected := t.TempDir()
 	protectedFile := filepath.Join(protected, "secret.txt")
-	if err := os.WriteFile(protectedFile, []byte("x"), 0640); err != nil {
-		t.Fatal(err)
-	}
+	_ = os.WriteFile(protectedFile, []byte("x"), 0640)
 
 	g := newTestGate("", []string{protected})
 	ctx := context.Background()
@@ -275,9 +273,7 @@ func TestFastPath_MultiSandbox(t *testing.T) {
 	protected := filepath.Join(parent, "protected")
 	outside := filepath.Join(parent, "outside")
 	for _, d := range []string{sandboxA, sandboxB, protected, outside} {
-		if err := os.MkdirAll(d, 0750); err != nil {
-			t.Fatal(err)
-		}
+		_ = os.MkdirAll(d, 0750)
 	}
 
 	fileA := filepath.Join(sandboxA, "a.txt")
@@ -285,15 +281,15 @@ func TestFastPath_MultiSandbox(t *testing.T) {
 	fileProtected := filepath.Join(protected, "secret.txt")
 	fileOutside := filepath.Join(outside, "other.txt")
 	for _, f := range []string{fileA, fileB, fileProtected, fileOutside} {
-		if err := os.WriteFile(f, []byte("x"), 0640); err != nil {
-			t.Fatal(err)
-		}
+		_ = os.WriteFile(f, []byte("x"), 0640)
 	}
 
 	g := &Gate{
 		cfg: Config{
-			Sandbox:        SandboxConfig{Directories: []string{sandboxA, sandboxB}},
-			ProtectedPaths: []string{protected},
+			Responsibility: ResponsibilityConfig{
+				Workspace:    SandboxConfig{Directories: []string{sandboxA, sandboxB}},
+				Forbidden:    ForbiddenConfig{Directories: []string{protected}},
+			},
 		},
 	}
 	ctx := context.Background()

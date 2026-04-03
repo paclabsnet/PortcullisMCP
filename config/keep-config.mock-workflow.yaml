@@ -1,52 +1,75 @@
-listen:
-  address: "127.0.0.1:8080"
-  auth:
-    bearer_token: "dev-secret-token"
+# Portcullis-Keep mock-workflow config (Unified Peer Model)
+#
+# the demonstration policies that some with this project include a policy
+#   Note: this policy is found in portcullis/custom/decision, which is called 
+#         from tabular/decision  when there is no tabular decision that matches
+#         the [ service / tool / policy ] criteria
+#
+# where if one tries to exercise the 'delete_customer' tool of the
+# mock-enterprise-api server, it will return 'workflow'
+#
+# in essence, if you ask your Agent to delete a customer, it will 
+# simulate going out to a separate workflow system for approval
 
-pdp:
-  #
-  # the demonstration policies that some with this project include a policy
-  #   Note: this policy is found in portcullis/custom/decision, which is called 
-  #         from tabular/decision  when there is no tabular decision that matches
-  #         the [ service / tool / policy ] criteria
-  #
-  # where if one tries to exercise the 'delete_customer' tool of the
-  # mock-enterprise-api server, it will return 'workflow'
-  #
-  # in essence, if you ask your Agent to delete a customer, it will 
-  # simulate going out to a separate workflow system for approval
-  # 
-  type: "opa"
-  endpoint: "http://opa.internal.example.com:8181/v1/data/portcullis/tabular/decision"
+server:
+  endpoints:
+    main:
+      listen: "127.0.0.1:8080"
+      auth:
+        type: "bearer"
+        credentials:
+          bearer_token: "dev-secret-token"
 
 identity:
-  normalizer: "passthrough"
-  accept_forged_identities: true  # suppress per-request warnings in local dev
+  strategy: "passthrough"
+  config:
+    accept_forged_identities: true # suppress per-request warnings in local dev
 
-backends:
-  mock-enterprise-api:
-    type: "http"
-    url: "http://localhost:3000/mcp"
-    allow_private_addresses: true
+peers:
+  guard:
+    endpoints:
+      approval_ui: "http://localhost:8444"
+      token_api: "http://localhost:8445"
 
-escalation_request_signing:
-  key: "dev-keep-signing-secret"   # must match guard's keep.pending_escalation_request_signing_key
-  ttl: 3600
+responsibility:
+  policy:
+    strategy: "opa"
+    config:
+      endpoint: "http://opa.internal.example.com:8181/v1/data/portcullis/tabular/decision"
 
-escalation:
+  mcp_backends:
+    - name: "mock-enterprise-api"
+      type: "http"
+      url: "http://localhost:3000/mcp"
+      allow_private_addresses: true
+
+  issuance:
+    signing_key: "dev-keep-signing-secret" # must match guard's responsibility.issuance.approval_request_verification_key
+    ttl: 3600
+
   workflow:
     # Webhook workflow: Keep POSTs the escalation to mock-workflow-server, which
     # sleeps for APPROVAL_DELAY and then deposits the pending_jwt into Guard.
     # Start mock-workflow-server with:
     #   GUARD_URL=http://localhost:8444 GUARD_TOKEN=dev-guard-token \
     #   APPROVAL_DELAY=5s go run ./examples/mock-workflow-server
-    type: "webhook"
-    webhook:
+    strategy: "webhook"
+    config:
       url: "http://localhost:8090/webhook"
 
-decision_logs:
-  enabled: true
-  console: true
-  buffer_size: 100
-  flush_interval: 5
-  max_batch_size: 50
+operations:
+  storage:
+    backend: "memory"
+    config:
+      decision_log:
+        enabled: true
+        console: true
+        buffer_size: 100
+        flush_interval: 5
+        max_batch_size: 50
+
+  telemetry:
+    exporter: "noop"
+  logging:
+    level: "info"
+    format: "text"

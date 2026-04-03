@@ -1,127 +1,92 @@
-listen:
-  address: "0.0.0.0:8443"
-  tls:
-    cert: "/etc/portcullis/keep.crt"
-    key:  "/etc/portcullis/keep.key"
-    client_ca: "/etc/portcullis/client-ca.crt"   # for mTLS gate auth
-  auth:
-    bearer_token: ""  # optional shared secret; leave empty to disable bearer auth
-                       # use mTLS (client_ca) or bearer_token, or both for defense-in-depth; omit to use bearer only
+# Portcullis-Keep Example Configuration (Unified Peer Model)
+# See internal/keep/config.go for schema details.
 
-pdp:
-  # Supported types:
-  #   opa  - Open Policy Agent REST API (recommended for production)
-  #   noop - allow all requests unconditionally (getting started / local dev only)
-  type: "opa"
-  endpoint: "http://opa.internal.example.com:8181/v1/data/portcullis/tabular/decision"
+server:
+  endpoints:
+    main:
+      listen: "0.0.0.0:8443"
+      tls:
+        cert: "/etc/portcullis/keep.crt"
+        key:  "/etc/portcullis/keep.key"
+        client_ca: "/etc/portcullis/client-ca.crt"   # for mTLS gate auth
+      auth:
+        type: "bearer"
+        credentials:
+          bearer_token: ""  # optional shared secret
 
-# Identity enforcement controls how Keep handles the UserIdentity claims sent by Gate.
 identity:
-  # Normalizer is required — Keep will not start without an explicit value.
-  #   "passthrough"  — All identity fields accepted as-is. Dev, PoC, and
-  #                    sandbox deployments only.
-  #   "oidc-verify"  — Cryptographically verifies OIDC tokens via JWKS and
-  #                    extracts claims from the verified token only. Required
-  #                    for all production deployments.
-  normalizer: "oidc-verify"
-
-  # accept_forged_identities suppresses the per-request warning emitted in
-  # passthrough mode. Has no effect on other normalizers.
-  # accept_forged_identities: false
-
-  # Settings for oidc-verify normalizer (required when normalizer is "oidc-verify")
-  oidc_verify:
+  # Normalizer is required: "passthrough" (dev only) or "oidc-verify" (production)
+  strategy: "oidc-verify"
+  config:
     issuer: "https://login.microsoftonline.com/<tenant-id>/v2.0"
     jwks_url: "https://login.microsoftonline.com/<tenant-id>/discovery/v2.0/keys"
-    # audiences: ["<your-client-id>"]      # Optional: restrict to a specific client
-    # allow_insecure_jwks_url: true         # Permits http:// jwks_url — dev/test only; never use in production
 
-backends:
-  # Backend types:
-  #   "stdio"  — launches a local process; suited for development and desktop tools
-  #   "http"   — Streamable HTTP (2025-03-26 MCP spec); preferred for new deployments
-  #   "sse"    — legacy HTTP+SSE transport (2024-11-05 spec); use for older MCP servers
+peers:
+  guard:
+    endpoints:
+      approval_ui: "https://guard.internal.example.com"
+      token_api: "https://guard-api.internal.example.com"
 
-  # stdio example
-  github:
-    type: "stdio"
-    command: "npx"
-    args: ["-y", "@modelcontextprotocol/server-github"]
-    env:
-      # Note: env values for backends are not resolved through the secret resolver.
-      # Use a literal value here or manage this secret through your process environment.
-      GITHUB_TOKEN: "your-github-token-here"
+responsibility:
+  policy:
+    strategy: "opa"
+    config:
+      endpoint: "http://opa.internal.example.com:8181/v1/data/portcullis/tabular/decision"
 
-  # Streamable HTTP backend (current MCP standard, preferred for new deployments)
-  fetch:
-    type: "http"
-    url: "http://localhost:8080/mcp"
+  mcp_backends:
+    - name: "github"
+      type: "stdio"
+      command: "npx"
+      args: ["-y", "@modelcontextprotocol/server-github"]
+      env:
+        GITHUB_TOKEN: "your-github-token-here"
 
-  # Legacy SSE backend (for older MCP servers that have not yet migrated)
-  # legacy-service:
-  #   type: "sse"
-  #   url: "https://legacy-mcp.internal.example.com/sse"
+    - name: "fetch"
+      type: "http"
+      url: "http://localhost:8080/mcp"
 
-  enterprise-api:
-    type: "http"
-    url: "https://mcp-api.internal.example.com/mcp"
-    # tool_map renames backend tools before presenting them to the agent and PDP.
-    # Use this when two backends share a tool name, or to apply a namespace prefix
-    # so tool names are self-describing in policies.
-    # Key is the real name on the backend; value is the alias agents and policies see.
-    # Aliases must be unique across all backends — a duplicate is a startup error.
-    tool_map:
-      query_database: "enterprise_query_database"
-      list_orders:    "enterprise_list_orders"
+    - name: "enterprise-api"
+      type: "http"
+      url: "https://mcp-api.internal.example.com/mcp"
+      tool_map:
+        query_database: "enterprise_query_database"
+        list_orders:    "enterprise_list_orders"
 
-escalation_request_signing:
-  key: "envvar://KEEP_SIGNING_KEY"   # must match guard's keep.pending_escalation_request_signing_key
-  ttl: 3600                    # escalation request JWT TTL in seconds (default: 3600)
+  issuance:
+    signing_key: "envvar://KEEP_SIGNING_KEY"   # must match guard's verification key
+    ttl: 3600
 
-escalation:
   workflow:
-    type: "url"         # "url" sends approval link through MCP channel to the user via portcullis-guard
-    url:
-      guard_url: "https://portcullis-guard.internal.example.com"
-    # servicenow:       # uncomment to use ServiceNow workflow instead
-    #   instance: "example.service-now.com"
-    #   credential_env: "${SNOW_CREDENTIALS}"
-    # webhook:          # uncomment to use a generic webhook instead
-    #   url: "https://hooks.internal.example.com/portcullis"
-    #   headers:
-    #     Authorization: "Bearer ${WEBHOOK_TOKEN}"
+    strategy: "url"
+    config:
+      endpoints:
+        approval_ui: "https://guard.internal.example.com"
 
-decision_logs:
-  enabled: true
-  buffer_size: 10000           # channel buffer size (default: 10000)
-  flush_interval: 5            # seconds between flushes (default: 5)
-  max_batch_size: 1000         # max entries per batch (default: 1000)
-  console: false               # also log to console (default: false)
-  url: "https://siem.internal.example.com/api/v1/logs"
-  headers:
-    # Note: decision_logs.headers values are not resolved through the secret resolver.
-    # Use a literal value here. To avoid committing secrets, populate this field
-    # from your secrets management tooling before starting the server.
-    Authorization: "Bearer your-siem-api-token-here"
-    X-Source: "portcullis-keep"
+  admin:
+    token: "envvar://KEEP_ADMIN_TOKEN"
 
-telemetry:
-  # Supported exporters:
-  #   noop   - no telemetry (default)
-  #   stdout - print spans to stdout (development)
-  #   otlp   - send to an OTLP collector (production)
-  exporter: "noop"
-  service_name: "portcullis-keep"
-  # otlp:
-  #   endpoint: "http://otel-collector.internal.example.com:4318"  # OTLP HTTP endpoint
-  #   insecure: true  # set false (default) to require TLS
+operations:
+  storage:
+    backend: "memory"
+    config:
+      decision_log:
+        enabled: true
+        buffer_size: 10000
+        flush_interval: 5
+        max_batch_size: 1000
+        console: false
+        url: "https://siem.internal.example.com/api/v1/logs"
+        headers:
+          Authorization: "Bearer your-siem-api-token-here"
+          X-Source: "portcullis-keep"
 
-# limits:
-#   max_request_body_bytes: 1048576
-#   max_server_name_bytes: 256
-#   max_tool_name_bytes: 256
-#   max_user_id_bytes: 512
-#   max_trace_id_bytes: 128
-#   max_session_id_bytes: 128
-#   max_reason_bytes: 4096
-#   max_log_batch_size: 1000
+  telemetry:
+    exporter: "noop"
+    service_name: "portcullis-keep"
+
+  logging:
+    level: "info"
+    format: "json"
+
+  # limits:
+  #   max_request_body_bytes: 1048576

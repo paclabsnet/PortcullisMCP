@@ -120,22 +120,27 @@ A practical way to enforce this split is to expose two virtual hosts:
 
 | Host | Routes through SSO proxy | Endpoints | Gate config field |
 |---|---|---|---|
-| `guard.internal.example.com` | Yes | `/approve`, `/healthz`, `/readyz` | `escalation_approval_endpoint` |
-| `guard-api.internal.example.com` | No (bearer token only) | `/token/*`, `/pending` | `token_api_endpoint` |
+| `guard.internal.example.com` | Yes | `/approve`, `/healthz`, `/readyz` | `peers.guard.endpoints.approval_ui` |
+| `guard-api.internal.example.com` | No (bearer token only) | `/token/*`, `/pending` | `peers.guard.endpoints.token_api` |
 
 Guard listens on a single address; the proxy layer enforces which paths are human-facing and which are API-facing.
 
-Gate gate config (`gate.yaml`) for the two-hostname split:
+Gate config (`gate.yaml`) for the two-hostname split (Unified Peer Model):
 
 ```yaml
-guard:
-  escalation_approval_endpoint: "https://guard.corp.example.com"       # SSO-proxied
-  token_api_endpoint:           "https://guard-api.internal.example.com" # direct, bearer-token only
-  bearer_token: "envvar://GUARD_BEARER_TOKEN"
+peers:
+  guard:
+    endpoints:
+      approval_ui: "https://guard.corp.example.com"         # SSO-proxied
+      token_api: "https://guard-api.internal.example.com"   # direct, bearer-token only
+    auth:
+      type: "bearer"
+      credentials:
+        bearer_token: "envvar://GUARD_BEARER_TOKEN"
 ```
 
-When `token_api_endpoint` is omitted, Gate falls back to `escalation_approval_endpoint` for all calls — correct for
-single-hostname deployments where the SSO proxy exempts the API paths or is not used.
+When `token_api` is omitted, Gate falls back to `approval_ui` for all calls — correct for single-hostname deployments
+where the SSO proxy exempts the API paths or is not used.
 
 ---
 

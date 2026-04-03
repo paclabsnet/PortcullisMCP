@@ -257,7 +257,7 @@ and group memberships without OIDC infrastructure:
 
 ```yaml
 identity:
-  source: "os"
+  strategy: "os"
   user_id: "alice@example.com"
   display_name: "Alice Developer"
   groups:

@@ -29,18 +29,18 @@ var ErrCapacityExceeded = errors.New("store capacity exceeded")
 // approval page to be served from a short ?jti= URL without embedding the full
 // JWT in the query string.
 type PendingRequest struct {
-	JTI       string
-	JWT       string
-	ExpiresAt time.Time
+	JTI       string    `json:"jti"`
+	JWT       string    `json:"jwt"`
+	ExpiresAt time.Time `json:"expires_at"`
 }
 
 // UnclaimedToken is a Guard-issued escalation token that has been approved by
 // the user but not yet collected by Gate.
 type UnclaimedToken struct {
-	UserID    string
-	JTI       string
-	Raw       string
-	ExpiresAt time.Time
+	UserID    string    `json:"user_id"`
+	JTI       string    `json:"jti"`
+	Raw       string    `json:"raw"`
+	ExpiresAt time.Time `json:"expires_at"`
 }
 
 // PendingStore manages pending escalation request JWTs.

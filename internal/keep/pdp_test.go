@@ -175,14 +175,16 @@ func TestNoopPDP_AlwaysAllows(t *testing.T) {
 
 func TestNewServer_UnknownPDPType(t *testing.T) {
 	cfg := Config{
-		PDP: PDPConfig{Type: "unknown-pdp"},
+		Responsibility: ResponsibilityConfig{
+			Policy: PolicyConfig{Strategy: "unknown-pdp"},
+		},
 	}
 	_, err := NewServer(context.Background(), cfg, "")
 	if err == nil {
 		t.Fatal("expected error for unknown PDP type, got nil")
 	}
-	if !strings.Contains(err.Error(), "unknown pdp type") {
-		t.Errorf("error = %q, want it to mention unknown pdp type", err.Error())
+	if !strings.Contains(err.Error(), "unknown pdp strategy") {
+		t.Errorf("error = %q, want it to mention unknown pdp strategy", err.Error())
 	}
 }
 

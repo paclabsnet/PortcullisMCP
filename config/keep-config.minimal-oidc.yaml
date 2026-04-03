@@ -1,50 +1,73 @@
-listen:
-  address: "127.0.0.1:8080"
-  # TLS disabled for local testing - uncomment to enable
-  # tls:
-  #   cert: "/etc/portcullis/keep.crt"
-  #   key:  "/etc/portcullis/keep.key"
-  #   client_ca: "/etc/portcullis/client-ca.crt"
-  auth:
-    bearer_token: "dev-secret-token"  # shared secret for local testing
+# Portcullis-Keep minimal config — OIDC demo version (Unified Peer Model)
+# using a mock iDp for testing purposes. Visit https://mock-idp.dev if you want to create new tokens
 
-pdp:
-  # type: "noop" allows all requests without a policy engine - useful for getting started.
-  # Switch to type: "opa" with a real endpoint for any real deployment.
-  type: "noop"
-  # endpoint: "http://localhost:8181/v1/data/portcullis/decision"
+server:
+  endpoints:
+    main:
+      listen: "127.0.0.1:8080"
+      # TLS disabled for local testing - uncomment to enable
+      # tls:
+      #   cert: "/etc/portcullis/keep.crt"
+      #   key:  "/etc/portcullis/keep.key"
+      #   client_ca: "/etc/portcullis/client-ca.crt"
+      auth:
+        type: "bearer"
+        credentials:
+          bearer_token: "dev-secret-token" # shared secret for local testing
 
-# oidc demo version, using a mock iDp for testing purposes.  visit https://mock-idp.dev 
-# if you want to create new tokens 
 identity:
-  normalizer: "oidc-verify"
-  oidc_verify:
-    issuer: "https://mock-idp.dev"             # Must match the 'iss' claim in your token
+  strategy: "oidc-verify"
+  config:
+    issuer: "https://mock-idp.dev" # Must match the 'iss' claim in your token
     jwks_url: "https://mock-idp.dev/jwt/.well-known/jwks.json" # Must be https:// in production
-    audiences: ["portcullis-mcp"]              # Optional: must match the 'aud' claim
+    audiences: ["portcullis-mcp"] # Optional: must match the 'aud' claim
     # allow_insecure_jwks_url: true            # Permits http:// jwks_url — dev/test only
 
-backends:
-  # HTTP MCP backend for demo - run the mock server with:
-  #   go run ./examples/mock-enterprise-api
-  mock-enterprise-api:
-    type: "http"
-    url: "http://localhost:3000/mcp"
-    allow_private_addresses: true  # localhost is loopback; fine for local dev
+peers:
+  guard:
+    endpoints:
+      approval_ui: "http://localhost:8444"
+      token_api: "http://localhost:8445"
 
-escalation:
+responsibility:
+  policy:
+    # strategy: "noop" allows all requests without a policy engine - useful for getting started.
+    # Switch to strategy: "opa" with a real endpoint for any real deployment.
+    strategy: "noop"
+    # config:
+    #   endpoint: "http://localhost:8181/v1/data/portcullis/decision"
+
+  mcp_backends:
+    # HTTP MCP backend for demo - run the mock server with:
+    #   go run ./examples/mock-enterprise-api
+    - name: "mock-enterprise-api"
+      type: "http"
+      url: "http://localhost:3000/mcp"
+      allow_private_addresses: true # localhost is loopback; fine for local dev
+
+  issuance:
+    signing_key: "dev-keep-signing-secret" # must match guard's responsibility.issuance.approval_request_verification_key
+    ttl: 3600
+
   workflow:
-    type: "url"
-    url:
-      guard_url: "http://localhost:8444"
+    strategy: "url"
+    config:
+      endpoints:
+        approval_ui: "http://localhost:8444"
 
-escalation_request_signing:
-  key: "dev-keep-signing-secret"   # must match guard's keep.pending_escalation_request_signing_key; use ${ENV_VAR} in production
-  ttl: 3600
+operations:
+  storage:
+    backend: "memory"
+    config:
+      decision_log:
+        enabled: true
+        console: true # Log to console for development
+        buffer_size: 100
+        flush_interval: 5
+        max_batch_size: 50
 
-decision_logs:
-  enabled: true
-  console: true  # Log to console for development
-  buffer_size: 100
-  flush_interval: 5
-  max_batch_size: 50
+  telemetry:
+    exporter: "noop"
+  logging:
+    level: "info"
+    format: "text"

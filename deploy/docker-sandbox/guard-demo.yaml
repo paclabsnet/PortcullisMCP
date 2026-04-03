@@ -1,43 +1,47 @@
-listen:
-  ui_address: "0.0.0.0:8444"
-  # ui_tls:               # uncomment to enable TLS on the UI listener
-  #   cert: "/tls/guard-server.crt"
-  #   key:  "/tls/guard-server.key"
-  api_address: "0.0.0.0:8445"
-  # api_tls:              # uncomment to enable TLS on the API listener
-  #   cert: "/tls/guard-server.crt"
-  #   key:  "/tls/guard-server.key"
+# Portcullis-Guard Demo Configuration (Unified Peer Model)
+# See internal/guard/config.go for schema details.
 
-keep:
-  pending_escalation_request_signing_key: "dev-keep-signing-secret"  # must match keep's escalation_request_signing.key
+server:
+  endpoints:
+    approval_ui:
+      listen: "0.0.0.0:8444"
+      # tls:
+      #   cert: "/tls/guard-server.crt"
+      #   key:  "/tls/guard-server.key"
 
-escalation_token_signing:
-  key: "a-string-secret-at-least-256-bits-long"  # PDP must trust tokens signed with this key
-  ttl: 86400
+    token_api:
+      listen: "0.0.0.0:8445"
+      # In sandbox demo, we allow unauthenticated access for simplicity if not configured.
+      # But establishing the pattern with a bearer token is better.
+      auth:
+        type: "bearer"
+        credentials:
+          bearer_token: "dev-guard-token"
+      # mtls:
+      #   client_ca: "/tls/ca.crt"
 
-templates:
-  dir: "/templates"
+responsibility:
+  issuance:
+    approval_request_verification_key: "dev-keep-signing-secret"
+    signing_key: "a-string-secret-at-least-256-bits-long"
+    token_ttl: 86400
 
-portcullis_gate_management_port: 7777
+  interface:
+    templates: "/templates"
+    gate_management_port: 7777
 
-#
-# Whether Gate instances can call the API without any credentials.
-# Set auth.allow_unauthenticated: true for sandbox/dev only.
-# In production, set auth.bearer_token or auth.mtls.client_ca (or both).
-#
-auth:
-  allow_unauthenticated: true  # sandbox only
-  # bearer_token: "shared-secret"
-  # mtls:
-  #   client_ca: "/tls/ca.crt"  # CA that signed Gate client certs
+operations:
+  storage:
+    backend: "redis"
+    config:
+      addr: "redis:6379"
+      password: "portcullis-dev-secret"
+      key_prefix: "portcullis:guard:"
 
-#
-# Token store: use Redis so that pending escalations and unclaimed tokens
-# survive a Guard restart and are shared across Guard replicas.
-# The password must match the --requirepass value in docker-compose.yml.
-#
-token_store:
-  backend: "redis"
-  redis:
-    addr: "redis:6379"
-    password: "portcullis-dev-secret"
+  telemetry:
+    exporter: "noop"
+    service_name: "portcullis-guard"
+
+  logging:
+    level: "debug"
+    format: "text"

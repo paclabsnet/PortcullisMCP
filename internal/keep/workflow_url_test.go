@@ -19,17 +19,20 @@ import (
 	"testing"
 
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
+	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
 )
 
 func TestNewURLWorkflowHandler_MissingGuardURL(t *testing.T) {
 	_, err := newURLWorkflowHandler(URLWorkflowConfig{})
 	if err == nil {
-		t.Fatal("expected error for missing guard_url, got nil")
+		t.Fatal("expected error for missing endpoints.approval_ui, got nil")
 	}
 }
 
 func TestNewURLWorkflowHandler_Valid(t *testing.T) {
-	h, err := newURLWorkflowHandler(URLWorkflowConfig{GuardURL: "https://guard.example.com"})
+	h, err := newURLWorkflowHandler(URLWorkflowConfig{
+		Endpoints: cfgloader.GuardEndpoints{ApprovalUI: "https://guard.example.com"},
+	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -42,7 +45,9 @@ func TestURLWorkflowHandler_Submit_ReturnsEmpty(t *testing.T) {
 	// Submit now always returns an empty reference regardless of JWT content.
 	// Gate is responsible for building the approval URL from escalation_jti or
 	// pending_jwt depending on its approval_management_strategy config.
-	h, _ := newURLWorkflowHandler(URLWorkflowConfig{GuardURL: "https://guard.example.com"})
+	h, _ := newURLWorkflowHandler(URLWorkflowConfig{
+		Endpoints: cfgloader.GuardEndpoints{ApprovalUI: "https://guard.example.com"},
+	})
 
 	for _, jwt := range []string{"", "my.jwt.token", "token.payload.sig"} {
 		ref, err := h.Submit(context.Background(), NewAuthorizedRequest(shared.EnrichedMCPRequest{TraceID: "r"}, shared.Principal{}), jwt)
@@ -56,9 +61,11 @@ func TestURLWorkflowHandler_Submit_ReturnsEmpty(t *testing.T) {
 }
 
 func TestNewWorkflowHandler_URLType(t *testing.T) {
-	cfg := WorkflowConfig{
-		Type: "url",
-		URL:  URLWorkflowConfig{GuardURL: "https://guard.example.com"},
+	cfg := EscalationConfig{
+		Strategy: "url",
+		URL: URLWorkflowConfig{
+			Endpoints: cfgloader.GuardEndpoints{ApprovalUI: "https://guard.example.com"},
+		},
 	}
 	h, err := NewWorkflowHandler(cfg)
 	if err != nil {
@@ -70,12 +77,12 @@ func TestNewWorkflowHandler_URLType(t *testing.T) {
 }
 
 func TestNewWorkflowHandler_URLType_MissingGuardURL(t *testing.T) {
-	cfg := WorkflowConfig{
-		Type: "url",
-		URL:  URLWorkflowConfig{}, // missing guard_url
+	cfg := EscalationConfig{
+		Strategy: "url",
+		URL:      URLWorkflowConfig{}, // missing endpoints.approval_ui
 	}
 	_, err := NewWorkflowHandler(cfg)
 	if err == nil {
-		t.Fatal("expected error for url type with missing guard_url, got nil")
+		t.Fatal("expected error for url type with missing endpoints.approval_ui, got nil")
 	}
 }

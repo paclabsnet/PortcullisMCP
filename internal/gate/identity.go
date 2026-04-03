@@ -52,11 +52,11 @@ type IdentityCache struct {
 
 // NewIdentityCache creates an IdentityCache and performs the initial identity
 // resolution. Returns an error if the initial resolution fails.
-// For oidc-login source, no initial resolution is performed — the identity
+// For oidc-login strategy, no initial resolution is performed — the identity
 // will be set when login completes via SetToken.
 func NewIdentityCache(ctx context.Context, cfg IdentityConfig) (*IdentityCache, error) {
 	c := &IdentityCache{cfg: cfg}
-	if cfg.Source == "oidc-login" {
+	if cfg.Strategy == "oidc-login" {
 		// Token is not yet available; identity will be set when login completes.
 		return c, nil
 	}
@@ -66,7 +66,7 @@ func NewIdentityCache(ctx context.Context, cfg IdentityConfig) (*IdentityCache, 
 	return c, nil
 }
 
-// Get returns the current identity, refreshing from source if the TTL has elapsed.
+// Get returns the current identity, refreshing from strategy if the TTL has elapsed.
 // On refresh failure it returns the previously cached identity and logs a warning.
 func (c *IdentityCache) Get(ctx context.Context) shared.UserIdentity {
 	c.mu.Lock()
@@ -99,11 +99,11 @@ func (c *IdentityCache) Info() IdentityInfo {
 
 // UpdateToken validates a raw OIDC JWT, writes it to the configured token file,
 // and immediately updates the cache. Returns the new identity on success.
-// Returns an error if the identity source is not "oidc-file", the token is invalid,
+// Returns an error if the identity strategy is not "oidc-file", the token is invalid,
 // or the file cannot be written.
 func (c *IdentityCache) UpdateToken(rawJWT string) (shared.UserIdentity, error) {
-	if c.cfg.Source != "oidc-file" {
-		return shared.UserIdentity{}, fmt.Errorf("identity source is %q, not oidc-file; token update not applicable", c.cfg.Source)
+	if c.cfg.Strategy != "oidc-file" {
+		return shared.UserIdentity{}, fmt.Errorf("identity strategy is %q, not oidc-file; token update not applicable", c.cfg.Strategy)
 	}
 	rawJWT = strings.TrimSpace(rawJWT)
 	id, expiry, err := identityFromJWT(rawJWT)
@@ -145,7 +145,7 @@ func (c *IdentityCache) SetToken(rawJWT string) error {
 }
 
 // Clear resets the cached identity to empty state. Used when the identity token
-// is found to be invalid (e.g., due to IdP restart). Only applicable to oidc-login source.
+// is found to be invalid (e.g., due to IdP restart). Only applicable to oidc-login strategy.
 func (c *IdentityCache) Clear() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -154,14 +154,14 @@ func (c *IdentityCache) Clear() {
 	c.refreshAt = time.Now()
 }
 
-// refresh re-resolves the identity from the configured source.
+// refresh re-resolves the identity from the configured strategy.
 // Must be called with c.mu held.
 // For oidc-login, the identity is set externally via SetToken (the IdP callback
 // is the only update mechanism), so refresh just extends the TTL without
 // touching the stored identity — otherwise the OS identity would silently
 // replace the OIDC token after identityRefreshTTL elapses.
 func (c *IdentityCache) refresh(ctx context.Context) error {
-	if c.cfg.Source == "oidc-login" {
+	if c.cfg.Strategy == "oidc-login" {
 		c.refreshAt = time.Now().Add(identityRefreshTTL)
 		return nil
 	}
@@ -178,12 +178,12 @@ func (c *IdentityCache) refresh(ctx context.Context) error {
 // resolveIdentityWithExpiry resolves the identity and returns the JWT expiry
 // time (zero if not OIDC or exp claim absent).
 //
-// When source is "oidc-file", the token file must exist and contain a valid JWT.
+// When strategy is "oidc-file", the token file must exist and contain a valid JWT.
 // If it does not, an error is returned — there is no fallback to OS identity.
 // This ensures that an enterprise deployment that requires OIDC credentials
 // cannot silently degrade to a weaker identity source.
 func resolveIdentityWithExpiry(_ context.Context, cfg IdentityConfig) (shared.UserIdentity, time.Time, error) {
-	if cfg.Source == "oidc-file" {
+	if cfg.Strategy == "oidc-file" {
 		tokenFile, err := expandHome(cfg.OIDCFile.TokenFile)
 		if err != nil {
 			return shared.UserIdentity{}, time.Time{}, fmt.Errorf("expand oidc token file path: %w", err)
@@ -318,11 +318,11 @@ func resolveOIDCIdentity(_ context.Context, cfg OIDCFileConfig) (shared.UserIden
 // resolveOSIdentity builds a UserIdentity from the OS user. Provided for
 // testing/evaluation only; portcullis-keep may be configured to reject it.
 func resolveOSIdentity(cfg IdentityConfig) (shared.UserIdentity, error) {
-	if cfg.UserID != "" {
+	if cfg.OS.UserID != "" {
 		return shared.UserIdentity{
-			UserID:      cfg.UserID,
-			DisplayName: cfg.DisplayName,
-			Groups:      cfg.Groups,
+			UserID:      cfg.OS.UserID,
+			DisplayName: cfg.OS.DisplayName,
+			Groups:      cfg.OS.Groups,
 			SourceType:  "os",
 		}, nil
 	}
@@ -336,13 +336,13 @@ func resolveOSIdentity(cfg IdentityConfig) (shared.UserIdentity, error) {
 		userID = u.Username + "@" + hostname
 	}
 	displayName := u.Name
-	if cfg.DisplayName != "" {
-		displayName = cfg.DisplayName
+	if cfg.OS.DisplayName != "" {
+		displayName = cfg.OS.DisplayName
 	}
 	return shared.UserIdentity{
 		UserID:      userID,
 		DisplayName: displayName,
-		Groups:      cfg.Groups,
+		Groups:      cfg.OS.Groups,
 		SourceType:  "os",
 	}, nil
 }

@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared/secrets"
 )
 
@@ -32,13 +33,14 @@ func resolveGateConfig(cfg *Config) error {
 func TestGate_Secrets_EnvVar_AllowlistedField(t *testing.T) {
 	t.Setenv("TEST_GATE_TOKEN", "resolved-bearer-token")
 	cfg := validBaseConfig()
-	cfg.Keep.Auth.Token = "envvar://TEST_GATE_TOKEN"
+	cfg.Peers.Keep.Auth.Type = "bearer"
+	cfg.Peers.Keep.Auth.Credentials.BearerToken = "envvar://TEST_GATE_TOKEN"
 
 	if err := resolveGateConfig(&cfg); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Keep.Auth.Token != "resolved-bearer-token" {
-		t.Errorf("keep.auth.token = %q, want %q", cfg.Keep.Auth.Token, "resolved-bearer-token")
+	if cfg.Peers.Keep.Auth.Credentials.BearerToken != "resolved-bearer-token" {
+		t.Errorf("peers.keep.auth.credentials.bearer_token = %q, want %q", cfg.Peers.Keep.Auth.Credentials.BearerToken, "resolved-bearer-token")
 	}
 }
 
@@ -46,20 +48,20 @@ func TestGate_Secrets_EnvVar_NonAllowlistedField(t *testing.T) {
 	// envvar:// is unrestricted — resolves on any field including non-allowlisted ones.
 	t.Setenv("TEST_GATE_ENDPOINT", "http://keep.internal:8080")
 	cfg := validBaseConfig()
-	cfg.Keep.Endpoint = "envvar://TEST_GATE_ENDPOINT"
+	cfg.Peers.Keep.Endpoint = "envvar://TEST_GATE_ENDPOINT"
 
 	if err := resolveGateConfig(&cfg); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Keep.Endpoint != "http://keep.internal:8080" {
-		t.Errorf("keep.endpoint = %q, want %q", cfg.Keep.Endpoint, "http://keep.internal:8080")
+	if cfg.Peers.Keep.Endpoint != "http://keep.internal:8080" {
+		t.Errorf("peers.keep.endpoint = %q, want %q", cfg.Peers.Keep.Endpoint, "http://keep.internal:8080")
 	}
 }
 
 func TestGate_Secrets_Vault_NonAllowlistedField_Rejected(t *testing.T) {
 	// vault:// on a non-allowlisted field must fail fast with a clear error.
 	cfg := validBaseConfig()
-	cfg.Keep.Endpoint = "vault://secret/portcullis#endpoint"
+	cfg.Peers.Keep.Endpoint = "vault://secret/portcullis#endpoint"
 
 	err := resolveGateConfig(&cfg)
 	if err == nil {
@@ -68,8 +70,8 @@ func TestGate_Secrets_Vault_NonAllowlistedField_Rejected(t *testing.T) {
 	if !strings.Contains(err.Error(), "not permitted") {
 		t.Errorf("error should mention 'not permitted'; got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "keep.endpoint") {
-		t.Errorf("error should name the offending field 'keep.endpoint'; got: %v", err)
+	if !strings.Contains(err.Error(), "peers.keep.endpoint") {
+		t.Errorf("error should name the offending field 'peers.keep.endpoint'; got: %v", err)
 	}
 }
 
@@ -78,7 +80,7 @@ func TestGate_Secrets_Vault_AllowlistedField_AttemptedNotPermittedError(t *testi
 	// Vault resolution. With no Vault server available it returns a vault error,
 	// not a "not permitted" error.
 	cfg := validBaseConfig()
-	cfg.Keep.Auth.Token = "vault://secret/portcullis/gate#token"
+	cfg.Peers.Keep.Auth.Credentials.BearerToken = "vault://secret/portcullis/gate#token"
 
 	err := resolveGateConfig(&cfg)
 	if err == nil {
@@ -92,32 +94,41 @@ func TestGate_Secrets_Vault_AllowlistedField_AttemptedNotPermittedError(t *testi
 func TestGate_Secrets_GuardBearerToken_Allowlisted(t *testing.T) {
 	t.Setenv("TEST_GATE_GUARD_TOKEN", "guard-bearer-value")
 	cfg := validBaseConfig()
-	cfg.Guard.Auth.BearerToken = "envvar://TEST_GATE_GUARD_TOKEN"
+	cfg.Peers.Guard.Auth.Credentials.BearerToken = "envvar://TEST_GATE_GUARD_TOKEN"
 
 	if err := resolveGateConfig(&cfg); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Guard.Auth.BearerToken != "guard-bearer-value" {
-		t.Errorf("guard.auth.bearer_token = %q, want %q", cfg.Guard.Auth.BearerToken, "guard-bearer-value")
+	if cfg.Peers.Guard.Auth.Credentials.BearerToken != "guard-bearer-value" {
+		t.Errorf("peers.guard.auth.credentials.bearer_token = %q, want %q", cfg.Peers.Guard.Auth.Credentials.BearerToken, "guard-bearer-value")
 	}
 }
 
 func TestGate_Secrets_MgmtSharedSecret_Allowlisted(t *testing.T) {
 	t.Setenv("TEST_GATE_MGMT_SECRET", "mgmt-secret-value")
 	cfg := validBaseConfig()
-	cfg.ManagementAPI.SharedSecret = "envvar://TEST_GATE_MGMT_SECRET"
+	cfg.Server.Endpoints = map[string]cfgloader.EndpointConfig{
+		ManagementUIEndpoint: {
+			Auth: cfgloader.AuthSettings{
+				Type: "bearer",
+				Credentials: cfgloader.AuthCredentials{
+					BearerToken: "envvar://TEST_GATE_MGMT_SECRET",
+				},
+			},
+		},
+	}
 
 	if err := resolveGateConfig(&cfg); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.ManagementAPI.SharedSecret != "mgmt-secret-value" {
-		t.Errorf("management_api.shared_secret = %q, want %q", cfg.ManagementAPI.SharedSecret, "mgmt-secret-value")
+	if cfg.Server.Endpoints[ManagementUIEndpoint].Auth.Credentials.BearerToken != "mgmt-secret-value" {
+		t.Errorf("management_ui.auth.credentials.bearer_token = %q, want %q", cfg.Server.Endpoints[ManagementUIEndpoint].Auth.Credentials.BearerToken, "mgmt-secret-value")
 	}
 }
 
 func TestGate_Secrets_EnvVarNotSet_ReturnsError(t *testing.T) {
 	cfg := validBaseConfig()
-	cfg.Keep.Auth.Token = "envvar://DEFINITELY_NOT_SET_GATE_VAR"
+	cfg.Peers.Keep.Auth.Credentials.BearerToken = "envvar://DEFINITELY_NOT_SET_GATE_VAR"
 
 	err := resolveGateConfig(&cfg)
 	if err == nil {
@@ -131,9 +142,7 @@ func TestGate_Secrets_EnvVarNotSet_ReturnsError(t *testing.T) {
 func TestGate_LoadConfig_WrapsResolverError(t *testing.T) {
 	// LoadConfig must wrap resolver errors with "resolve secrets:" so that
 	// operators see a clear prefix in startup logs.
-	// Use an allowlisted field (keep.auth.token) with a vault:// URI so the
-	// allowlist check passes and the error comes from the Vault dial attempt.
-	yaml := "keep:\n  endpoint: \"http://keep.example.com\"\n  auth:\n    type: bearer\n    token: \"vault://secret/portcullis/gate#token\"\n"
+	yaml := "peers:\n  keep:\n    endpoint: \"http://keep.example.com\"\n    auth:\n      type: bearer\n      credentials:\n        bearer_token: \"vault://secret/portcullis/gate#token\"\n"
 	f, err := os.CreateTemp("", "gate-config-*.yaml")
 	if err != nil {
 		t.Fatalf("create temp file: %v", err)
@@ -155,16 +164,16 @@ func TestGate_LoadConfig_WrapsResolverError(t *testing.T) {
 
 func TestGate_Secrets_Passthrough_Unchanged(t *testing.T) {
 	cfg := validBaseConfig()
-	cfg.Keep.Auth.Token = "plain-literal-token"
-	cfg.Guard.Auth.BearerToken = "another-literal"
+	cfg.Peers.Keep.Auth.Credentials.BearerToken = "plain-literal-token"
+	cfg.Peers.Guard.Auth.Credentials.BearerToken = "another-literal"
 
 	if err := resolveGateConfig(&cfg); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Keep.Auth.Token != "plain-literal-token" {
-		t.Errorf("plain token should be unchanged; got %q", cfg.Keep.Auth.Token)
+	if cfg.Peers.Keep.Auth.Credentials.BearerToken != "plain-literal-token" {
+		t.Errorf("plain token should be unchanged; got %q", cfg.Peers.Keep.Auth.Credentials.BearerToken)
 	}
-	if cfg.Guard.Auth.BearerToken != "another-literal" {
-		t.Errorf("plain guard token should be unchanged; got %q", cfg.Guard.Auth.BearerToken)
+	if cfg.Peers.Guard.Auth.Credentials.BearerToken != "another-literal" {
+		t.Errorf("plain guard token should be unchanged; got %q", cfg.Peers.Guard.Auth.Credentials.BearerToken)
 	}
 }

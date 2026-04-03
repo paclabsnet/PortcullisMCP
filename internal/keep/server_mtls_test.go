@@ -33,11 +33,7 @@ import (
 	"github.com/paclabsnet/PortcullisMCP/internal/shared/tlsutil"
 )
 
-// tlsFixtures holds an in-memory PKI for mTLS tests:
-//   - a trusted CA that signs the Keep server cert and the Gate client cert
-//   - an untrusted CA (separate root) that signs an alternate client cert
-//
-// All certs have a short TTL (1 hour) — they are ephemeral test-only fixtures.
+// tlsFixtures holds an in-memory PKI for mTLS tests.
 type tlsFixtures struct {
 	CACertPEM []byte // trusted CA certificate
 	// Keep server (signed by trusted CA, SAN: localhost / 127.0.0.1)
@@ -52,15 +48,13 @@ type tlsFixtures struct {
 	UntrustedClientKeyPEM  []byte
 }
 
-// generateTLSFixtures creates an ephemeral in-memory PKI suitable for mTLS
-// handshake tests. All certificates expire in one hour.
+// generateTLSFixtures creates an ephemeral in-memory PKI suitable for mTLS tests.
 func generateTLSFixtures(t *testing.T) *tlsFixtures {
 	t.Helper()
 
 	notBefore := time.Now().Add(-time.Minute)
 	notAfter := time.Now().Add(time.Hour)
 
-	// ---- trusted CA --------------------------------------------------------
 	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatalf("generate CA key: %v", err)
@@ -84,7 +78,6 @@ func generateTLSFixtures(t *testing.T) *tlsFixtures {
 	}
 	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})
 
-	// ---- Keep server cert (signed by trusted CA) ---------------------------
 	serverKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatalf("generate server key: %v", err)
@@ -110,7 +103,6 @@ func generateTLSFixtures(t *testing.T) *tlsFixtures {
 	}
 	serverKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: serverKeyDER})
 
-	// ---- Gate client cert (signed by trusted CA) ---------------------------
 	clientKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatalf("generate client key: %v", err)
@@ -134,7 +126,6 @@ func generateTLSFixtures(t *testing.T) *tlsFixtures {
 	}
 	clientKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: clientKeyDER})
 
-	// ---- untrusted CA (separate root) --------------------------------------
 	untrustedCAKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatalf("generate untrusted CA key: %v", err)
@@ -149,6 +140,7 @@ func generateTLSFixtures(t *testing.T) *tlsFixtures {
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 	}
 	untrustedCADER, err := x509.CreateCertificate(rand.Reader, untrustedCATmpl, untrustedCATmpl, &untrustedCAKey.PublicKey, untrustedCAKey)
+
 	if err != nil {
 		t.Fatalf("create untrusted CA cert: %v", err)
 	}
@@ -158,7 +150,6 @@ func generateTLSFixtures(t *testing.T) *tlsFixtures {
 	}
 	untrustedCAPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: untrustedCADER})
 
-	// ---- client cert signed by untrusted CA --------------------------------
 	untrustedClientKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatalf("generate untrusted client key: %v", err)
@@ -194,7 +185,6 @@ func generateTLSFixtures(t *testing.T) *tlsFixtures {
 	}
 }
 
-// writePEMFile writes PEM data to a temp file and returns its path.
 func writePEMFile(t *testing.T, data []byte) string {
 	t.Helper()
 	f, err := os.CreateTemp(t.TempDir(), "*.pem")
@@ -208,8 +198,6 @@ func writePEMFile(t *testing.T, data []byte) string {
 	return f.Name()
 }
 
-// startMTLSServer starts a minimal HTTPS server using the given tls.Config and
-// returns its base URL. The server is shut down via t.Cleanup.
 func startMTLSServer(t *testing.T, tlsCfg *tls.Config) string {
 	t.Helper()
 	ln, err := tls.Listen("tcp", "127.0.0.1:0", tlsCfg)
@@ -224,13 +212,11 @@ func startMTLSServer(t *testing.T, tlsCfg *tls.Config) string {
 	return "https://" + ln.Addr().String()
 }
 
-// ---- buildServerTLS unit tests ---------------------------------------------
-
 func TestBuildServerTLS_ValidServerCertOnly(t *testing.T) {
 	fx := generateTLSFixtures(t)
 	dir := t.TempDir()
 
-	cfg := TLSConfig{
+	cfg := tlsutil.TLSConfig{
 		Cert: filepath.Join(dir, "server.crt"),
 		Key:  filepath.Join(dir, "server.key"),
 	}
@@ -253,7 +239,7 @@ func TestBuildServerTLS_WithClientCA_RequiresVerification(t *testing.T) {
 	fx := generateTLSFixtures(t)
 	dir := t.TempDir()
 
-	cfg := TLSConfig{
+	cfg := tlsutil.TLSConfig{
 		Cert:     filepath.Join(dir, "server.crt"),
 		Key:      filepath.Join(dir, "server.key"),
 		ClientCA: filepath.Join(dir, "ca.crt"),
@@ -276,7 +262,7 @@ func TestBuildServerTLS_WithClientCA_RequiresVerification(t *testing.T) {
 
 func TestBuildServerTLS_InvalidCertFile(t *testing.T) {
 	dir := t.TempDir()
-	cfg := TLSConfig{
+	cfg := tlsutil.TLSConfig{
 		Cert: filepath.Join(dir, "missing.crt"),
 		Key:  filepath.Join(dir, "missing.key"),
 	}
@@ -289,7 +275,7 @@ func TestBuildServerTLS_InvalidClientCAFile(t *testing.T) {
 	fx := generateTLSFixtures(t)
 	dir := t.TempDir()
 
-	cfg := TLSConfig{
+	cfg := tlsutil.TLSConfig{
 		Cert:     filepath.Join(dir, "server.crt"),
 		Key:      filepath.Join(dir, "server.key"),
 		ClientCA: filepath.Join(dir, "missing-ca.crt"),
@@ -302,11 +288,6 @@ func TestBuildServerTLS_InvalidClientCAFile(t *testing.T) {
 	}
 }
 
-// ---- mTLS handshake tests --------------------------------------------------
-
-// buildClientTLSConfig constructs a tls.Config for an HTTP client that:
-//   - trusts serverCA to verify the server's certificate
-//   - optionally presents clientCert/clientKey as the client certificate
 func buildClientTLSConfig(t *testing.T, serverCAPEM, clientCertPEM, clientKeyPEM []byte) *tls.Config {
 	t.Helper()
 	pool := x509.NewCertPool()
@@ -327,8 +308,7 @@ func buildClientTLSConfig(t *testing.T, serverCAPEM, clientCertPEM, clientKeyPEM
 func TestMTLS_ValidClientCert_Accepted(t *testing.T) {
 	fx := generateTLSFixtures(t)
 
-	// Start Keep server with mTLS (requires client cert signed by trusted CA).
-	serverTLSCfg, err := tlsutil.BuildServerTLS(TLSConfig{
+	serverTLSCfg, err := tlsutil.BuildServerTLS(tlsutil.TLSConfig{
 		Cert:     writePEMFile(t, fx.ServerCertPEM),
 		Key:      writePEMFile(t, fx.ServerKeyPEM),
 		ClientCA: writePEMFile(t, fx.CACertPEM),
@@ -338,7 +318,6 @@ func TestMTLS_ValidClientCert_Accepted(t *testing.T) {
 	}
 	serverURL := startMTLSServer(t, serverTLSCfg)
 
-	// Gate client presents a cert signed by the trusted CA.
 	clientTLSCfg := buildClientTLSConfig(t, fx.CACertPEM, fx.ClientCertPEM, fx.ClientKeyPEM)
 	client := &http.Client{Transport: &http.Transport{TLSClientConfig: clientTLSCfg}}
 
@@ -355,8 +334,7 @@ func TestMTLS_ValidClientCert_Accepted(t *testing.T) {
 func TestMTLS_NoClientCert_Rejected(t *testing.T) {
 	fx := generateTLSFixtures(t)
 
-	// Start Keep server requiring mTLS.
-	serverTLSCfg, err := tlsutil.BuildServerTLS(TLSConfig{
+	serverTLSCfg, err := tlsutil.BuildServerTLS(tlsutil.TLSConfig{
 		Cert:     writePEMFile(t, fx.ServerCertPEM),
 		Key:      writePEMFile(t, fx.ServerKeyPEM),
 		ClientCA: writePEMFile(t, fx.CACertPEM),
@@ -366,7 +344,6 @@ func TestMTLS_NoClientCert_Rejected(t *testing.T) {
 	}
 	serverURL := startMTLSServer(t, serverTLSCfg)
 
-	// Gate client presents NO client certificate.
 	clientTLSCfg := buildClientTLSConfig(t, fx.CACertPEM, nil, nil)
 	client := &http.Client{Transport: &http.Transport{TLSClientConfig: clientTLSCfg}}
 
@@ -379,8 +356,7 @@ func TestMTLS_NoClientCert_Rejected(t *testing.T) {
 func TestMTLS_UntrustedClientCert_Rejected(t *testing.T) {
 	fx := generateTLSFixtures(t)
 
-	// Start Keep server: only trusts the primary CA.
-	serverTLSCfg, err := tlsutil.BuildServerTLS(TLSConfig{
+	serverTLSCfg, err := tlsutil.BuildServerTLS(tlsutil.TLSConfig{
 		Cert:     writePEMFile(t, fx.ServerCertPEM),
 		Key:      writePEMFile(t, fx.ServerKeyPEM),
 		ClientCA: writePEMFile(t, fx.CACertPEM),
@@ -390,7 +366,6 @@ func TestMTLS_UntrustedClientCert_Rejected(t *testing.T) {
 	}
 	serverURL := startMTLSServer(t, serverTLSCfg)
 
-	// Gate client presents a cert signed by the untrusted CA.
 	clientTLSCfg := buildClientTLSConfig(t, fx.CACertPEM, fx.UntrustedClientCertPEM, fx.UntrustedClientKeyPEM)
 	client := &http.Client{Transport: &http.Transport{TLSClientConfig: clientTLSCfg}}
 

@@ -1,139 +1,68 @@
-#
-#  This is a full example with all the major components included
-#
+# Portcullis-Gate Example Configuration (Unified Peer Model)
+# See internal/gate/config.go for schema details.
 
-keep:
-  endpoint: "https://portcullis.internal.example.com"
-  auth:
-    type: "mtls"          # or "bearer"
-    cert: "~/.portcullis/gate.crt"
-    key:  "~/.portcullis/gate.key"
-    # token: ""           # used when type is "bearer"
-    # server_ca: ""       # path to CA cert for verifying Keep's TLS certificate (required for private/enterprise CAs)
+server:
+  endpoints:
+    management_ui:
+      listen: "localhost:7777"
+      auth:
+        type: "none"  # for local/personal use; set to "bearer" or "mtls" if shared
 
 identity:
-  source: "oidc-file"     # "oidc-file" (SSO-managed token file), "oidc-login" (interactive browser flow), or "os" (testing/evaluation only)
-  oidc_file:
-    token_file: "~/.portcullis/oidc-token"  # refreshed by enterprise SSO tooling
+  # Strategy: "oidc-file", "oidc-login", or "os"
+  strategy: "oidc-file"
+  config:
+    token_file: "~/.portcullis/oidc-token"
 
+peers:
+  keep:
+    endpoint: "https://portcullis.internal.example.com"
+    auth:
+      type: "mtls"
+      credentials:
+        cert: "~/.portcullis/gate.crt"
+        key:  "~/.portcullis/gate.key"
 
-# For oidc-login (interactive browser flow):
-#  source: "oidc-login"
-#
-#  oidc_login:
-#    issuer_url: "http://localhost:5556/dex" # Use your Dex or other OIDC provider URL
-#    client_id: "portcullis-gate"
-#    client_secret: "portcullis-gate-secret"
-#    scopes: ["openid", "profile", "email", "groups", "audience:server:client_id:portcullis-keep"]
-#    flow: "authorization_code"
-#  
-#  login_callback_timeout_seconds: 300
+  guard:
+    endpoints:
+      approval_ui: "https://guard.internal.example.com"
+      token_api: "https://guard-api.internal.example.com"
+    auth:
+      type: "bearer"
+      credentials:
+        bearer_token: "envvar://GUARD_BEARER_TOKEN"
 
+responsibility:
+  workspace:
+    directory: "~/sandbox"
+  forbidden:
+    directories:
+      - "~/.ssh"
+      - "~/.portcullis"
+      - "/etc"
+  escalation:
+    strategy: "proactive"
+    poll_interval: 60
+    token_store: "~/.portcullis/tokens.json"
+  decision_logs:
+    flush_interval: 30
+    max_batch_size: 100
+  agent_interaction:
+    instructions:
+      require_approval: |
+        Action required: {reason}
+        Ask the user to open the following link to approve this request:
+        {url}
+        Once approved, retry the operation. Trace ID: {trace_id}
+      deny: |
+        This action is not permitted: {reason}
+        To request access, contact your security team and quote trace ID: {trace_id}
 
-sandbox:
-  directory: "~/sandbox"
+operations:
+  telemetry:
+    exporter: "noop"
+    service_name: "portcullis-gate"
 
-protected_paths:
-  - "~/.ssh"
-  - "~/.portcullis"
-  - "/etc"
-
-
-#
-# if you change this port, you'll want to change the reference to this port
-# in the portcullis-guard config. 
-#
-management_api:
-  port: 7777              # localhost only
-  # shared_secret: ""    # optional; leave empty to disable auth on management API
-
-token_store: "~/.portcullis/tokens.json"
-
-#decision_logs:
-#  flush_interval: 30  # seconds between sending logs to Keep (default: 30)
-#  max_batch_size: 100 # max entries per batch (default: 100)
-
-# Guard endpoint for automatic escalation token collection.
-# When configured, Gate will automatically claim tokens approved via the Guard
-# web UI or deposited by remote workflows (e.g. ServiceNow), without the user
-# needing to paste tokens manually via the management API.
-guard:
-  # escalation_approval_endpoint is the human-facing Guard URL shown to users
-  # in approval links. In production, point this at your SSO proxy address so
-  # agents cannot self-approve escalations. See docs/guard-sso-proxy.md.
-  escalation_approval_endpoint: "https://guard.internal.example.com"
-
-  # token_api_endpoint is the machine-to-machine URL Gate uses for API calls
-  # (/token/unclaimed/list, /token/claim, /pending). Set this to Guard's direct
-  # internal address when the SSO proxy is on a separate hostname. Defaults to
-  # escalation_approval_endpoint when unset.
-  # token_api_endpoint: "https://guard-api.internal.example.com"
-
-  bearer_token: "envvar://GUARD_BEARER_TOKEN"  # must match guard.auth.bearer_token
-  poll_interval: 60  # seconds between polls of /token/unclaimed/list (default: 60)
-
-  # approval_management_strategy controls how Gate presents the escalation
-  # approval URL to the agent.
-  #
-  # "user-driven" (default): Gate builds a ?token=<jwt> URL. The full signed
-  #   JWT is embedded in the query string. Simple, but long URLs may be mangled
-  #   by some AI clients when rendered as clickable links.
-  #
-  # "proactive": Gate pushes the signed JWT to Guard immediately via
-  #   POST /pending and then builds a short ?jti=<uuid> URL instead.
-  #   Eliminates URL mangling at the cost of one extra Guard round-trip per
-  #   escalation. If Guard is unreachable when Gate attempts the push, the
-  #   agent receives an error asking the user to try again later.
-  #
-  # approval_management_strategy: "proactive"
-
-# agent controls the messages Gate returns to the AI agent for deny, escalation,
-# and workflow responses. Each instructions field is a template; omit any
-# placeholder to hide that information from the agent.
-#
-# Supported placeholders:
-#   approval.instructions: {reason}, {url}, {trace_id}
-#   deny.instructions:     {reason}, {trace_id}
-#
-# agent:
-#
-#   # Message shown when escalation or workflow approval is required.
-#   # Default:
-#   #   Escalation required: {reason}
-#   #
-#   #   Present this complete URL to the user so they can click it to approve
-#   #   the request. Do not truncate or shorten the URL:
-#   #   {url}
-#   #
-#   #   Trace ID: {trace_id}
-#   require_approval:
-#     instructions: |
-#       Action required: {reason}
-#
-#       Ask the user to open the following link to approve this request:
-#       {url}
-#
-#       Once approved, retry the operation. Trace ID: {trace_id}
-#
-#   # Message shown when a request is denied by policy.
-#   # Default:
-#   #   Access denied: {reason}
-#   #
-#   #   If you believe this is incorrect, contact your security team and
-#   #   reference trace ID: {trace_id}
-#   deny:
-#     instructions: |
-#       This action is not permitted: {reason}
-#
-#       To request access, contact your security team and quote trace ID: {trace_id}
-
-telemetry:
-  # Supported exporters:
-  #   noop   - no telemetry (default)
-  #   stdout - print spans to stdout (development)
-  #   otlp   - send to an OTLP collector (production)
-  exporter: "noop"
-  service_name: "portcullis-gate"
-  # otlp:
-  #   endpoint: "http://otel-collector.internal.example.com:4318"  # OTLP HTTP endpoint
-  #   insecure: true  # set false (default) to require TLS
+  logging:
+    level: "info"
+    format: "text"

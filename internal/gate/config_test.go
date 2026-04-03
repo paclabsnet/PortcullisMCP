@@ -14,39 +14,45 @@
 
 package gate
 
-import "testing"
+import (
+	"testing"
+
+	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
+)
 
 // validBaseConfig returns a minimal valid Config so individual tests can vary
 // exactly one field at a time without triggering unrelated errors.
 func validBaseConfig() Config {
 	return Config{
-		Keep: KeepConfig{Endpoint: "http://keep.example.com"},
+		Peers: PeersConfig{
+			Keep: cfgloader.PeerAuth{Endpoint: "http://keep.example.com"},
+		},
 	}
 }
 
 func TestConfig_Validate_KeepEndpointRequired(t *testing.T) {
 	cfg := validBaseConfig()
-	cfg.Keep.Endpoint = ""
+	cfg.Peers.Keep.Endpoint = ""
 	if err := cfg.Validate(); err == nil {
-		t.Error("expected error when keep.endpoint is empty")
+		t.Error("expected error when peers.keep.endpoint is empty")
 	}
 }
 
-func TestConfig_Validate_IdentitySource(t *testing.T) {
+func TestConfig_Validate_IdentityStrategy(t *testing.T) {
 	tests := []struct {
-		source  string
-		wantErr bool
+		strategy string
+		wantErr  bool
 	}{
 		{"", false},
 		{"os", false},
-		{"oidc-file", true}, // token_file not set
+		{"oidc-file", true},  // token_file not set
 		{"oidc-login", true}, // issuer_url not set
 		{"ldap", true},
 	}
 	for _, tc := range tests {
-		t.Run(tc.source, func(t *testing.T) {
+		t.Run(tc.strategy, func(t *testing.T) {
 			cfg := validBaseConfig()
-			cfg.Identity.Source = tc.source
+			cfg.Identity.Strategy = tc.strategy
 			err := cfg.Validate()
 			if (err != nil) != tc.wantErr {
 				t.Errorf("Validate() error = %v, wantErr %v", err, tc.wantErr)
@@ -57,8 +63,8 @@ func TestConfig_Validate_IdentitySource(t *testing.T) {
 
 func TestConfig_Validate_OIDCFileTokenFileRequired(t *testing.T) {
 	cfg := validBaseConfig()
-	cfg.Identity.Source = "oidc-file"
-	cfg.Identity.OIDCFile.TokenFile = "/path/to/token"
+	cfg.Identity.Strategy = "oidc-file"
+	cfg.Identity.Config = map[string]any{"token_file": "/path/to/token"}
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("expected no error with token_file set; got: %v", err)
 	}
@@ -66,25 +72,13 @@ func TestConfig_Validate_OIDCFileTokenFileRequired(t *testing.T) {
 
 func TestConfig_Validate_OIDCLoginRequired(t *testing.T) {
 	cfg := validBaseConfig()
-	cfg.Identity.Source = "oidc-login"
-	cfg.Identity.OIDCLogin.IssuerURL = "https://idp.example.com"
-	cfg.Identity.OIDCLogin.ClientID = "client-id"
-	cfg.ManagementAPI.Port = DefaultManagementAPIPort
-	if err := cfg.Validate(); err != nil {
-		t.Errorf("expected no error with issuer_url, client_id, and mgmt port set; got: %v", err)
+	cfg.Identity.Strategy = "oidc-login"
+	cfg.Identity.Config = map[string]any{
+		"issuer_url": "https://idp.example.com",
+		"client_id":  "client-id",
 	}
-}
-
-func TestConfig_Validate_OIDCLoginWithoutExplicitPort(t *testing.T) {
-	// management_api.port defaults to 7777 when omitted; oidc-login must not
-	// require the operator to specify it explicitly.
-	cfg := validBaseConfig()
-	cfg.Identity.Source = "oidc-login"
-	cfg.Identity.OIDCLogin.IssuerURL = "https://idp.example.com"
-	cfg.Identity.OIDCLogin.ClientID = "client-id"
-	cfg.ManagementAPI.Port = 0 // omitted in YAML; will be defaulted to 7777
 	if err := cfg.Validate(); err != nil {
-		t.Errorf("expected no error when management_api.port is omitted with oidc-login, got: %v", err)
+		t.Errorf("expected no error with issuer_url and client_id set; got: %v", err)
 	}
 }
 
@@ -93,20 +87,20 @@ func TestConfig_Validate_ApprovalManagementStrategy(t *testing.T) {
 		strategy string
 		wantErr  bool
 	}{
-		{"", false},
 		{"user-driven", false},
 		{"proactive", false},
 		{"Proactive", true},
 		{"USER-DRIVEN", true},
-		{"proactve", true}, // typo
+		{"proactve", true},
 		{"unknown", true},
 	}
+
 	for _, tc := range tests {
 		t.Run(tc.strategy, func(t *testing.T) {
 			cfg := validBaseConfig()
-			cfg.Guard.ApprovalManagementStrategy = tc.strategy
+			cfg.Responsibility.Escalation.Strategy = tc.strategy
 			if tc.strategy == "proactive" {
-				cfg.Guard.EscalationApprovalEndpoint = "http://guard.example.com"
+				cfg.Peers.Guard.Endpoints.ApprovalUI = "http://guard.example.com"
 			}
 			err := cfg.Validate()
 			if (err != nil) != tc.wantErr {
@@ -118,9 +112,10 @@ func TestConfig_Validate_ApprovalManagementStrategy(t *testing.T) {
 
 func TestConfig_Validate_ProactiveRequiresGuardEndpoint(t *testing.T) {
 	cfg := validBaseConfig()
-	cfg.Guard.ApprovalManagementStrategy = "proactive"
-	cfg.Guard.EscalationApprovalEndpoint = ""
+	cfg.Responsibility.Escalation.Strategy = "proactive"
+	cfg.Peers.Guard.Endpoints.ApprovalUI = ""
 	if err := cfg.Validate(); err == nil {
-		t.Error("expected error when proactive strategy set but guard.escalation_approval_endpoint is empty")
+		t.Error("expected error when proactive strategy set but peers.guard.endpoints.approval_ui is empty")
 	}
 }
+

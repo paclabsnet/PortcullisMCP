@@ -27,7 +27,7 @@ import (
 )
 
 func TestNewWorkflowHandler_Noop(t *testing.T) {
-	cfg := WorkflowConfig{Type: "noop"}
+	cfg := EscalationConfig{Strategy: "noop"}
 	handler, err := NewWorkflowHandler(cfg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -36,21 +36,18 @@ func TestNewWorkflowHandler_Noop(t *testing.T) {
 		t.Fatal("expected non-nil handler")
 	}
 
-	// Verify it implements the interface
 	req := shared.EnrichedMCPRequest{TraceID: "test-123"}
 	reqID, err := handler.Submit(context.Background(), NewAuthorizedRequest(req, shared.Principal{}), "test reason")
 	if err != nil {
 		t.Errorf("noop handler should not error: %v", err)
 	}
-	// Noop workflow returns empty string
 	if reqID != "" {
 		t.Errorf("request ID = %q, want %q", reqID, "")
 	}
 }
 
 func TestNewWorkflowHandler_UnknownType(t *testing.T) {
-	// Unknown workflow types default to noop (safe default)
-	cfg := WorkflowConfig{Type: "unknown"}
+	cfg := EscalationConfig{Strategy: "unknown"}
 	handler, err := NewWorkflowHandler(cfg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -61,7 +58,6 @@ func TestNewWorkflowHandler_UnknownType(t *testing.T) {
 }
 
 func TestServiceNowHandler_Submit(t *testing.T) {
-	// Set up test credentials
 	os.Setenv("TEST_SNOW_CREDS", "test-user:test-pass")
 	defer os.Unsetenv("TEST_SNOW_CREDS")
 
@@ -102,9 +98,7 @@ func TestServiceNowHandler_Submit(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Use TLS test server to match ServiceNow's https:// requirement
 			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				// Verify request structure
 				if r.Method != http.MethodPost {
 					t.Errorf("expected POST, got %s", r.Method)
 				}
@@ -127,8 +121,6 @@ func TestServiceNowHandler_Submit(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			// ServiceNow config takes just the host, not a full URL.
-			// httptest.NewTLSServer always uses "https://", so strip that prefix.
 			host := strings.TrimPrefix(srv.URL, "https://")
 
 			cfg := ServiceNowConfig{
@@ -141,7 +133,6 @@ func TestServiceNowHandler_Submit(t *testing.T) {
 				t.Fatalf("failed to create handler: %v", err)
 			}
 
-			// Use the test server's client which has the right TLS config
 			handler.client = srv.Client()
 
 			req := shared.EnrichedMCPRequest{
@@ -219,7 +210,7 @@ func TestWebhookHandler_Submit(t *testing.T) {
 			name:          "successful webhook without request ID",
 			statusCode:    http.StatusAccepted,
 			responseBody:  map[string]any{},
-			expectedReqID: "req-123", // Falls back to original request ID
+			expectedReqID: "req-123",
 		},
 		{
 			name:        "server error",
@@ -231,7 +222,6 @@ func TestWebhookHandler_Submit(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				// Verify request structure
 				if r.Method != http.MethodPost {
 					t.Errorf("expected POST, got %s", r.Method)
 				}
@@ -247,7 +237,6 @@ func TestWebhookHandler_Submit(t *testing.T) {
 					t.Errorf("failed to decode request body: %v", err)
 				}
 
-				// Verify payload structure
 				if body["trace_id"] != "req-123" {
 					t.Errorf("expected trace_id in payload")
 				}

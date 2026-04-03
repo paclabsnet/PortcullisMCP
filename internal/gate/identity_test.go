@@ -197,11 +197,14 @@ func TestIdentityFromJWT_RawTokenPreserved(t *testing.T) {
 
 func TestResolveOSIdentity_Override(t *testing.T) {
 	cfg := IdentityConfig{
-		Source:      "os",
-		UserID:      "override-user@test",
-		DisplayName: "Override Display",
-		Groups:      []string{"testers"},
+		Strategy: "os",
+		Config: map[string]any{
+			"user_id":      "override-user@test",
+			"display_name": "Override Display",
+			"groups":       []string{"testers"},
+		},
 	}
+	_ = cfg.Validate()
 	id, err := resolveOSIdentity(cfg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -222,7 +225,8 @@ func TestResolveOSIdentity_Override(t *testing.T) {
 
 func TestResolveOSIdentity_SystemUser(t *testing.T) {
 	// Empty override — should use actual OS user without error.
-	cfg := IdentityConfig{Source: "os"}
+	cfg := IdentityConfig{Strategy: "os"}
+	_ = cfg.Validate()
 	id, err := resolveOSIdentity(cfg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -236,7 +240,11 @@ func TestResolveOSIdentity_SystemUser(t *testing.T) {
 }
 
 func TestIdentityCache_OSSource(t *testing.T) {
-	cfg := IdentityConfig{Source: "os", UserID: "cache-test@example.com"}
+	cfg := IdentityConfig{
+		Strategy: "os",
+		Config: map[string]any{"user_id": "cache-test@example.com"},
+	}
+	_ = cfg.Validate()
 	cache, err := NewIdentityCache(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("NewIdentityCache: %v", err)
@@ -248,7 +256,14 @@ func TestIdentityCache_OSSource(t *testing.T) {
 }
 
 func TestIdentityCache_Info(t *testing.T) {
-	cfg := IdentityConfig{Source: "os", UserID: "info-test@example.com", DisplayName: "Info Test"}
+	cfg := IdentityConfig{
+		Strategy: "os",
+		Config: map[string]any{
+			"user_id":      "info-test@example.com",
+			"display_name": "Info Test",
+		},
+	}
+	_ = cfg.Validate()
 	cache, err := NewIdentityCache(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("NewIdentityCache: %v", err)
@@ -278,9 +293,10 @@ func TestIdentityCache_OIDCSource(t *testing.T) {
 	}
 
 	cfg := IdentityConfig{
-		Source: "oidc-file",
-		OIDCFile: OIDCFileConfig{TokenFile: tokenFile},
+		Strategy: "oidc-file",
+		Config: map[string]any{"token_file": tokenFile},
 	}
+	_ = cfg.Validate()
 	cache, err := NewIdentityCache(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("NewIdentityCache: %v", err)
@@ -303,10 +319,13 @@ func TestIdentityCache_OIDCSource(t *testing.T) {
 func TestIdentityCache_OIDCFailsWithoutTokenFile(t *testing.T) {
 	// OIDC source with a missing token file — must return an error, not fall back to OS.
 	cfg := IdentityConfig{
-		Source:   "oidc-file",
-		OIDCFile: OIDCFileConfig{TokenFile: "/does/not/exist/token"},
-		UserID:   "fallback@example.com",
+		Strategy: "oidc-file",
+		Config: map[string]any{
+			"token_file": "/does/not/exist/token",
+			"user_id":    "fallback@example.com",
+		},
 	}
+	_ = cfg.Validate()
 	_, err := NewIdentityCache(context.Background(), cfg)
 	if err == nil {
 		t.Fatal("expected error when OIDC token file is missing, got nil")
@@ -317,13 +336,12 @@ func TestIdentityCache_OIDCFailsWithEmptyTokenFile(t *testing.T) {
 	// OIDC source with an empty token file — must return an error.
 	dir := t.TempDir()
 	tokenFile := filepath.Join(dir, "oidc-token")
-	if err := os.WriteFile(tokenFile, []byte("   \n"), 0600); err != nil {
-		t.Fatal(err)
-	}
+	_ = os.WriteFile(tokenFile, []byte("   \n"), 0600)
 	cfg := IdentityConfig{
-		Source: "oidc-file",
-		OIDCFile: OIDCFileConfig{TokenFile: tokenFile},
+		Strategy: "oidc-file",
+		Config: map[string]any{"token_file": tokenFile},
 	}
+	_ = cfg.Validate()
 	_, err := NewIdentityCache(context.Background(), cfg)
 	if err == nil {
 		t.Fatal("expected error when OIDC token file is empty, got nil")
@@ -338,12 +356,13 @@ func TestIdentityCache_UpdateToken(t *testing.T) {
 		"sub": "old@corp.com",
 		"exp": float64(time.Now().Add(time.Hour).Unix()),
 	})
-	os.WriteFile(tokenFile, []byte(initial), 0600)
+	_ = os.WriteFile(tokenFile, []byte(initial), 0600)
 
 	cfg := IdentityConfig{
-		Source: "oidc-file",
-		OIDCFile: OIDCFileConfig{TokenFile: tokenFile},
+		Strategy: "oidc-file",
+		Config: map[string]any{"token_file": tokenFile},
 	}
+	_ = cfg.Validate()
 	cache, _ := NewIdentityCache(context.Background(), cfg)
 
 	newRaw := buildJWT(map[string]any{
@@ -375,7 +394,11 @@ func TestIdentityCache_UpdateToken(t *testing.T) {
 }
 
 func TestIdentityCache_UpdateToken_NotOIDCSource(t *testing.T) {
-	cfg := IdentityConfig{Source: "os", UserID: "u@example.com"}
+	cfg := IdentityConfig{
+		Strategy: "os",
+		Config: map[string]any{"user_id": "u@example.com"},
+	}
+	_ = cfg.Validate()
 	cache, _ := NewIdentityCache(context.Background(), cfg)
 
 	_, err := cache.UpdateToken("any-token")
@@ -387,10 +410,9 @@ func TestIdentityCache_UpdateToken_NotOIDCSource(t *testing.T) {
 // TestIdentityCache_OIDCLogin_NoFallbackToOS verifies that after SetToken
 // populates an oidc-login cache, a subsequent refresh (simulated by expiring
 // the TTL) does not silently replace the OIDC identity with OS credentials.
-// This is a regression test for the bug where Get() called resolveIdentityWithExpiry
-// which fell through to resolveOSIdentity for the "oidc-login" source.
 func TestIdentityCache_OIDCLogin_NoFallbackToOS(t *testing.T) {
-	cfg := IdentityConfig{Source: "oidc-login"}
+	cfg := IdentityConfig{Strategy: "oidc-login"}
+	_ = cfg.Validate()
 	cache, err := NewIdentityCache(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("NewIdentityCache: %v", err)

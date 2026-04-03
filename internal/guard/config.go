@@ -18,106 +18,111 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/paclabsnet/PortcullisMCP/internal/shared"
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/mitchellh/mapstructure"
 	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
-	"github.com/paclabsnet/PortcullisMCP/internal/shared/tlsutil"
 )
 
 // SecretAllowlist lists the config fields eligible for vault:// and other
 // restricted secret URI schemes. envvar:// and filevar:// may be used on any field.
 var SecretAllowlist = []string{
-	"auth.bearer_token",
-	"keep.pending_escalation_request_signing_key",
-	"escalation_token_signing.key",
-	"token_store.redis.password",
+	"server.endpoints.token_api.auth.credentials.bearer_token",
+	"responsibility.issuance.signing_key",
+	"operations.storage.config.password",
 }
-
-// SigningConfig is an alias for shared.SigningConfig.
-// Guard uses it for escalation_token_signing; the canonical definition lives in
-// internal/shared so it can be shared with portcullis-keep without duplication.
-type SigningConfig = shared.SigningConfig
 
 // LoadConfig reads, parses, resolves secrets in, and validates a guard config file.
-// It uses strict unmarshaling to ensure that unknown or deprecated fields
-// cause a configuration error at startup.
 func LoadConfig(ctx context.Context, path string) (Config, error) {
-	return cfgloader.Load[Config](ctx, path, SecretAllowlist)
-}
-
-// Validate returns an error if the configuration contains invalid values.
-func (c Config) Validate() error {
-	if err := c.Listen.Validate(); err != nil {
-		return err
+	cfg, err := cfgloader.Load[*Config](ctx, path, SecretAllowlist)
+	if err != nil {
+		return Config{}, err
 	}
-	if c.Keep.PendingEscalationRequestSigningKey == "" {
-		return fmt.Errorf("keep.pending_escalation_request_signing_key is required")
-	}
-	if c.EscalationTokenSigning.Key == "" {
-		return fmt.Errorf("escalation_token_signing.key is required")
-	}
-	if c.Auth.BearerToken == "" && c.Auth.Mtls.ClientCA == "" && !c.Auth.AllowUnauthenticated {
-		return fmt.Errorf("auth.bearer_token or auth.mtls.client_ca is required; to allow unauthenticated token API access (development only) set auth.allow_unauthenticated: true")
-	}
-	switch c.TokenStore.Backend {
-	case "", "memory":
-		// no extra fields required
-	case "redis":
-		if c.TokenStore.Redis.Addr == "" {
-			return fmt.Errorf("token_store.redis.addr is required when token_store.backend is \"redis\"")
-		}
-	default:
-		return fmt.Errorf("token_store.backend must be \"memory\" or \"redis\", got %q", c.TokenStore.Backend)
-	}
-	return nil
+	return *cfg, nil
 }
 
 // Config holds the full portcullis-guard configuration.
 type Config struct {
-	Listen                       ListenConfig     `yaml:"listen"`
-	Keep                         KeepConfig       `yaml:"keep"`
-	EscalationTokenSigning       SigningConfig     `yaml:"escalation_token_signing"`
-	Templates                    TemplatesConfig  `yaml:"templates"`
-	PortcullisGateManagementPort int              `yaml:"portcullis_gate_management_port"` // gate management API port shown in post-approval instructions (default: 7777)
-	Auth                         AuthConfig       `yaml:"auth"`
-	TokenStore                   TokenStoreConfig `yaml:"token_store"`
-	Limits                       LimitsConfig     `yaml:"limits"`
+	Server         cfgloader.ServerConfig     `yaml:"server"`
+	Identity       cfgloader.IdentityConfig   `yaml:"identity"`
+	Peers          PeersConfig                `yaml:"peers"`
+	Responsibility ResponsibilityConfig       `yaml:"responsibility"`
+	Operations     cfgloader.OperationsConfig `yaml:"operations"`
+
+	// Derived / internal use only
+	Limits LimitsConfig `yaml:"-"`
 }
 
-// MtlsConfig holds the CA certificate used to verify Gate client certificates
-// on the API listener. When set, the API listener requests client certificates
-// and verifies them against this CA; the machineAuth middleware grants access
-// when a valid certificate is presented.
-type MtlsConfig struct {
-	ClientCA string `yaml:"client_ca"`
+// ResponsibilityConfig defines the specialized duty of Portcullis-Guard.
+type ResponsibilityConfig struct {
+	Issuance  IssuanceConfig  `yaml:"issuance"`
+	Interface InterfaceConfig `yaml:"interface"`
 }
 
-// AuthConfig controls authentication for the API listener endpoints.
-// Authentication is checked in order: mTLS peer cert, Bearer token,
-// allow_unauthenticated nag-ware, or 401.
-type AuthConfig struct {
-	BearerToken          string     `yaml:"bearer_token"`
-	AllowUnauthenticated bool       `yaml:"allow_unauthenticated"`
-	Mtls                 MtlsConfig `yaml:"mtls"`
+// IssuanceConfig holds signing logic for approved tokens and request verification.
+type IssuanceConfig struct {
+	// ApprovalRequestVerificationKey is the HMAC key used to verify requests from Keep.
+	ApprovalRequestVerificationKey string `yaml:"approval_request_verification_key"`
+
+	// SigningKey is the HMAC key used to sign issued escalation tokens.
+	SigningKey string `yaml:"signing_key"`
+
+	// TokenTTL is the TTL for issued escalation tokens in seconds.
+	TokenTTL int `yaml:"token_ttl"`
+}
+
+// InterfaceConfig holds UI-specific settings.
+type InterfaceConfig struct {
+	Templates          string `yaml:"templates"`
+	GateManagementPort int    `yaml:"gate_management_port"` // Port shown in UI instructions
+}
+
+// PeersConfig defines outbound connectivity to other Portcullis services.
+type PeersConfig struct {
+	Keep cfgloader.PeerAuth `yaml:"keep"`
+}
+
+// Validate returns an error if the configuration contains invalid values.
+func (c *Config) Validate() error {
+	if _, ok := c.Server.Endpoints["approval_ui"]; !ok {
+		return fmt.Errorf("server.endpoints.approval_ui is required")
+	}
+	if _, ok := c.Server.Endpoints["token_api"]; !ok {
+		return fmt.Errorf("server.endpoints.token_api is required")
+	}
+
+	if c.Responsibility.Issuance.ApprovalRequestVerificationKey == "" {
+		return fmt.Errorf("responsibility.issuance.approval_request_verification_key is required")
+	}
+	if c.Responsibility.Issuance.SigningKey == "" {
+		return fmt.Errorf("responsibility.issuance.signing_key is required")
+	}
+
+	// Decode Limits
+	if c.Operations.Limits != nil {
+		if err := mapstructure.Decode(c.Operations.Limits, &c.Limits); err != nil {
+			return fmt.Errorf("decode operations.limits: %w", err)
+		}
+	}
+	c.Limits.ApplyDefaults()
+
+	return nil
 }
 
 // LimitsConfig controls request body, field length, and in-memory map size limits for Guard.
-// Zero values are replaced with service defaults by ApplyDefaults.
 type LimitsConfig struct {
-	MaxRequestBodyBytes   int `yaml:"max_request_body_bytes"`   // default: 524288 (512 KB)
-	MaxUserIDBytes        int `yaml:"max_user_id_bytes"`        // default: 512
-	MaxJTIBytes           int `yaml:"max_jti_bytes"`            // default: 128
-	MaxPendingJWTBytes    int `yaml:"max_pending_jwt_bytes"`    // default: 8192
-	MaxScopeOverrideBytes int `yaml:"max_scope_override_bytes"` // default: 16384
-	MaxPendingRequests    int `yaml:"max_pending_requests"`     // default: 10000
-	MaxUnclaimedPerUser   int `yaml:"max_unclaimed_per_user"`   // default: 10000
-	MaxUnclaimedTotal     int `yaml:"max_unclaimed_total"`      // default: 100000
+	MaxRequestBodyBytes   int `yaml:"max_request_body_bytes" mapstructure:"max_request_body_bytes"`
+	MaxUserIDBytes        int `yaml:"max_user_id_bytes" mapstructure:"max_user_id_bytes"`
+	MaxJTIBytes           int `yaml:"max_jti_bytes" mapstructure:"max_jti_bytes"`
+	MaxPendingJWTBytes    int `yaml:"max_pending_jwt_bytes" mapstructure:"max_pending_jwt_bytes"`
+	MaxScopeOverrideBytes int `yaml:"max_scope_override_bytes" mapstructure:"max_scope_override_bytes"`
+	MaxPendingRequests    int `yaml:"max_pending_requests" mapstructure:"max_pending_requests"`
+	MaxUnclaimedPerUser   int `yaml:"max_unclaimed_per_user" mapstructure:"max_unclaimed_per_user"`
+	MaxUnclaimedTotal     int `yaml:"max_unclaimed_total" mapstructure:"max_unclaimed_total"`
 }
 
-// ApplyDefaults fills any zero-value fields with their service defaults.
-// Call this once during server initialisation before any request is processed.
 func (l *LimitsConfig) ApplyDefaults() {
 	if l.MaxRequestBodyBytes == 0 {
-		l.MaxRequestBodyBytes = 512 << 10 // 512 KB
+		l.MaxRequestBodyBytes = 512 << 10
 	}
 	if l.MaxUserIDBytes == 0 {
 		l.MaxUserIDBytes = 512
@@ -142,88 +147,36 @@ func (l *LimitsConfig) ApplyDefaults() {
 	}
 }
 
-// TokenStoreConfig selects and configures the backing store for pending
-// escalation requests and unclaimed escalation tokens.
-type TokenStoreConfig struct {
-	// Backend selects the store implementation.
-	// "memory" (default) uses an in-process map; data is lost on restart.
-	// "redis" uses a Redis server; data persists across restarts and is
-	// shared across multiple Guard instances for HA deployments.
-	Backend string `yaml:"backend"`
-
-	// TTL is the default lifetime (in seconds) for unclaimed tokens when no
-	// expiry can be parsed from the token itself (default: 3600 = 1 hour).
-	TTL int `yaml:"ttl"`
-
-	// CleanupInterval is how often (in seconds) the in-memory store scans for
-	// and removes expired entries (default: 300 = 5 minutes).
-	// Has no effect when backend is "redis" (Redis TTL handles expiry).
-	CleanupInterval int `yaml:"cleanup_interval"`
-
-	// Redis holds connection settings used when backend is "redis".
-	Redis RedisConfig `yaml:"redis"`
-}
-
 // RedisConfig holds connection and security settings for the Redis token store.
 type RedisConfig struct {
-	// Addr is the Redis server address in "host:port" form (required when
-	// token_store.backend is "redis").
-	Addr string `yaml:"addr"`
-
-	// Password is the Redis AUTH password.  Leave empty if Redis is not
-	// password-protected.  Supports vault:// and envvar:// secret URIs.
-	Password string `yaml:"password"`
-
-	// DB selects the Redis logical database (0-based, default 0).
-	DB int `yaml:"db"`
-
-	// TLSEnabled enables TLS for the Redis connection (e.g. Redis Enterprise,
-	// Upstash, or any Redis deployment with TLS termination).
-	TLSEnabled bool `yaml:"tls_enabled"`
-
-	// TLSSkipVerify disables server certificate verification.
-	// For development with self-signed certs only; never use in production.
-	TLSSkipVerify bool `yaml:"tls_skip_verify"`
-
-	// TLSCACert is an optional path to a PEM file containing the CA certificate
-	// used to verify the Redis server's TLS certificate.  If empty, the system
-	// certificate pool is used.
-	TLSCACert string `yaml:"tls_ca_cert"`
-
-	// KeyPrefix is prepended to every Redis key Guard writes.
-	// Defaults to "portcullis:guard:".  Override when sharing a Redis instance
-	// across multiple environments.
-	KeyPrefix string `yaml:"key_prefix"`
+	Addr          string `yaml:"addr" mapstructure:"addr"`
+	Password      string `yaml:"password" mapstructure:"password"`
+	DB            int    `yaml:"db" mapstructure:"db"`
+	TLSEnabled    bool   `yaml:"tls_enabled" mapstructure:"tls_enabled"`
+	TLSSkipVerify bool   `yaml:"tls_skip_verify" mapstructure:"tls_skip_verify"`
+	TLSCACert     string `yaml:"tls_ca_cert" mapstructure:"tls_ca_cert"`
+	KeyPrefix     string `yaml:"key_prefix" mapstructure:"key_prefix"`
 }
 
-// ListenConfig controls the network addresses and TLS settings for Guard's two listeners.
-// UIAddress serves the human-facing approval UI (/approve).
-// APIAddress serves the machine-to-machine API (/token/*, /pending).
-type ListenConfig struct {
-	UIAddress  string            `yaml:"ui_address"`
-	UITLS      tlsutil.TLSConfig `yaml:"ui_tls"`
-	APIAddress string            `yaml:"api_address"`
-	APITLS     tlsutil.TLSConfig `yaml:"api_tls"`
+// Internal JWT claim types used by Guard.
+type escalationRequestClaims struct {
+	jwt.RegisteredClaims
+	UserID          string           `json:"user_id"`
+	UserDisplayName string           `json:"user_display_name"`
+	Server          string           `json:"server"`
+	Tool            string           `json:"tool"`
+	Reason          string           `json:"reason"`
+	EscalationScope []map[string]any `json:"escalation_scope"`
 }
 
-// Validate returns an error if the listen config contains invalid values.
-func (c ListenConfig) Validate() error {
-	if c.UIAddress == "" {
-		return fmt.Errorf("listen.ui_address is required")
-	}
-	if c.APIAddress == "" {
-		return fmt.Errorf("listen.api_address is required")
-	}
-	return nil
+type portcullisClaims struct {
+	Reason          string           `json:"reason"`
+	ArgRestrictions []map[string]any `json:"arg_restrictions"`
+	Tools           []string         `json:"tools"`
+	Services        []string         `json:"services"`
 }
 
-// KeepConfig holds the key Guard uses to verify Keep-signed escalation request JWTs.
-type KeepConfig struct {
-	PendingEscalationRequestSigningKey string `yaml:"pending_escalation_request_signing_key"` // must match keep.escalation_request_signing.key
-}
-
-// TemplatesConfig points to the directory containing approval.html and token.html.
-// If Dir is empty, Guard uses its built-in default templates from the installation.
-type TemplatesConfig struct {
-	Dir string `yaml:"dir"`
+type escalationTokenClaims struct {
+	jwt.RegisteredClaims
+	Portcullis portcullisClaims `json:"portcullis"`
 }

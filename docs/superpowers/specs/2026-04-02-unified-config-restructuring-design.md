@@ -24,8 +24,8 @@ Every Portcullis service is viewed as a peer with a specific domain of authority
 
 ### 3.1. Portcullis-Gate (The Agent Interface)
 Gate manages the Agent's local environment and provides instructions back to the LLM.
-- **`workspace`**: Defines the "safe zone" where the Agent is permitted to read files freely, and write (with approval).
-- **`restrictions`**: Explicitly defines "forbidden" paths that the Agent is never allowed to access.
+- **`workspace.directories`**: Defines the "safe zone" where the Agent is permitted to read files freely, and write (with approval).
+- **`forbidden.directories`**: Explicitly defines "forbidden" paths that the Agent is never allowed to access.
 - **`agent_interaction`**: Templates for instructions returned to the AI for Deny, Escalate, or Workflow outcomes.
 
 

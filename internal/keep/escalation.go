@@ -45,17 +45,17 @@ type EscalationSigner struct {
 	ttl time.Duration
 }
 
-// NewEscalationSigner creates an EscalationSigner from the keep signing config.
+// NewEscalationSigner creates an EscalationSigner from the keep issuance config.
 // Returns nil if no key is configured — callers must handle a nil signer gracefully.
-func NewEscalationSigner(cfg SigningConfig) (*EscalationSigner, error) {
-	if cfg.Key == "" {
+func NewEscalationSigner(cfg IssuanceConfig) (*EscalationSigner, error) {
+	if cfg.SigningKey == "" {
 		return nil, nil
 	}
 	ttl := time.Duration(cfg.TTL) * time.Second
 	if ttl == 0 {
 		ttl = 24 * time.Hour
 	}
-	return &EscalationSigner{key: []byte(cfg.Key), ttl: ttl}, nil
+	return &EscalationSigner{key: []byte(cfg.SigningKey), ttl: ttl}, nil
 }
 
 // Sign creates a signed JWT encoding the full escalation request context.

@@ -20,6 +20,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
 )
 
 // newGateForStatusTests builds a minimal *Gate with Keep and Guard endpoints
@@ -33,18 +35,25 @@ func newGateForStatusTests(keepURL, guardURL, degradedReason string) *Gate {
 	}
 	return &Gate{
 		cfg: Config{
-			Keep:  KeepConfig{Endpoint: keepURL},
-			Guard: GuardConfig{EscalationApprovalEndpoint: guardURL},
+			Peers: PeersConfig{
+				Keep: cfgloader.PeerAuth{Endpoint: keepURL},
+				Guard: GateSpecificGuardConfig{
+					GuardPeerConfig: cfgloader.GuardPeerConfig{
+						PeerAuth:  cfgloader.PeerAuth{Endpoint: guardURL},
+						Endpoints: cfgloader.GuardEndpoints{ApprovalUI: guardURL},
+					},
+				},
+			},
 		},
 		stateMachine: sm,
 	}
 }
 
-// healthzServer returns a test HTTP server that responds 200 to GET /healthz.
-func healthzServer(t *testing.T) *httptest.Server {
+// readyzServer returns a test HTTP server that responds 200 to GET /readyz.
+func readyzServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/healthz" {
+		if r.URL.Path == "/readyz" {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
@@ -52,32 +61,32 @@ func healthzServer(t *testing.T) *httptest.Server {
 	}))
 }
 
-// ---- pingHealth -------------------------------------------------------------
+// ---- pingReadiness ----------------------------------------------------------
 
-func TestPingHealth_Available(t *testing.T) {
-	srv := healthzServer(t)
+func TestPingReadiness_Available(t *testing.T) {
+	srv := readyzServer(t)
 	defer srv.Close()
 
-	result := pingHealth(context.Background(), srv.URL)
+	result := pingReadiness(context.Background(), srv.URL)
 	if result != "available" {
-		t.Errorf("pingHealth = %q, want %q", result, "available")
+		t.Errorf("pingReadiness = %q, want %q", result, "available")
 	}
 }
 
-func TestPingHealth_Unavailable(t *testing.T) {
+func TestPingReadiness_Unavailable(t *testing.T) {
 	// Port 1 is reserved and will refuse connections.
-	result := pingHealth(context.Background(), "http://127.0.0.1:1")
+	result := pingReadiness(context.Background(), "http://127.0.0.1:1")
 	if result != "unavailable" {
-		t.Errorf("pingHealth = %q, want %q", result, "unavailable")
+		t.Errorf("pingReadiness = %q, want %q", result, "unavailable")
 	}
 }
 
 // ---- buildStatusReport ------------------------------------------------------
 
 func TestBuildStatusReport_AllHealthy(t *testing.T) {
-	keep := healthzServer(t)
+	keep := readyzServer(t)
 	defer keep.Close()
-	guard := healthzServer(t)
+	guard := readyzServer(t)
 	defer guard.Close()
 
 	g := newGateForStatusTests(keep.URL, guard.URL, "")
@@ -101,7 +110,7 @@ func TestBuildStatusReport_AllHealthy(t *testing.T) {
 }
 
 func TestBuildStatusReport_GateDegraded(t *testing.T) {
-	keep := healthzServer(t)
+	keep := readyzServer(t)
 	defer keep.Close()
 
 	g := newGateForStatusTests(keep.URL, "", "Keep unreachable at startup")
@@ -119,7 +128,7 @@ func TestBuildStatusReport_GateDegraded(t *testing.T) {
 }
 
 func TestBuildStatusReport_KeepUnavailable(t *testing.T) {
-	guard := healthzServer(t)
+	guard := readyzServer(t)
 	defer guard.Close()
 
 	g := newGateForStatusTests("http://127.0.0.1:1", guard.URL, "")
@@ -131,10 +140,10 @@ func TestBuildStatusReport_KeepUnavailable(t *testing.T) {
 }
 
 func TestBuildStatusReport_GuardNotConfigured(t *testing.T) {
-	keep := healthzServer(t)
+	keep := readyzServer(t)
 	defer keep.Close()
 
-	g := newGateForStatusTests(keep.URL, "", "") // no Guard endpoint
+	g := newGateForStatusTests(keep.URL, "", "") // no Guard is not an error condition
 	msg, isErr := g.buildStatusReport(context.Background())
 
 	if isErr {
@@ -146,7 +155,7 @@ func TestBuildStatusReport_GuardNotConfigured(t *testing.T) {
 }
 
 func TestBuildStatusReport_GuardUnavailable(t *testing.T) {
-	keep := healthzServer(t)
+	keep := readyzServer(t)
 	defer keep.Close()
 
 	g := newGateForStatusTests(keep.URL, "http://127.0.0.1:1", "")

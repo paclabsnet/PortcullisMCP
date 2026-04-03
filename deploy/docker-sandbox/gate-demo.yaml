@@ -1,4 +1,4 @@
-# Gate configuration for the Docker sandbox demo.
+# Gate configuration for the Docker sandbox demo (Unified Peer Model).
 #
 # Gate runs on the host machine (launched by your MCP client via stdio).
 # Copy this file to ~/.portcullis/gate.yaml and adjust paths as needed.
@@ -6,25 +6,17 @@
 # By default Gate connects to Keep over plain HTTP with a shared bearer token.
 # To use mTLS instead, comment out the bearer block and uncomment the mtls block.
 
-keep:
-  endpoint: "http://localhost:8080"
-  auth:
-    type: "bearer"
-    token: "dev-secret-token"   # must match listen.auth.bearer_token in keep-demo.yaml
-
-  # mTLS alternative — enable after uncommenting the tls: block in keep-demo.yaml
-  # and changing the endpoint scheme to https://.
-  #
-  # endpoint: "https://localhost:8080"
-  # auth:
-  #   type: "mtls"
-  #   cert:      "/path/to/deploy/docker-sandbox/tls/gate-client.crt"
-  #   key:       "/path/to/deploy/docker-sandbox/tls/gate-client.key"
-  #   server_ca: "/path/to/deploy/docker-sandbox/tls/ca.crt"
+server:
+  endpoints:
+    management_ui:
+      listen: "localhost:7777"
+      auth:
+        type: "none"
 
 identity:
-  source: "oidc-login"
-  oidc_login:
+  # Strategy: "oidc-file", "oidc-login", or "os"
+  strategy: "oidc-login"
+  config:
     issuer_url: "http://localhost:5556/dex"
     client_id: "portcullis-gate"
     client_secret: "portcullis-gate-secret"
@@ -36,32 +28,71 @@ identity:
       - "audience:server:client_id:portcullis-keep"
     flow: "authorization_code"
 
-sandbox:
-  directories: 
-    - "~/sandbox"
-    - "C:/projects"
-    - "C:/tmp"
-    - "/tmp"
+peers:
+  keep:
+    endpoint: "http://localhost:8080"
+    auth:
+      type: "bearer"
+      credentials:
+        bearer_token: "dev-secret-token" # must match listen.auth.bearer_token in keep-demo.yaml
 
-protected_paths:
-  - "~/.ssh"
-  - "~/.portcullis"
-  - "/etc"
-
-management_api:
-  port: 7777       # this is the default
-
-token_store: "~/.portcullis/tokens.json"
-
-guard:
-  escalation_approval_endpoint: "http://localhost:8444"  # UI: human approval page
-  token_api_endpoint: "http://localhost:8445"             # API: machine-to-machine calls
-  poll_interval: 10
-  # auth: omitted — no credentials (sandbox uses allow_unauthenticated: true on the server)
-  # To use bearer auth or mTLS in production, uncomment:
+  # mTLS alternative — enable after uncommenting the tls: block in keep-demo.yaml
+  # and changing the endpoint scheme to https://.
+  #
+  # endpoint: "https://localhost:8080"
   # auth:
-  #   bearer_token: "shared-secret"
-  #   mtls:
-  #     server_ca:   "/path/to/tls/ca.crt"
-  #     client_cert: "/path/to/tls/gate-client.crt"
-  #     client_key:  "/path/to/tls/gate-client.key"
+  #   type: "mtls"
+  #   credentials:
+  #     cert:      "/path/to/deploy/docker-sandbox/tls/gate-client.crt"
+  #     key:       "/path/to/deploy/docker-sandbox/tls/gate-client.key"
+  #     server_ca: "/path/to/deploy/docker-sandbox/tls/ca.crt"
+
+  guard:
+    endpoints:
+      approval_ui: "http://localhost:8444" # UI: human approval page
+      token_api: "http://localhost:8445"   # API: machine-to-machine calls
+    auth:
+      type: "bearer"
+      credentials:
+        bearer_token: "dev-guard-token"
+
+responsibility:
+  workspace:
+    directories:
+      - "~/sandbox"
+      - "C:/projects"
+      - "C:/tmp"
+      - "/tmp"
+  forbidden:
+    directories:
+      - "~/.ssh"
+      - "~/.portcullis"
+      - "/etc"
+  escalation:
+    strategy: "proactive"
+    poll_interval: 10
+    token_store: "~/.portcullis/tokens.json"
+
+  agent_interaction:
+    instructions:
+      require_approval: |
+        Action required: {reason}
+
+        Ask the user to open the following link to approve this request:
+        {url}  
+
+        Make sure you copy the URL exactly. A single missed character can make it invalid.
+
+        Once approved, retry the operation.
+      deny: |
+        This action is not permitted: {reason}
+        Reference trace ID {trace_id} when contacting your security team.
+
+
+
+operations:
+  telemetry:
+    exporter: "noop"
+  logging:
+    level: "info"
+    format: "text"

@@ -21,10 +21,12 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
 )
 
 func TestDecisionLogger_Disabled(t *testing.T) {
-	dl := NewDecisionLogger(DecisionLogConfig{Enabled: false})
+	dl := NewDecisionLogger(cfgloader.DecisionLogConfig{Enabled: false})
 
 	// Log should be a no-op and must not panic.
 	dl.Log(&DecisionLogEntry{TraceID: "req-1", Decision: "allow"})
@@ -41,7 +43,7 @@ func TestDecisionLogger_Disabled(t *testing.T) {
 }
 
 func TestDecisionLogger_Log_Nil(t *testing.T) {
-	dl := NewDecisionLogger(DecisionLogConfig{
+	dl := NewDecisionLogger(cfgloader.DecisionLogConfig{
 		Enabled:       true,
 		BufferSize:    100,
 		FlushInterval: 60,
@@ -75,7 +77,7 @@ func TestDecisionLogger_Log_SetsTimestamp(t *testing.T) {
 	defer srv.Close()
 
 	before := time.Now()
-	dl := NewDecisionLogger(DecisionLogConfig{
+	dl := NewDecisionLogger(cfgloader.DecisionLogConfig{
 		Enabled:       true,
 		URL:           srv.URL,
 		FlushInterval: 60, // long — rely on MaxBatchSize=1 to trigger immediate flush
@@ -115,7 +117,7 @@ func TestDecisionLogger_PreserveExistingTimestamp(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	dl := NewDecisionLogger(DecisionLogConfig{
+	dl := NewDecisionLogger(cfgloader.DecisionLogConfig{
 		Enabled:       true,
 		URL:           srv.URL,
 		FlushInterval: 60,
@@ -153,7 +155,7 @@ func TestDecisionLogger_Shutdown_Flushes(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	dl := NewDecisionLogger(DecisionLogConfig{
+	dl := NewDecisionLogger(cfgloader.DecisionLogConfig{
 		Enabled:       true,
 		URL:           srv.URL,
 		FlushInterval: 3600, // very long — entries flushed only on shutdown
@@ -177,7 +179,7 @@ func TestDecisionLogger_Shutdown_Flushes(t *testing.T) {
 }
 
 func TestDecisionLogger_Shutdown_Idempotent(t *testing.T) {
-	dl := NewDecisionLogger(DecisionLogConfig{Enabled: true, FlushInterval: 60, BufferSize: 100})
+	dl := NewDecisionLogger(cfgloader.DecisionLogConfig{Enabled: true, FlushInterval: 60, BufferSize: 100})
 
 	if err := dl.Shutdown(); err != nil {
 		t.Errorf("first Shutdown error: %v", err)
@@ -194,7 +196,7 @@ func TestDecisionLogger_RemoteError_NonBlocking(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	dl := NewDecisionLogger(DecisionLogConfig{
+	dl := NewDecisionLogger(cfgloader.DecisionLogConfig{
 		Enabled:       true,
 		URL:           srv.URL,
 		FlushInterval: 1,
@@ -219,7 +221,7 @@ func TestDecisionLogger_RemoteError_NonBlocking(t *testing.T) {
 }
 
 func TestDecisionLogger_Stats(t *testing.T) {
-	dl := NewDecisionLogger(DecisionLogConfig{
+	dl := NewDecisionLogger(cfgloader.DecisionLogConfig{
 		Enabled:       true,
 		URL:           "http://example.com/log",
 		Console:       true,
@@ -257,7 +259,7 @@ func TestDecisionLogger_RequestHeaders(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	dl := NewDecisionLogger(DecisionLogConfig{
+	dl := NewDecisionLogger(cfgloader.DecisionLogConfig{
 		Enabled:       true,
 		URL:           srv.URL,
 		FlushInterval: 60,

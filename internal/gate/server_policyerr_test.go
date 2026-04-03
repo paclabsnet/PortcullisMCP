@@ -21,13 +21,20 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
+	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
 )
 
 func newGateForPolicyErrTests(guardEndpoint string) *Gate {
 	return &Gate{
 		cfg: Config{
-			Keep:  KeepConfig{Endpoint: "http://keep.example.com"},
-			Guard: GuardConfig{EscalationApprovalEndpoint: guardEndpoint},
+			Peers: PeersConfig{
+				Keep: cfgloader.PeerAuth{Endpoint: "http://keep.example.com"},
+				Guard: GateSpecificGuardConfig{
+					GuardPeerConfig: cfgloader.GuardPeerConfig{
+						Endpoints: cfgloader.GuardEndpoints{ApprovalUI: guardEndpoint},
+					},
+				},
+			},
 		},
 	}
 }
@@ -105,10 +112,20 @@ func TestPolicyErrToResult_DenyError_CustomTemplate_ReasonOnly(t *testing.T) {
 	// IT team omits {trace_id} from their template — only reason appears.
 	g := &Gate{
 		cfg: Config{
-			Keep:  KeepConfig{Endpoint: "http://keep.example.com"},
-			Guard: GuardConfig{EscalationApprovalEndpoint: "http://guard.example.com"},
-			Agent: AgentConfig{
-				Deny: AgentDenyConfig{Instructions: "Denied: {reason}"},
+			Peers: PeersConfig{
+				Keep: cfgloader.PeerAuth{Endpoint: "http://keep.example.com"},
+				Guard: GateSpecificGuardConfig{
+					GuardPeerConfig: cfgloader.GuardPeerConfig{
+						Endpoints: cfgloader.GuardEndpoints{ApprovalUI: "http://guard.example.com"},
+					},
+				},
+			},
+			Responsibility: ResponsibilityConfig{
+				AgentInteraction: AgentInteractionConfig{
+					Instructions: AgentInstructionsConfig{
+						Deny: "Denied: {reason}",
+					},
+				},
 			},
 		},
 	}
@@ -124,10 +141,20 @@ func TestPolicyErrToResult_DenyError_CustomTemplate_TraceOnly(t *testing.T) {
 	// IT team omits {reason} — only trace ID appears.
 	g := &Gate{
 		cfg: Config{
-			Keep:  KeepConfig{Endpoint: "http://keep.example.com"},
-			Guard: GuardConfig{EscalationApprovalEndpoint: "http://guard.example.com"},
-			Agent: AgentConfig{
-				Deny: AgentDenyConfig{Instructions: "Request blocked. Reference: {trace_id}"},
+			Peers: PeersConfig{
+				Keep: cfgloader.PeerAuth{Endpoint: "http://keep.example.com"},
+				Guard: GateSpecificGuardConfig{
+					GuardPeerConfig: cfgloader.GuardPeerConfig{
+						Endpoints: cfgloader.GuardEndpoints{ApprovalUI: "http://guard.example.com"},
+					},
+				},
+			},
+			Responsibility: ResponsibilityConfig{
+				AgentInteraction: AgentInteractionConfig{
+					Instructions: AgentInstructionsConfig{
+						Deny: "Request blocked. Reference: {trace_id}",
+					},
+				},
 			},
 		},
 	}

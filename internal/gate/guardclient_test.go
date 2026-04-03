@@ -20,6 +20,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
 )
 
 // mustGuardClient creates a GuardClient for testing, failing the test on error.
@@ -57,11 +59,15 @@ func TestRegisterPending_Success(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(map[string]string{"status": "registered", "jti": "test-jti"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "registered", "jti": "test-jti"})
 	}))
 	defer srv.Close()
 
-	g := mustGuardClient(t, GuardConfig{TokenAPIEndpoint: srv.URL})
+	g := mustGuardClient(t, GuardConfig{
+		GuardPeerConfig: cfgloader.GuardPeerConfig{
+			Endpoints: cfgloader.GuardEndpoints{TokenAPI: srv.URL},
+		},
+	})
 	if err := g.RegisterPending(context.Background(), "test-jti", "header.payload.sig"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -73,7 +79,16 @@ func TestRegisterPending_AuthFailure(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	g := mustGuardClient(t, GuardConfig{TokenAPIEndpoint: srv.URL, Auth: GuardAuth{BearerToken: "wrong"}})
+	g := mustGuardClient(t, GuardConfig{
+		GuardPeerConfig: cfgloader.GuardPeerConfig{
+			Endpoints: cfgloader.GuardEndpoints{TokenAPI: srv.URL},
+			PeerAuth: cfgloader.PeerAuth{
+				Auth: cfgloader.AuthSettings{
+					Credentials: cfgloader.AuthCredentials{BearerToken: "wrong"},
+				},
+			},
+		},
+	})
 	if err := g.RegisterPending(context.Background(), "jti", "jwt"); err == nil {
 		t.Fatal("expected error for 401 response, got nil")
 	}
@@ -82,18 +97,26 @@ func TestRegisterPending_AuthFailure(t *testing.T) {
 func TestRegisterPending_ServerError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": "internal"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "internal"})
 	}))
 	defer srv.Close()
 
-	g := mustGuardClient(t, GuardConfig{TokenAPIEndpoint: srv.URL})
+	g := mustGuardClient(t, GuardConfig{
+		GuardPeerConfig: cfgloader.GuardPeerConfig{
+			Endpoints: cfgloader.GuardEndpoints{TokenAPI: srv.URL},
+		},
+	})
 	if err := g.RegisterPending(context.Background(), "jti", "jwt"); err == nil {
 		t.Fatal("expected error for 500 response, got nil")
 	}
 }
 
 func TestRegisterPending_NetworkError(t *testing.T) {
-	g := mustGuardClient(t, GuardConfig{TokenAPIEndpoint: "http://127.0.0.1:1"})
+	g := mustGuardClient(t, GuardConfig{
+		GuardPeerConfig: cfgloader.GuardPeerConfig{
+			Endpoints: cfgloader.GuardEndpoints{TokenAPI: "http://127.0.0.1:1"},
+		},
+	})
 	if err := g.RegisterPending(context.Background(), "jti", "jwt"); err == nil {
 		t.Fatal("expected network error, got nil")
 	}
@@ -104,11 +127,20 @@ func TestRegisterPending_BearerTokenSent(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
 		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(map[string]string{"status": "registered", "jti": "j"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "registered", "jti": "j"})
 	}))
 	defer srv.Close()
 
-	g := mustGuardClient(t, GuardConfig{TokenAPIEndpoint: srv.URL, Auth: GuardAuth{BearerToken: "my-secret"}})
+	g := mustGuardClient(t, GuardConfig{
+		GuardPeerConfig: cfgloader.GuardPeerConfig{
+			Endpoints: cfgloader.GuardEndpoints{TokenAPI: srv.URL},
+			PeerAuth: cfgloader.PeerAuth{
+				Auth: cfgloader.AuthSettings{
+					Credentials: cfgloader.AuthCredentials{BearerToken: "my-secret"},
+				},
+			},
+		},
+	})
 	_ = g.RegisterPending(context.Background(), "j", "jwt")
 
 	if gotAuth != "Bearer my-secret" {
@@ -121,11 +153,15 @@ func TestRegisterPending_NoBearerTokenWhenNotConfigured(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
 		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(map[string]string{"status": "registered", "jti": "j"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "registered", "jti": "j"})
 	}))
 	defer srv.Close()
 
-	g := mustGuardClient(t, GuardConfig{TokenAPIEndpoint: srv.URL}) // no bearer token
+	g := mustGuardClient(t, GuardConfig{
+		GuardPeerConfig: cfgloader.GuardPeerConfig{
+			Endpoints: cfgloader.GuardEndpoints{TokenAPI: srv.URL},
+		},
+	}) // no bearer token
 	_ = g.RegisterPending(context.Background(), "j", "jwt")
 
 	if gotAuth != "" {

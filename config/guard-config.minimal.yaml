@@ -1,21 +1,37 @@
-listen:
-  address: "127.0.0.1:8444"
+# Portcullis-Guard Minimal Configuration (Unified Peer Model)
+# See internal/guard/config.go for schema details.
 
-keep:
-  pending_escalation_request_signing_key: "dev-keep-signing-secret"   # must match keep.signing.key; use ${ENV_VAR} in production
+server:
+  endpoints:
+    approval_ui:
+      listen: "127.0.0.1:8444"
+    token_api:
+      listen: "127.0.0.1:8445"
+      # For minimal/dev, we could allow unauthenticated API access if needed,
+      # but it's better to establish the pattern.
+      auth:
+        type: "bearer"
+        credentials:
+          bearer_token: "dev-guard-token"
 
-escalation_token_signing:
-  key: "dev-guard-signing-secret"   # PDP must be configured to trust tokens signed with this key; use ${ENV_VAR} in production
-  ttl: 3600                         # short TTL for local testing
+responsibility:
+  issuance:
+    approval_request_verification_key: "dev-keep-signing-secret"
+    signing_key: "dev-guard-signing-secret"
+    token_ttl: 3600
 
-#
-# the web pages provided for approval (and post-approval) are included by default, but
-# you can create new ones and reference them
-#
-templates:
-  dir: "./internal/guard/templates"   # adjust to match your working directory
+  interface:
+    templates: "./internal/guard/templates"
+    gate_management_port: 7777
 
-portcullis_gate_management_port: 7777
+operations:
+  storage:
+    backend: "memory"
 
-auth:
-  allow_unauthenticated: true  # development only — remove in production
+  telemetry:
+    exporter: "noop"
+    service_name: "portcullis-guard"
+
+  logging:
+    level: "debug"
+    format: "text"
