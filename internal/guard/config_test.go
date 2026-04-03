@@ -23,6 +23,7 @@ import (
 
 func validBaseConfig() Config {
 	return Config{
+		Mode: "dev",
 		Server: cfgloader.ServerConfig{
 			Endpoints: map[string]cfgloader.EndpointConfig{
 				"approval_ui": {Listen: "localhost:8080"},
@@ -81,6 +82,32 @@ func TestConfig_Validate(t *testing.T) {
 			},
 			wantErr:     true,
 			errContains: "responsibility.issuance.signing_key is required",
+		},
+
+		// --- production mode safety ---
+		{
+			name: "production mode rejects auth none",
+			mutate: func(c *Config) {
+				c.Mode = "production"
+				c.Server.Endpoints["token_api"] = cfgloader.EndpointConfig{
+					Listen: "localhost:8081",
+					Auth:   cfgloader.AuthSettings{Type: "none"},
+				}
+			},
+			wantErr:     true,
+			errContains: "auth.type \"none\" for endpoint \"token_api\" is not allowed in production mode",
+		},
+		{
+			name: "production mode rejects insecure non-loopback",
+			mutate: func(c *Config) {
+				c.Mode = "production"
+				c.Server.Endpoints["token_api"] = cfgloader.EndpointConfig{
+					Listen: "0.0.0.0:8081",
+					Auth:   cfgloader.AuthSettings{Type: "bearer"},
+				}
+			},
+			wantErr:     true,
+			errContains: "TLS is required for non-loopback endpoint \"token_api\" in production mode",
 		},
 	}
 

@@ -30,6 +30,8 @@
 # 3) make sure that you use the matching identity.strategy: oidc-file config for Portcullis-Keep
 #
 
+mode: dev
+
 server:
   endpoints:
     management_ui:

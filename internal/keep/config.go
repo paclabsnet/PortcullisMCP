@@ -46,6 +46,7 @@ func LoadConfig(ctx context.Context, path string) (Config, error) {
 
 // Config holds the full portcullis-keep configuration loaded from keep.yaml.
 type Config struct {
+	Mode           string                     `yaml:"mode"`
 	Server         cfgloader.ServerConfig     `yaml:"server"`
 	Identity       IdentityConfig             `yaml:"identity"`
 	Peers          PeersConfig                `yaml:"peers"`
@@ -79,6 +80,33 @@ type PeersConfig struct {
 
 // Validate returns an error if the configuration contains invalid values.
 func (c *Config) Validate() error {
+	if c.Mode == "" {
+		c.Mode = cfgloader.ModeProduction
+	}
+
+	if c.Mode == cfgloader.ModeProduction {
+		if c.Identity.Strategy == "passthrough" {
+			return fmt.Errorf("identity.strategy \"passthrough\" is not allowed in production mode")
+		}
+		if c.Responsibility.Policy.Strategy == "noop" {
+			return fmt.Errorf("policy.strategy \"noop\" is not allowed in production mode")
+		}
+		if val, ok := c.Identity.Config["allow_insecure_jwks_url"]; ok {
+			if b, ok := val.(bool); ok && b {
+				return fmt.Errorf("identity.config.allow_insecure_jwks_url is not allowed in production mode")
+			}
+		}
+
+		for name, ep := range c.Server.Endpoints {
+			if ep.Auth.Type == "none" {
+				return fmt.Errorf("auth.type \"none\" for endpoint %q is not allowed in production mode", name)
+			}
+			if !cfgloader.IsLoopback(ep.Listen) && !ep.IsSecure() {
+				return fmt.Errorf("TLS is required for non-loopback endpoint %q in production mode", name)
+			}
+		}
+	}
+
 	// 1. Validate Main Endpoint
 	if _, ok := c.Server.Endpoints["main"]; !ok {
 		return fmt.Errorf("server.endpoints.main is required")

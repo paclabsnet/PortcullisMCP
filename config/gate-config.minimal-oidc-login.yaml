@@ -21,6 +21,8 @@
 # portcullis-gate minimal config — for local development/evaluation
 # MCP client config: { "command": "portcullis-gate", "args": ["-config", "~/.portcullis/gate.yaml"] }
 
+mode: dev
+
 server:
   endpoints:
     management_ui:

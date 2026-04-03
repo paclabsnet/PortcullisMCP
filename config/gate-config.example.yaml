@@ -1,6 +1,8 @@
 # Portcullis-Gate Example Configuration (Unified Peer Model)
 # See internal/gate/config.go for schema details.
 
+mode: dev
+
 server:
   endpoints:
     management_ui:

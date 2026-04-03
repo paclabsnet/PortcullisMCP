@@ -78,6 +78,7 @@ func TestAdminReload_Success(t *testing.T) {
 	defer os.Remove(tmp.Name())
 
 	content := `
+mode: dev
 server:
   endpoints:
     main:
@@ -159,6 +160,7 @@ func TestAdminReload_RouterReloadError(t *testing.T) {
 	tmp, _ := os.CreateTemp("", "keep-test-*.yaml")
 	defer os.Remove(tmp.Name())
 	tmp.WriteString(`
+mode: dev
 server:
   endpoints:
     main:

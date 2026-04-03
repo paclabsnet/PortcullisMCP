@@ -1,6 +1,8 @@
 # Portcullis-Keep Example Configuration (Unified Peer Model)
 # See internal/keep/config.go for schema details.
 
+mode: dev
+
 server:
   endpoints:
     main:

@@ -1,6 +1,8 @@
 # Portcullis-Keep minimal config — OIDC demo version (Unified Peer Model)
 # using a mock iDp for testing purposes. Visit https://mock-idp.dev if you want to create new tokens
 
+mode: dev
+
 server:
   endpoints:
     main:

@@ -26,6 +26,7 @@ import (
 // validBaseConfig returns a minimal Config that passes Validate().
 func validBaseConfig() Config {
 	return Config{
+		Mode: "dev",
 		Server: cfgloader.ServerConfig{
 			Endpoints: map[string]cfgloader.EndpointConfig{
 				"main": {Listen: "localhost:8080"},
@@ -156,8 +157,80 @@ func TestConfigValidate(t *testing.T) {
 			wantErr:     true,
 			errContains: "escalation.config.url is required",
 		},
-	}
 
+		// --- production mode safety ---
+		{
+			name: "production mode rejects passthrough identity",
+			mutate: func(c *Config) {
+				c.Mode = "production"
+				c.Identity.Strategy = "passthrough"
+			},
+			wantErr:     true,
+			errContains: "identity.strategy \"passthrough\" is not allowed in production mode",
+		},
+		{
+			name: "production mode rejects noop policy",
+			mutate: func(c *Config) {
+				c.Mode = "production"
+				c.Identity.Strategy = "oidc-verify"
+				c.Identity.Config = map[string]any{
+					"issuer":   "https://issuer.example.com",
+					"jwks_url": "https://issuer.example.com/keys",
+				}
+				c.Responsibility.Policy.Strategy = "noop"
+			},
+			wantErr:     true,
+			errContains: "policy.strategy \"noop\" is not allowed in production mode",
+		},
+		{
+			name: "production mode rejects insecure jwks url",
+			mutate: func(c *Config) {
+				c.Mode = "production"
+				c.Identity.Strategy = "oidc-verify"
+				c.Identity.Config = map[string]any{
+					"issuer":                  "https://issuer.example.com",
+					"jwks_url":                "http://issuer.example.com/keys",
+					"allow_insecure_jwks_url": true,
+				}
+			},
+			wantErr:     true,
+			errContains: "identity.config.allow_insecure_jwks_url is not allowed in production mode",
+		},
+		{
+			name: "production mode rejects auth none",
+			mutate: func(c *Config) {
+				c.Mode = "production"
+				c.Identity.Strategy = "oidc-verify"
+				c.Identity.Config = map[string]any{
+					"issuer":   "https://issuer.example.com",
+					"jwks_url": "https://issuer.example.com/keys",
+				}
+				c.Server.Endpoints["main"] = cfgloader.EndpointConfig{
+					Listen: "localhost:8080",
+					Auth:   cfgloader.AuthSettings{Type: "none"},
+				}
+			},
+			wantErr:     true,
+			errContains: "auth.type \"none\" for endpoint \"main\" is not allowed in production mode",
+		},
+		{
+			name: "production mode rejects insecure non-loopback",
+			mutate: func(c *Config) {
+				c.Mode = "production"
+				c.Identity.Strategy = "oidc-verify"
+				c.Identity.Config = map[string]any{
+					"issuer":   "https://issuer.example.com",
+					"jwks_url": "https://issuer.example.com/keys",
+				}
+				c.Server.Endpoints["main"] = cfgloader.EndpointConfig{
+					Listen: "0.0.0.0:8080",
+					Auth:   cfgloader.AuthSettings{Type: "bearer"},
+				}
+			},
+			wantErr:     true,
+			errContains: "TLS is required for non-loopback endpoint \"main\" in production mode",
+		},
+	}
 
 	for _, tc := range tests {
 		tc := tc

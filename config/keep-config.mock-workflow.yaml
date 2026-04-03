@@ -11,6 +11,8 @@
 # in essence, if you ask your Agent to delete a customer, it will 
 # simulate going out to a separate workflow system for approval
 
+mode: dev
+
 server:
   endpoints:
     main:

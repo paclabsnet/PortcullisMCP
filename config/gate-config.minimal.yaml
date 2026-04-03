@@ -23,6 +23,8 @@
 # Any MCP-compatible agent that supports stdio transport uses the same pattern:
 # command = portcullis-gate, args = [-config, /path/to/gate.yaml]
 
+mode: dev
+
 server:
   endpoints:
     management_ui:

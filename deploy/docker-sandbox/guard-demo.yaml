@@ -1,6 +1,8 @@
 # Portcullis-Guard Demo Configuration (Unified Peer Model)
 # See internal/guard/config.go for schema details.
 
+mode: dev
+
 server:
   endpoints:
     approval_ui:

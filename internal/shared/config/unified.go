@@ -15,9 +15,31 @@
 package config
 
 import (
+	"strings"
+
 	"github.com/paclabsnet/PortcullisMCP/internal/shared/tlsutil"
 	"github.com/paclabsnet/PortcullisMCP/internal/telemetry"
 )
+
+const (
+	// ModeProduction is the strict security mode (default).
+	ModeProduction = "production"
+	// ModeDev is the relaxed security mode for local development.
+	ModeDev = "dev"
+)
+
+// IsLoopback returns true if the address (host or host:port) is local-only.
+func IsLoopback(addr string) bool {
+	host := addr
+	if idx := strings.LastIndex(addr, ":"); idx != -1 {
+		host = addr[:idx]
+	}
+	switch host {
+	case "localhost", "127.0.0.1", "::1", "":
+		return true
+	}
+	return false
+}
 
 // PeerAuth defines how one Portcullis service connects and authenticates to another.
 type PeerAuth struct {
@@ -61,6 +83,11 @@ type EndpointConfig struct {
 	Listen string            `yaml:"listen"`
 	TLS    tlsutil.TLSConfig `yaml:"tls"`
 	Auth   AuthSettings      `yaml:"auth"`
+}
+
+// IsSecure returns true if TLS is configured with a cert and key.
+func (e EndpointConfig) IsSecure() bool {
+	return e.TLS.Cert != "" && e.TLS.Key != ""
 }
 
 // IdentityConfig defines the source of user identity for the component.

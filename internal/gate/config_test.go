@@ -18,12 +18,14 @@ import (
 	"testing"
 
 	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
+	"github.com/paclabsnet/PortcullisMCP/internal/shared/tlsutil"
 )
 
 // validBaseConfig returns a minimal valid Config so individual tests can vary
 // exactly one field at a time without triggering unrelated errors.
 func validBaseConfig() Config {
 	return Config{
+		Mode: "dev",
 		Peers: PeersConfig{
 			Keep: cfgloader.PeerAuth{Endpoint: "http://keep.example.com"},
 		},
@@ -119,3 +121,79 @@ func TestConfig_Validate_ProactiveRequiresGuardEndpoint(t *testing.T) {
 	}
 }
 
+func TestConfig_Validate_ProductionMode(t *testing.T) {
+	tests := []struct {
+		name    string
+		mode    string
+		prepare func(*Config)
+		wantErr bool
+	}{
+		{
+			"dev mode allows os identity",
+			"dev",
+			func(c *Config) { c.Identity.Strategy = "os" },
+			false,
+		},
+		{
+			"production mode rejects os identity",
+			"production",
+			func(c *Config) { c.Identity.Strategy = "os" },
+			true,
+		},
+		{
+			"production mode rejects auth none",
+			"production",
+			func(c *Config) {
+				c.Server.Endpoints = map[string]cfgloader.EndpointConfig{
+					"ui": {Listen: "localhost:7777", Auth: cfgloader.AuthSettings{Type: "none"}},
+				}
+			},
+			true,
+		},
+		{
+			"production mode rejects insecure non-loopback",
+			"production",
+			func(c *Config) {
+				c.Server.Endpoints = map[string]cfgloader.EndpointConfig{
+					"api": {
+						Listen: "0.0.0.0:8080",
+						Auth:   cfgloader.AuthSettings{Type: "bearer"},
+					},
+				}
+			},
+			true,
+		},
+		{
+			"production mode allows secure non-loopback",
+			"production",
+			func(c *Config) {
+				c.Server.Endpoints = map[string]cfgloader.EndpointConfig{
+					"api": {
+						Listen: "0.0.0.0:8080",
+						Auth:   cfgloader.AuthSettings{Type: "bearer"},
+						TLS:    tlsutil.TLSConfig{Cert: "c", Key: "k"},
+					},
+				}
+			},
+			false,
+		},
+		{
+			"empty mode defaults to production",
+			"",
+			func(c *Config) { c.Identity.Strategy = "os" },
+			true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := validBaseConfig()
+			cfg.Mode = tc.mode
+			tc.prepare(&cfg)
+			err := cfg.Validate()
+			if (err != nil) != tc.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}

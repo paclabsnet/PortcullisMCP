@@ -6,6 +6,8 @@
 # By default Gate connects to Keep over plain HTTP with a shared bearer token.
 # To use mTLS instead, comment out the bearer block and uncomment the mtls block.
 
+mode: dev
+
 server:
   endpoints:
     management_ui:

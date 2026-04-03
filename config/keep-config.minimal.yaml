@@ -2,6 +2,8 @@
 # accept all identity claims without verification.
 # For production, use strategy: "oidc-verify" with config.issuer and config.jwks_url.
 
+mode: dev
+
 server:
   endpoints:
     main:

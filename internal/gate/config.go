@@ -49,6 +49,7 @@ func LoadConfig(ctx context.Context, path string) (Config, error) {
 
 // Config holds the full portcullis-gate configuration loaded from gate.yaml.
 type Config struct {
+	Mode           string                     `yaml:"mode"`
 	Server         cfgloader.ServerConfig     `yaml:"server"`
 	Identity       IdentityConfig             `yaml:"identity"`
 	Peers          PeersConfig                `yaml:"peers"`
@@ -61,6 +62,24 @@ type Config struct {
 
 // Validate returns an error if the configuration contains invalid values.
 func (c *Config) Validate() error {
+	if c.Mode == "" {
+		c.Mode = cfgloader.ModeProduction
+	}
+
+	if c.Mode == cfgloader.ModeProduction {
+		if c.Identity.Strategy == "os" {
+			return fmt.Errorf("identity.strategy \"os\" is not allowed in production mode")
+		}
+		for name, ep := range c.Server.Endpoints {
+			if ep.Auth.Type == "none" {
+				return fmt.Errorf("auth.type \"none\" for endpoint %q is not allowed in production mode", name)
+			}
+			if !cfgloader.IsLoopback(ep.Listen) && !ep.IsSecure() {
+				return fmt.Errorf("TLS is required for non-loopback endpoint %q in production mode", name)
+			}
+		}
+	}
+
 	if c.Peers.Keep.Endpoint == "" {
 		return fmt.Errorf("peers.keep.endpoint is required")
 	}
