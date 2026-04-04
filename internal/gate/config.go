@@ -89,12 +89,26 @@ func (c *Config) Validate(sources cfgloader.SourceMap) (cfgloader.PostureReport,
 		return cfgloader.PostureReport{}, err
 	}
 
+	switch c.Tenancy {
+	case "", "single":
+		// Single-tenant: escalation + guard rules.
+		if c.Responsibility.Escalation.Enabled && c.Peers.Guard.resolvedAPIEndpoint() == "" {
+			return cfgloader.PostureReport{}, fmt.Errorf("peers.guard must be configured when responsibility.escalation.enabled is true")
+		}
+	case "multi":
+		if err := c.validateMultiTenant(); err != nil {
+			return cfgloader.PostureReport{}, err
+		}
+	default:
+		return cfgloader.PostureReport{}, fmt.Errorf("invalid tenancy %q: must be \"single\" or \"multi\"", c.Tenancy)
+	}
+
 	switch c.Responsibility.Escalation.Strategy {
 	case "", "user-driven", "proactive":
 	default:
 		return cfgloader.PostureReport{}, fmt.Errorf("invalid responsibility.escalation.strategy %q: must be \"user-driven\" or \"proactive\"", c.Responsibility.Escalation.Strategy)
 	}
-	if c.Responsibility.Escalation.Strategy == "proactive" && c.Peers.Guard.Endpoints.ApprovalUI == "" {
+	if c.Tenancy != "multi" && c.Responsibility.Escalation.Strategy == "proactive" && c.Peers.Guard.Endpoints.ApprovalUI == "" {
 		return cfgloader.PostureReport{}, fmt.Errorf("peers.guard.endpoints.approval_ui is required when escalation strategy is \"proactive\"")
 	}
 
@@ -116,6 +130,46 @@ func (c *Config) Validate(sources cfgloader.SourceMap) (cfgloader.PostureReport,
 	}
 
 	return report, nil
+}
+
+// validateMultiTenant enforces all isolation rules required in tenancy: multi mode.
+func (c *Config) validateMultiTenant() error {
+	// Rule 1: MCP HTTP endpoint must be configured.
+	mcpEp, hasMCP := c.Server.Endpoints[MCPEndpoint]
+	if !hasMCP || mcpEp.Listen == "" {
+		return fmt.Errorf("server.endpoints.mcp.listen is required in multi-tenant mode")
+	}
+	// Rule 2: LocalFS must be disabled.
+	if c.Responsibility.Tools.LocalFS.Enabled {
+		return fmt.Errorf("responsibility.tools.portcullis-localfs.enabled must be false in multi-tenant mode")
+	}
+	// Rule 3: Escalation (human-in-the-loop) must be disabled.
+	if c.Responsibility.Escalation.Enabled {
+		return fmt.Errorf("responsibility.escalation.enabled must be false in multi-tenant mode")
+	}
+	// Rule 4: Management UI must not be configured.
+	if _, hasMgmt := c.Server.Endpoints[ManagementUIEndpoint]; hasMgmt {
+		return fmt.Errorf("server.endpoints.management_ui must not be configured in multi-tenant mode")
+	}
+	// Rule 5: Guard must not be configured.
+	if c.Peers.Guard.Endpoint != "" || c.Peers.Guard.Endpoints.ApprovalUI != "" || c.Peers.Guard.Endpoints.TokenAPI != "" {
+		return fmt.Errorf("peers.guard must not be configured in multi-tenant mode")
+	}
+	// Rule 6: OIDC-login is not compatible with multi-tenant mode.
+	if c.Identity.Strategy == "oidc-login" {
+		return fmt.Errorf("identity.strategy \"oidc-login\" is not allowed in multi-tenant mode; use a header-based token strategy")
+	}
+	// Rule 7: SessionTTL must be positive.
+	if c.Server.SessionTTL <= 0 {
+		return fmt.Errorf("server.session_ttl must be greater than 0 in multi-tenant mode")
+	}
+	// Rule 8: If storage backend is "redis", addr must be provided.
+	if c.Operations.Storage.Backend == "redis" {
+		if addr, ok := c.Operations.Storage.Config["addr"].(string); !ok || addr == "" {
+			return fmt.Errorf("operations.storage.config.addr is required when storage backend is \"redis\"")
+		}
+	}
+	return nil
 }
 
 type PeersConfig struct {
@@ -294,6 +348,9 @@ const DefaultManagementAPIPort = 7777
 // ManagementUIEndpoint is the key in the server.endpoints map for the Gate
 // management interface.
 const ManagementUIEndpoint = "management_ui"
+
+// MCPEndpoint is the key in the server.endpoints map for the MCP HTTP transport.
+const MCPEndpoint = "mcp"
 
 // GuardConfig is an alias for GateSpecificGuardConfig for backward compatibility.
 type GuardConfig = GateSpecificGuardConfig

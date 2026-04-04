@@ -80,11 +80,13 @@ type AuthCredentials struct {
 	Cert        string `yaml:"cert"`
 	Key         string `yaml:"key"`
 	ServerCA    string `yaml:"server_ca"`
+	Header      string `yaml:"header"` // header name for token extraction (e.g. "X-User-Token")
 }
 
 // ServerConfig defines the listening endpoints and their security settings.
 type ServerConfig struct {
-	Endpoints map[string]EndpointConfig `yaml:"endpoints"`
+	Endpoints  map[string]EndpointConfig `yaml:"endpoints"`
+	SessionTTL int                       `yaml:"session_ttl"` // seconds; required in multi-tenant mode
 }
 
 // EndpointConfig defines a single listening port and its auth requirements.

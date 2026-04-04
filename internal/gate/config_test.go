@@ -15,6 +15,7 @@
 package gate
 
 import (
+	"strings"
 	"testing"
 
 	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
@@ -196,4 +197,172 @@ func TestConfig_Validate_ProductionMode(t *testing.T) {
 			}
 		})
 	}
+}
+
+// validMultiTenantConfig returns a minimal valid multi-tenant Config.
+func validMultiTenantConfig() Config {
+	return Config{
+		Mode:    "dev",
+		Tenancy: "multi",
+		Server: cfgloader.ServerConfig{
+			SessionTTL: 3600,
+			Endpoints: map[string]cfgloader.EndpointConfig{
+				MCPEndpoint: {Listen: "0.0.0.0:8443"},
+			},
+		},
+		Peers: PeersConfig{
+			Keep: cfgloader.PeerAuth{Endpoint: "http://keep.example.com"},
+		},
+		Identity: IdentityConfig{Strategy: "os"},
+	}
+}
+
+func TestConfig_TenancyValidation(t *testing.T) {
+	t.Run("invalid tenancy value", func(t *testing.T) {
+		cfg := validBaseConfig()
+		cfg.Tenancy = "enterprise"
+		_, err := cfg.Validate(nil)
+		if err == nil || !strings.Contains(err.Error(), "invalid tenancy") {
+			t.Errorf("expected 'invalid tenancy' error, got: %v", err)
+		}
+	})
+
+	t.Run("empty tenancy defaults to single (valid)", func(t *testing.T) {
+		cfg := validBaseConfig()
+		cfg.Tenancy = ""
+		if _, err := cfg.Validate(nil); err != nil {
+			t.Errorf("empty tenancy should be valid; got: %v", err)
+		}
+	})
+
+	t.Run("single tenancy explicit (valid)", func(t *testing.T) {
+		cfg := validBaseConfig()
+		cfg.Tenancy = "single"
+		if _, err := cfg.Validate(nil); err != nil {
+			t.Errorf("tenancy single should be valid; got: %v", err)
+		}
+	})
+
+	t.Run("multi: valid minimal config", func(t *testing.T) {
+		cfg := validMultiTenantConfig()
+		if _, err := cfg.Validate(nil); err != nil {
+			t.Errorf("valid multi-tenant config should pass; got: %v", err)
+		}
+	})
+
+	t.Run("multi: mcp listen required", func(t *testing.T) {
+		cfg := validMultiTenantConfig()
+		delete(cfg.Server.Endpoints, MCPEndpoint)
+		_, err := cfg.Validate(nil)
+		if err == nil || !strings.Contains(err.Error(), "server.endpoints.mcp.listen") {
+			t.Errorf("expected mcp listen error, got: %v", err)
+		}
+	})
+
+	t.Run("multi: localfs must be disabled", func(t *testing.T) {
+		cfg := validMultiTenantConfig()
+		cfg.Responsibility.Tools.LocalFS.Enabled = true
+		_, err := cfg.Validate(nil)
+		if err == nil || !strings.Contains(err.Error(), "portcullis-localfs.enabled") {
+			t.Errorf("expected localfs disabled error, got: %v", err)
+		}
+	})
+
+	t.Run("multi: escalation must be disabled", func(t *testing.T) {
+		cfg := validMultiTenantConfig()
+		cfg.Responsibility.Escalation.Enabled = true
+		_, err := cfg.Validate(nil)
+		if err == nil || !strings.Contains(err.Error(), "escalation.enabled") {
+			t.Errorf("expected escalation disabled error, got: %v", err)
+		}
+	})
+
+	t.Run("multi: management_ui must not exist", func(t *testing.T) {
+		cfg := validMultiTenantConfig()
+		cfg.Server.Endpoints[ManagementUIEndpoint] = cfgloader.EndpointConfig{Listen: "127.0.0.1:7777"}
+		_, err := cfg.Validate(nil)
+		if err == nil || !strings.Contains(err.Error(), "management_ui") {
+			t.Errorf("expected management_ui error, got: %v", err)
+		}
+	})
+
+	t.Run("multi: guard must not be configured (approval_ui)", func(t *testing.T) {
+		cfg := validMultiTenantConfig()
+		cfg.Peers.Guard.Endpoints.ApprovalUI = "http://guard.example.com"
+		_, err := cfg.Validate(nil)
+		if err == nil || !strings.Contains(err.Error(), "peers.guard") {
+			t.Errorf("expected peers.guard error, got: %v", err)
+		}
+	})
+
+	t.Run("multi: guard must not be configured (endpoint)", func(t *testing.T) {
+		cfg := validMultiTenantConfig()
+		cfg.Peers.Guard.Endpoint = "http://guard.example.com"
+		_, err := cfg.Validate(nil)
+		if err == nil || !strings.Contains(err.Error(), "peers.guard") {
+			t.Errorf("expected peers.guard error, got: %v", err)
+		}
+	})
+
+	t.Run("multi: oidc-login not allowed", func(t *testing.T) {
+		cfg := validMultiTenantConfig()
+		cfg.Identity.Strategy = "oidc-login"
+		cfg.Identity.Config = map[string]any{
+			"issuer_url": "https://idp.example.com",
+			"client_id":  "c",
+		}
+		_, err := cfg.Validate(nil)
+		if err == nil || !strings.Contains(err.Error(), "oidc-login") {
+			t.Errorf("expected oidc-login error, got: %v", err)
+		}
+	})
+
+	t.Run("multi: session_ttl must be > 0", func(t *testing.T) {
+		cfg := validMultiTenantConfig()
+		cfg.Server.SessionTTL = 0
+		_, err := cfg.Validate(nil)
+		if err == nil || !strings.Contains(err.Error(), "session_ttl") {
+			t.Errorf("expected session_ttl error, got: %v", err)
+		}
+	})
+
+	t.Run("multi: redis without addr rejected", func(t *testing.T) {
+		cfg := validMultiTenantConfig()
+		cfg.Operations.Storage.Backend = "redis"
+		cfg.Operations.Storage.Config = map[string]any{} // no addr
+		_, err := cfg.Validate(nil)
+		if err == nil || !strings.Contains(err.Error(), "addr") {
+			t.Errorf("expected redis addr error, got: %v", err)
+		}
+	})
+
+	t.Run("multi: redis with addr valid", func(t *testing.T) {
+		cfg := validMultiTenantConfig()
+		cfg.Operations.Storage.Backend = "redis"
+		cfg.Operations.Storage.Config = map[string]any{"addr": "redis:6379"}
+		if _, err := cfg.Validate(nil); err != nil {
+			t.Errorf("redis with addr should be valid; got: %v", err)
+		}
+	})
+
+	t.Run("single: escalation enabled without guard rejected", func(t *testing.T) {
+		cfg := validBaseConfig()
+		cfg.Tenancy = "single"
+		cfg.Responsibility.Escalation.Enabled = true
+		// No guard configured
+		_, err := cfg.Validate(nil)
+		if err == nil || !strings.Contains(err.Error(), "peers.guard") {
+			t.Errorf("expected peers.guard error, got: %v", err)
+		}
+	})
+
+	t.Run("single: escalation enabled with guard valid", func(t *testing.T) {
+		cfg := validBaseConfig()
+		cfg.Tenancy = "single"
+		cfg.Responsibility.Escalation.Enabled = true
+		cfg.Peers.Guard.Endpoints.ApprovalUI = "http://guard.example.com"
+		if _, err := cfg.Validate(nil); err != nil {
+			t.Errorf("single with escalation+guard should be valid; got: %v", err)
+		}
+	})
 }
