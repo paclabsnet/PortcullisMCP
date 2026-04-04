@@ -127,7 +127,7 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 
 	// Start the in-process local filesystem server if any sandbox dirs are configured.
 	var localFSSession *mcp.ClientSession
-	if rawDirs := cfg.Responsibility.Workspace.EffectiveDirs(); len(rawDirs) > 0 {
+	if rawDirs := cfg.Responsibility.Tools.LocalFS.Workspace.EffectiveDirs(); len(rawDirs) > 0 {
 		expanded := make([]string, 0, len(rawDirs))
 		for _, d := range rawDirs {
 			exp, err := expandHome(d)

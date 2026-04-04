@@ -31,6 +31,7 @@ var SecretAllowlist = []string{
 	"peers.keep.auth.credentials.server_ca",
 	"peers.guard.auth.credentials.bearer_token",
 	"server.endpoints.management_ui.auth.credentials.bearer_token",
+	"server.endpoints.mcp.auth.credentials.bearer_token",
 	"identity.config.client_secret",
 }
 
@@ -46,6 +47,7 @@ func LoadConfig(ctx context.Context, path string) (Config, cfgloader.PostureRepo
 
 // Config holds the full portcullis-gate configuration loaded from gate.yaml.
 type Config struct {
+	Tenancy        string                     `yaml:"tenancy"` // "single" (default) or "multi"
 	Mode           string                     `yaml:"mode"`
 	Server         cfgloader.ServerConfig     `yaml:"server"`
 	Identity       IdentityConfig             `yaml:"identity"`
@@ -218,17 +220,30 @@ type OSConfig struct {
 }
 
 type ResponsibilityConfig struct {
-	Workspace        SandboxConfig          `yaml:"workspace"`
-	Forbidden        ForbiddenConfig        `yaml:"forbidden"`
+	Tools            ToolsConfig            `yaml:"tools"`
 	AgentInteraction AgentInteractionConfig `yaml:"agent_interaction"`
 	Escalation       EscalationConfig       `yaml:"escalation"`
 	DecisionLogs     DecisionLogBatchConfig `yaml:"decision_logs"`
 }
 
+// ToolsConfig groups all tool-provider configurations.
+type ToolsConfig struct {
+	LocalFS LocalFSConfig `yaml:"portcullis-localfs"`
+}
+
+// LocalFSConfig configures the built-in local filesystem tool provider.
+type LocalFSConfig struct {
+	Enabled   bool            `yaml:"enabled"`
+	Workspace SandboxConfig   `yaml:"workspace"`
+	Forbidden ForbiddenConfig `yaml:"forbidden"`
+}
+
 type EscalationConfig struct {
-	Strategy     string `yaml:"strategy"`      // "proactive" | "user-driven" (default: "user-driven")
-	PollInterval int    `yaml:"poll_interval"` // seconds between polls (default: 60)
-	TokenStore   string `yaml:"token_store"`
+	Enabled            bool   `yaml:"enabled"`
+	Strategy           string `yaml:"strategy"`             // "proactive" | "user-driven" (default: "user-driven")
+	PollInterval       int    `yaml:"poll_interval"`        // seconds between polls (default: 60)
+	TokenStore         string `yaml:"token_store"`
+	NoEscalationMarker string `yaml:"no_escalation_marker"` // marker returned instead of escalation in multi-tenant mode
 }
 
 type ForbiddenConfig struct {

@@ -28,8 +28,12 @@ func newTestGate(sandbox string, protected []string) *Gate {
 	return &Gate{
 		cfg: Config{
 			Responsibility: ResponsibilityConfig{
-				Workspace:    SandboxConfig{Directory: sandbox},
-				Forbidden:    ForbiddenConfig{Directories: protected},
+				Tools: ToolsConfig{
+					LocalFS: LocalFSConfig{
+						Workspace: SandboxConfig{Directory: sandbox},
+						Forbidden: ForbiddenConfig{Directories: protected},
+					},
+				},
 			},
 		},
 	}
@@ -287,8 +291,12 @@ func TestFastPath_MultiSandbox(t *testing.T) {
 	g := &Gate{
 		cfg: Config{
 			Responsibility: ResponsibilityConfig{
-				Workspace:    SandboxConfig{Directories: []string{sandboxA, sandboxB}},
-				Forbidden:    ForbiddenConfig{Directories: []string{protected}},
+				Tools: ToolsConfig{
+					LocalFS: LocalFSConfig{
+						Workspace: SandboxConfig{Directories: []string{sandboxA, sandboxB}},
+						Forbidden: ForbiddenConfig{Directories: []string{protected}},
+					},
+				},
 			},
 		},
 	}

@@ -66,7 +66,7 @@ func (g *Gate) FastPath(_ context.Context, toolName string, args map[string]any)
 
 	// Rule 1: forbidden paths take priority over the sandbox.
 	for _, r := range resolved {
-		for _, p := range g.cfg.Responsibility.Forbidden.Directories {
+		for _, p := range g.cfg.Responsibility.Tools.LocalFS.Forbidden.Directories {
 			forbidden, err := resolvePath(p)
 			if err != nil {
 				continue
@@ -80,7 +80,7 @@ func (g *Gate) FastPath(_ context.Context, toolName string, args map[string]any)
 	// Rule 2: all paths must be within a single sandbox directory for a local allow.
 	// Each configured directory is checked in order; a tool call is fast-pathed
 	// when every path argument falls within the same sandbox directory.
-	for _, dir := range g.cfg.Responsibility.Workspace.EffectiveDirs() {
+	for _, dir := range g.cfg.Responsibility.Tools.LocalFS.Workspace.EffectiveDirs() {
 		sandbox, err := resolvePath(dir)
 		if err != nil {
 			continue
