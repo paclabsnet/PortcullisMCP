@@ -70,8 +70,10 @@ type pendingEscalation struct {
 // Gate is the portcullis-gate MCP proxy server.
 type Gate struct {
 	cfg           Config
-	identity      *IdentityCache
-	store         *TokenStore
+	sessions      SessionStore           // handles session state
+	escalations   EscalationTokenStore   // handles escalation JWTs
+	pending       PendingEscalationStore // handles in-flight requests
+	identity      IdentitySource         // handles user info resolution
 	forwarder     *Forwarder
 	guardClient   *GuardClient // nil if Guard endpoint not configured
 	server        *mcp.Server
@@ -85,15 +87,13 @@ type Gate struct {
 
 	stateMachine *StateMachine
 	oidcLogin    *OIDCLoginManager
-	pendingMu    sync.Mutex
-	pendingEscalations map[string]pendingEscalation
 }
 
 // New creates a Gate from the given config.
 func New(ctx context.Context, cfg Config) (*Gate, error) {
 	sm := NewStateMachine()
 
-	identity, err := NewIdentityCache(ctx, cfg.Identity)
+	identityCache, err := NewIdentityCache(ctx, cfg.Identity)
 	if err != nil {
 		return nil, fmt.Errorf("resolve identity: %w", err)
 	}
@@ -102,7 +102,9 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 	if storePath == "" {
 		storePath = "~/.portcullis/tokens.json"
 	}
-	store, err := NewTokenStore(ctx, storePath)
+	// For tenancy: single, EscalationTokenStore must remain file-backed so that
+	// approved tokens survive server restarts.
+	tokenStore, err := NewTokenStore(ctx, storePath)
 	if err != nil {
 		return nil, fmt.Errorf("open token store: %w", err)
 	}
@@ -159,19 +161,19 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 	}
 
 	g := &Gate{
-		cfg:                cfg,
-		identity:           identity,
-		store:              store,
-		forwarder:          fwd,
-		guardClient:        guardClient,
-		localFS:            localFSSession,
-		sessionID:          uuid.New().String(),
-		toolServerMap:      make(map[string]string),
-		localFSTools:       make(map[string]bool),
-		logChan:            make(chan DecisionLogEntry, 1000),
-		logDone:            make(chan struct{}),
-		pendingEscalations: make(map[string]pendingEscalation),
-		stateMachine:       sm,
+		cfg:           cfg,
+		identity:      identityCache,
+		escalations:   tokenStore,
+		pending:       NewInMemoryPendingStore(),
+		forwarder:     fwd,
+		guardClient:   guardClient,
+		localFS:       localFSSession,
+		sessionID:     uuid.New().String(),
+		toolServerMap: make(map[string]string),
+		localFSTools:  make(map[string]bool),
+		logChan:       make(chan DecisionLogEntry, 1000),
+		logDone:       make(chan struct{}),
+		stateMachine:  sm,
 	}
 
 	if cfg.Identity.Strategy == "oidc-login" {
@@ -267,7 +269,7 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 }
 
 func (g *Gate) refreshKeepTools(ctx context.Context) {
-	keepTools, err := g.forwarder.ListTools(ctx, g.identity.Get(ctx), g.store.All())
+	keepTools, err := g.forwarder.ListTools(ctx, g.identity.Get(ctx), g.escalations.All())
 	if err != nil {
 		slog.Warn("fetch tool list from keep failed", "error", err)
 		if g.cfg.Identity.Strategy != "oidc-login" {
@@ -316,7 +318,11 @@ func (g *Gate) handleLoginTool(ctx context.Context, force bool) string {
 
 func (g *Gate) Run(ctx context.Context) error {
 	mgmtEndpoint := g.cfg.Server.Endpoints[ManagementUIEndpoint]
-	mgmt, err := NewManagementServer(g.store, g.identity, mgmtEndpoint, g.cfg.Responsibility.AgentInteraction, g.oidcLogin, g.cfg.Identity.LoginCallbackPageFile)
+	// ManagementServer requires the concrete *IdentityCache (for Info/UpdateToken).
+	// The type assertion is safe: in single-tenant mode, identity is always *IdentityCache.
+	identityCache, _ := g.identity.(*IdentityCache)
+	tokenStore, _ := g.escalations.(*TokenStore)
+	mgmt, err := NewManagementServer(tokenStore, identityCache, mgmtEndpoint, g.cfg.Responsibility.AgentInteraction, g.oidcLogin, g.cfg.Identity.LoginCallbackPageFile)
 	if err != nil {
 		return fmt.Errorf("init management api: %w", err)
 	}
@@ -515,24 +521,20 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 }
 
 func (g *Gate) collectEscalationTokens(ctx context.Context, serverName, toolName string) []shared.EscalationToken {
-	tokens := g.store.All()
+	tokens := g.escalations.All()
 
 	if g.guardClient == nil {
 		return tokens
 	}
 
 	key := serverName + "/" + toolName
-	g.pendingMu.Lock()
-	pending, hasPending := g.pendingEscalations[key]
-	g.pendingMu.Unlock()
+	pending, hasPending := g.pending.Get(key)
 
 	if !hasPending {
 		return tokens
 	}
 	if pending.ExpiresAt.Before(time.Now()) {
-		g.pendingMu.Lock()
-		delete(g.pendingEscalations, key)
-		g.pendingMu.Unlock()
+		g.pending.Delete(key)
 		return tokens
 	}
 
@@ -548,7 +550,7 @@ func (g *Gate) collectEscalationTokens(ctx context.Context, serverName, toolName
 		return tokens
 	}
 
-	tok, err := g.store.Add(ctx, raw)
+	tok, err := g.escalations.Add(ctx, raw)
 	if err != nil {
 		slog.Warn("store claimed escalation token failed", "jti", pending.JTI, "error", err)
 		return tokens
@@ -558,11 +560,9 @@ func (g *Gate) collectEscalationTokens(ctx context.Context, serverName, toolName
 		"jti", pending.JTI, "token_id", tok.TokenID,
 		"server", serverName, "tool", toolName)
 
-	g.pendingMu.Lock()
-	delete(g.pendingEscalations, key)
-	g.pendingMu.Unlock()
+	g.pending.Delete(key)
 
-	return g.store.All()
+	return g.escalations.All()
 }
 
 func (g *Gate) maybeStorePendingEscalation(ctx context.Context, serverName, toolName string, err error) error {
@@ -592,14 +592,12 @@ func (g *Gate) maybeStorePendingEscalation(ctx context.Context, serverName, tool
 	key := serverName + "/" + toolName
 	expiry := time.Now().Add(24 * time.Hour)
 
-	g.pendingMu.Lock()
-	g.pendingEscalations[key] = pendingEscalation{
+	g.pending.Store(key, pendingEscalation{
 		ServerName: serverName,
 		ToolName:   toolName,
 		JTI:        escalationErr.EscalationJTI,
 		ExpiresAt:  expiry,
-	}
-	g.pendingMu.Unlock()
+	})
 
 	slog.Info("stored pending escalation",
 		"server", serverName, "tool", toolName, "jti", escalationErr.EscalationJTI)
@@ -709,7 +707,7 @@ func (g *Gate) claimAllUnclaimedTokens(ctx context.Context) {
 			continue
 		}
 
-		tok, storeErr := g.store.Add(ctx, raw)
+		tok, storeErr := g.escalations.Add(ctx, raw)
 		if storeErr != nil {
 			slog.Warn("store polled token failed", "jti", entry.JTI, "error", storeErr)
 			continue
@@ -717,14 +715,7 @@ func (g *Gate) claimAllUnclaimedTokens(ctx context.Context) {
 
 		slog.Info("claimed escalation token via poll", "jti", entry.JTI, "token_id", tok.TokenID)
 
-		g.pendingMu.Lock()
-		for key, p := range g.pendingEscalations {
-			if p.JTI == entry.JTI {
-				delete(g.pendingEscalations, key)
-				break
-			}
-		}
-		g.pendingMu.Unlock()
+		g.pending.DeleteByJTI(entry.JTI)
 	}
 }
 

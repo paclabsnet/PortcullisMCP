@@ -27,6 +27,62 @@ import (
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 )
 
+// EscalationTokenStore manages short-lived escalation JWTs.
+type EscalationTokenStore interface {
+	All() []shared.EscalationToken
+	Add(ctx context.Context, raw string) (shared.EscalationToken, error)
+	Delete(ctx context.Context, tokenID string) error
+}
+
+// PendingEscalationStore manages in-flight (not-yet-approved) escalation requests.
+type PendingEscalationStore interface {
+	Store(key string, p pendingEscalation)
+	Get(key string) (pendingEscalation, bool)
+	Delete(key string)
+	DeleteByJTI(jti string)
+}
+
+// InMemoryPendingStore is a thread-safe in-memory PendingEscalationStore.
+type InMemoryPendingStore struct {
+	mu   sync.Mutex
+	data map[string]pendingEscalation
+}
+
+// NewInMemoryPendingStore creates an empty InMemoryPendingStore.
+func NewInMemoryPendingStore() *InMemoryPendingStore {
+	return &InMemoryPendingStore{data: make(map[string]pendingEscalation)}
+}
+
+func (s *InMemoryPendingStore) Store(key string, p pendingEscalation) {
+	s.mu.Lock()
+	s.data[key] = p
+	s.mu.Unlock()
+}
+
+func (s *InMemoryPendingStore) Get(key string) (pendingEscalation, bool) {
+	s.mu.Lock()
+	p, ok := s.data[key]
+	s.mu.Unlock()
+	return p, ok
+}
+
+func (s *InMemoryPendingStore) Delete(key string) {
+	s.mu.Lock()
+	delete(s.data, key)
+	s.mu.Unlock()
+}
+
+func (s *InMemoryPendingStore) DeleteByJTI(jti string) {
+	s.mu.Lock()
+	for key, p := range s.data {
+		if p.JTI == jti {
+			delete(s.data, key)
+			break
+		}
+	}
+	s.mu.Unlock()
+}
+
 // TokenStore manages the local escalation token file.
 // The file is owned and readable only by the current user (mode 0600).
 type TokenStore struct {

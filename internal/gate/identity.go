@@ -31,6 +31,13 @@ import (
 
 const identityRefreshTTL = 60 * time.Second
 
+// IdentitySource resolves and caches the current user identity.
+type IdentitySource interface {
+	Get(ctx context.Context) shared.UserIdentity
+	SetToken(raw string) error
+	Clear()
+}
+
 // IdentityInfo is the public view of the current identity, safe to return via the management API.
 type IdentityInfo struct {
 	UserID      string     `json:"user_id"`
