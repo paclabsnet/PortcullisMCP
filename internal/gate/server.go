@@ -38,6 +38,14 @@ import (
 	"github.com/paclabsnet/PortcullisMCP/internal/version"
 )
 
+type gateCtxKey string
+
+const (
+	sessionIDKey gateCtxKey = "sessionID"
+	userIDKey    gateCtxKey = "userID"
+	identityKey  gateCtxKey = "identity"
+)
+
 // DecisionLogEntry is a fast-path decision log entry sent to Keep.
 type DecisionLogEntry struct {
 	Timestamp time.Time      `json:"timestamp"`
