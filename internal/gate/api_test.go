@@ -379,7 +379,7 @@ func TestNewManagementServer_CallbackPageFile_Override(t *testing.T) {
 	store, _ := NewTokenStore(context.Background(), filepath.Join(dir, "tokens.json"))
 	identity, _ := NewIdentityCache(context.Background(), IdentityConfig{Strategy: "os", Config: map[string]any{"user_id": "test"}})
 	sm := NewStateMachine()
-	oidcLogin := NewOIDCLoginManager(OIDCLoginConfig{IssuerURL: "https://idp.example.com", ClientID: "c"}, DefaultManagementAPIPort, 0, sm, nil, nil, nil)
+	oidcLogin := NewOIDCLoginManager(OIDCLoginConfig{IssuerURL: "https://idp.example.com", ClientID: "c"}, DefaultManagementAPIPort, 0, sm, nil, nil, nil, nil)
 
 	ms, err := NewManagementServer(store, identity, cfgloader.EndpointConfig{}, AgentInteractionConfig{}, oidcLogin, pageFile)
 	if err != nil {
@@ -403,7 +403,7 @@ func TestNewManagementServer_CallbackPageFile_Missing(t *testing.T) {
 	store, _ := NewTokenStore(context.Background(), filepath.Join(dir, "tokens.json"))
 	identity, _ := NewIdentityCache(context.Background(), IdentityConfig{Strategy: "os", Config: map[string]any{"user_id": "test"}})
 	sm := NewStateMachine()
-	oidcLogin := NewOIDCLoginManager(OIDCLoginConfig{IssuerURL: "https://idp.example.com", ClientID: "c"}, DefaultManagementAPIPort, 0, sm, nil, nil, nil)
+	oidcLogin := NewOIDCLoginManager(OIDCLoginConfig{IssuerURL: "https://idp.example.com", ClientID: "c"}, DefaultManagementAPIPort, 0, sm, nil, nil, nil, nil)
 
 	_, err := NewManagementServer(store, identity, cfgloader.EndpointConfig{}, AgentInteractionConfig{}, oidcLogin, "/nonexistent/callback.html")
 	if err == nil {
@@ -416,7 +416,7 @@ func TestNewManagementServer_CallbackPageFile_Empty_UsesEmbedded(t *testing.T) {
 	store, _ := NewTokenStore(context.Background(), filepath.Join(dir, "tokens.json"))
 	identity, _ := NewIdentityCache(context.Background(), IdentityConfig{Strategy: "os", Config: map[string]any{"user_id": "test"}})
 	sm := NewStateMachine()
-	oidcLogin := NewOIDCLoginManager(OIDCLoginConfig{IssuerURL: "https://idp.example.com", ClientID: "c"}, DefaultManagementAPIPort, 0, sm, nil, nil, nil)
+	oidcLogin := NewOIDCLoginManager(OIDCLoginConfig{IssuerURL: "https://idp.example.com", ClientID: "c"}, DefaultManagementAPIPort, 0, sm, nil, nil, nil, nil)
 
 	ms, err := NewManagementServer(store, identity, cfgloader.EndpointConfig{}, AgentInteractionConfig{}, oidcLogin, "")
 	if err != nil {

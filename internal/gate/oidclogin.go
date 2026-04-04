@@ -57,7 +57,8 @@ type OIDCLoginManager struct {
 	cfg               OIDCLoginConfig
 	mgmtPort          int
 	sm                *StateMachine
-	onAuthenticated   func(rawIDToken string) // called when login completes
+	identity          IdentitySource           // updated directly via SetToken on login/refresh
+	onAuthenticated   func(rawIDToken string) // called when login completes (after identity update)
 	onUnauthenticated func()                   // called when refresh token expires naturally
 	onRefreshFailed   func(err error)          // called when refresh fails for non-expiry reasons
 
@@ -82,7 +83,9 @@ type OIDCLoginManager struct {
 // NewOIDCLoginManager creates an OIDCLoginManager.
 // callbackTimeoutSecs is the window (in seconds) a user has to complete the
 // browser login after StartLogin() is called. 0 uses the default (10 minutes).
+// identity receives SetToken calls directly on login and token refresh.
 func NewOIDCLoginManager(cfg OIDCLoginConfig, mgmtPort int, callbackTimeoutSecs int, sm *StateMachine,
+	identity IdentitySource,
 	onAuthenticated func(string), onUnauthenticated func(), onRefreshFailed func(error)) *OIDCLoginManager {
 	expiry := defaultPKCESessionExpiry
 	if callbackTimeoutSecs > 0 {
@@ -92,6 +95,7 @@ func NewOIDCLoginManager(cfg OIDCLoginConfig, mgmtPort int, callbackTimeoutSecs 
 		cfg:               cfg,
 		mgmtPort:          mgmtPort,
 		sm:                sm,
+		identity:          identity,
 		onAuthenticated:   onAuthenticated,
 		onUnauthenticated: onUnauthenticated,
 		onRefreshFailed:   onRefreshFailed,
@@ -272,7 +276,14 @@ func (m *OIDCLoginManager) HandleCallback(ctx context.Context, queryState, code,
 	m.sm.SetAuthenticated()
 	slog.Info("oidc-login: login successful", "expiry", tokens.Expiry)
 
-	// Notify caller with the raw ID token so it can update IdentityCache
+	// Update identity directly via the IdentitySource interface.
+	if m.identity != nil {
+		if err := m.identity.SetToken(tokens.IDToken); err != nil {
+			slog.Warn("oidc-login: failed to update identity on login", "error", err)
+		}
+	}
+
+	// Notify caller for any additional side effects (e.g. refreshing tool list).
 	if m.onAuthenticated != nil {
 		m.onAuthenticated(tokens.IDToken)
 	}
@@ -438,7 +449,14 @@ func (m *OIDCLoginManager) refreshLoop(initial *OIDCTokenSet, stop <-chan struct
 		m.tokens = newTokens
 		m.mu.Unlock()
 
-		// Notify with refreshed ID token
+		// Update identity directly on refresh.
+		if m.identity != nil && newTokens.IDToken != "" {
+			if err := m.identity.SetToken(newTokens.IDToken); err != nil {
+				slog.Warn("oidc-login: failed to update identity on refresh", "error", err)
+			}
+		}
+
+		// Notify caller for any additional side effects.
 		if m.onAuthenticated != nil && newTokens.IDToken != "" {
 			m.onAuthenticated(newTokens.IDToken)
 		}

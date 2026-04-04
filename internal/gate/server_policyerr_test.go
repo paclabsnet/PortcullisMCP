@@ -15,6 +15,7 @@
 package gate
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -55,7 +56,7 @@ func policyErrText(t *testing.T, result *mcp.CallToolResult) string {
 func TestPolicyErrToResult_Deny_Sentinel(t *testing.T) {
 	// Bare ErrDenied sentinel — reason is empty, trace_id is substituted.
 	g := newGateForPolicyErrTests("http://guard.example.com")
-	result, retErr := g.policyErrToResult(shared.ErrDenied, "test-tool", "trace-abc")
+	result, retErr := g.policyErrToResult(context.Background(),shared.ErrDenied, "test-tool", "trace-abc")
 	if retErr != nil {
 		t.Fatalf("expected nil error, got: %v", retErr)
 	}
@@ -75,7 +76,7 @@ func TestPolicyErrToResult_DenyError_PrefersKeepTraceID(t *testing.T) {
 	// Gate must show Keep's trace ID (what Keep logged) not its own local UUID.
 	g := newGateForPolicyErrTests("http://guard.example.com")
 	denyErr := &shared.DenyError{Reason: "user not in approved group", TraceID: "keep-trace-xyz"}
-	result, retErr := g.policyErrToResult(denyErr, "test-tool", "gate-trace-uuid")
+	result, retErr := g.policyErrToResult(context.Background(),denyErr, "test-tool", "gate-trace-uuid")
 	if retErr != nil {
 		t.Fatalf("expected nil error, got: %v", retErr)
 	}
@@ -98,7 +99,7 @@ func TestPolicyErrToResult_DenyError_FallsBackToGateTraceID(t *testing.T) {
 	// When Keep sends no trace ID (e.g. Keep also noop), Gate's local ID is used.
 	g := newGateForPolicyErrTests("http://guard.example.com")
 	denyErr := &shared.DenyError{Reason: "not permitted", TraceID: ""}
-	result, retErr := g.policyErrToResult(denyErr, "test-tool", "gate-trace-uuid")
+	result, retErr := g.policyErrToResult(context.Background(),denyErr, "test-tool", "gate-trace-uuid")
 	if retErr != nil {
 		t.Fatalf("expected nil error, got: %v", retErr)
 	}
@@ -130,7 +131,7 @@ func TestPolicyErrToResult_DenyError_CustomTemplate_ReasonOnly(t *testing.T) {
 		},
 	}
 	denyErr := &shared.DenyError{Reason: "not permitted", TraceID: "trace-123"}
-	result, _ := g.policyErrToResult(denyErr, "test-tool", "trace-123")
+	result, _ := g.policyErrToResult(context.Background(),denyErr, "test-tool", "trace-123")
 	text := policyErrText(t, result)
 	if text != "Denied: not permitted" {
 		t.Errorf("custom template should render exactly; got: %q", text)
@@ -159,7 +160,7 @@ func TestPolicyErrToResult_DenyError_CustomTemplate_TraceOnly(t *testing.T) {
 		},
 	}
 	denyErr := &shared.DenyError{Reason: "secret reason", TraceID: "trace-456"}
-	result, _ := g.policyErrToResult(denyErr, "test-tool", "trace-456")
+	result, _ := g.policyErrToResult(context.Background(),denyErr, "test-tool", "trace-456")
 	text := policyErrText(t, result)
 	if text != "Request blocked. Reference: trace-456" {
 		t.Errorf("custom template should render exactly; got: %q", text)
@@ -177,7 +178,7 @@ func TestPolicyErrToResult_Escalation_WithGuard(t *testing.T) {
 		PendingJWT:    "header.payload.sig",
 		TraceID:       "trace-esc-1",
 	}
-	result, retErr := g.policyErrToResult(e, "test-tool", "trace-esc-1")
+	result, retErr := g.policyErrToResult(context.Background(),e, "test-tool", "trace-esc-1")
 	if retErr != nil {
 		t.Fatalf("expected nil error, got: %v", retErr)
 	}
@@ -204,7 +205,7 @@ func TestPolicyErrToResult_Escalation_NoGuard_TreatedAsDeny(t *testing.T) {
 		EscalationJTI: "test-jti",
 		PendingJWT:    "header.payload.sig",
 	}
-	result, retErr := g.policyErrToResult(e, "test-tool", "trace-no-guard")
+	result, retErr := g.policyErrToResult(context.Background(),e, "test-tool", "trace-no-guard")
 	if retErr != nil {
 		t.Fatalf("expected nil error, got: %v", retErr)
 	}
@@ -226,7 +227,7 @@ func TestPolicyErrToResult_Escalation_NoGuard_TreatedAsDeny(t *testing.T) {
 func TestPolicyErrToResult_UnknownError_ReturnedAsIs(t *testing.T) {
 	g := newGateForPolicyErrTests("http://guard.example.com")
 	unexpectedErr := errors.New("connection refused")
-	result, retErr := g.policyErrToResult(unexpectedErr, "test-tool", "req-4")
+	result, retErr := g.policyErrToResult(context.Background(),unexpectedErr, "test-tool", "req-4")
 	if result != nil {
 		t.Error("expected nil result for unknown error")
 	}

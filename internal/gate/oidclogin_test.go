@@ -74,7 +74,7 @@ func newTestLoginManager(t *testing.T, issuerURL string) (*OIDCLoginManager, *St
 		ClientID:  "test-client",
 		Scopes:    []string{"openid"},
 	}
-	m := NewOIDCLoginManager(cfg, DefaultManagementAPIPort, 0, sm, nil, nil, nil)
+	m := NewOIDCLoginManager(cfg, DefaultManagementAPIPort, 0, sm, nil, nil, nil, nil)
 	return m, sm
 }
 
@@ -248,6 +248,7 @@ func TestHandleCallback_Success(t *testing.T) {
 		Scopes:    []string{"openid"},
 	}
 	m := NewOIDCLoginManager(cfg, DefaultManagementAPIPort, 0, sm,
+		nil, // no IdentitySource in this test
 		func(raw string) { authedToken = raw },
 		nil, nil,
 	)
@@ -360,7 +361,7 @@ func TestStartLogin_CallbackTimeout_ConfiguredExpiry(t *testing.T) {
 	sm := NewStateMachine()
 	cfg := OIDCLoginConfig{IssuerURL: srv.URL, ClientID: "test-client"}
 	timeoutSecs := 120
-	m := NewOIDCLoginManager(cfg, DefaultManagementAPIPort, timeoutSecs, sm, nil, nil, nil)
+	m := NewOIDCLoginManager(cfg, DefaultManagementAPIPort, timeoutSecs, sm, nil, nil, nil, nil)
 
 	authURL, err := m.StartLogin(context.Background())
 	if err != nil {

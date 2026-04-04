@@ -46,6 +46,17 @@ const (
 	identityKey  gateCtxKey = "identity"
 )
 
+// SessionIDFromContext returns the session ID stored in ctx, or ("", false) if absent.
+func SessionIDFromContext(ctx context.Context) (string, bool) {
+	v, ok := ctx.Value(sessionIDKey).(string)
+	return v, ok
+}
+
+// withSessionID returns a new context carrying the given session ID.
+func withSessionID(ctx context.Context, sessionID string) context.Context {
+	return context.WithValue(ctx, sessionIDKey, sessionID)
+}
+
 // DecisionLogEntry is a fast-path decision log entry sent to Keep.
 type DecisionLogEntry struct {
 	Timestamp time.Time      `json:"timestamp"`
@@ -190,10 +201,9 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 			mgmtPort,
 			cfg.Identity.LoginCallbackTimeoutSecs,
 			sm,
-			func(rawIDToken string) {
-				if err := g.identity.SetToken(rawIDToken); err != nil {
-					slog.Warn("oidc-login: failed to update identity cache", "error", err)
-				}
+			g.identity, // OIDCLoginManager calls SetToken directly
+			func(_ string) {
+				// Side effect: refresh Keep tool list after successful login/refresh.
 				go func() {
 					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 					defer cancel()
@@ -370,11 +380,18 @@ func (g *Gate) registerTool(tool *mcp.Tool) {
 }
 
 func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[string]any) (*mcp.CallToolResult, error) {
+	// Ensure a sessionID is in context. In single-tenant mode the Gate has one
+	// global session; in multi-tenant mode the HTTP middleware injects it first.
+	if _, hasSession := SessionIDFromContext(ctx); !hasSession {
+		ctx = withSessionID(ctx, g.sessionID)
+	}
+	sessionID, _ := SessionIDFromContext(ctx)
+
 	ctx, span := otel.Tracer(shared.ServiceGate).Start(ctx, "gate.tool_call")
 	defer span.End()
 	span.SetAttributes(
 		attribute.String("tool.name", toolName),
-		attribute.String("session.id", g.sessionID),
+		attribute.String("session.id", sessionID),
 	)
 
 	if g.cfg.Identity.Strategy == "oidc-login" && toolName != "portcullis_status" && toolName != "portcullis_login" {
@@ -424,7 +441,7 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 		select {
 		case g.logChan <- DecisionLogEntry{
 			Timestamp: time.Now().UTC(),
-			SessionID: g.sessionID,
+			SessionID: sessionID,
 			TraceID:   traceID,
 			UserID:    g.identity.Get(ctx).UserID,
 			ToolName:  toolName,
@@ -452,7 +469,7 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 		select {
 		case g.logChan <- DecisionLogEntry{
 			Timestamp: time.Now().UTC(),
-			SessionID: g.sessionID,
+			SessionID: sessionID,
 			TraceID:   traceID,
 			UserID:    g.identity.Get(ctx).UserID,
 			ToolName:  toolName,
@@ -477,14 +494,14 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 			Arguments:        args,
 			UserIdentity:     currentIdentity,
 			EscalationTokens: g.collectEscalationTokens(ctx, shared.LocalFSServerName, toolName),
-			SessionID:        g.sessionID,
+			SessionID:        sessionID,
 			TraceID:          traceID,
 		}
 		if err := g.forwarder.Authorize(ctx, enriched); err != nil {
 			if storeErr := g.maybeStorePendingEscalation(ctx, shared.LocalFSServerName, toolName, err); storeErr != nil {
 				return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: storeErr.Error()}}}, nil
 			}
-			return g.policyErrToResult(err, toolName, traceID)
+			return g.policyErrToResult(ctx, err, toolName, traceID)
 		}
 		if g.localFS == nil {
 			return nil, fmt.Errorf("local filesystem server not configured")
@@ -507,7 +524,7 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 		Arguments:        args,
 		UserIdentity:     currentIdentity,
 		EscalationTokens: g.collectEscalationTokens(ctx, serverName, toolName),
-		SessionID:        g.sessionID,
+		SessionID:        sessionID,
 		TraceID:          traceID,
 	}
 	result, err := g.forwarder.CallTool(ctx, enriched)
@@ -515,7 +532,7 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 		if storeErr := g.maybeStorePendingEscalation(ctx, serverName, toolName, err); storeErr != nil {
 			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: storeErr.Error()}}}, nil
 		}
-		return g.policyErrToResult(err, toolName, traceID)
+		return g.policyErrToResult(ctx, err, toolName, traceID)
 	}
 	return result, err
 }
@@ -719,7 +736,7 @@ func (g *Gate) claimAllUnclaimedTokens(ctx context.Context) {
 	}
 }
 
-func (g *Gate) policyErrToResult(err error, toolName, traceID string) (*mcp.CallToolResult, error) {
+func (g *Gate) policyErrToResult(ctx context.Context, err error, toolName, traceID string) (*mcp.CallToolResult, error) {
 	var escalationErr *shared.EscalationPendingError
 	var denyErr *shared.DenyError
 	var identityErr *shared.IdentityVerificationError
@@ -754,7 +771,7 @@ func (g *Gate) policyErrToResult(err error, toolName, traceID string) (*mcp.Call
 		if g.cfg.Identity.Strategy == "oidc-login" {
 			g.stateMachine.SetUnauthenticated()
 			g.identity.Clear()
-			loginMsg := g.handleLoginTool(context.Background(), false)
+			loginMsg := g.handleLoginTool(ctx, false)
 			return &mcp.CallToolResult{
 				IsError: true,
 				Content: []mcp.Content{&mcp.TextContent{Text: "Your authentication has expired. " + loginMsg}},
