@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"net/url"
 	"strings"
 	"sync"
@@ -152,6 +153,17 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 		}
 	}
 
+	// Initialize session store. In multi-tenant mode, Redis is preferred for
+	// shared state across instances; memory is the fallback for single-tenant
+	// and development use.
+	var sessionStore SessionStore
+	if cfg.Operations.Storage.Backend == "redis" {
+		addr, _ := cfg.Operations.Storage.Config["addr"].(string)
+		sessionStore = NewRedisSessionStore(addr, cfg.Server.SessionTTL)
+	} else {
+		sessionStore = NewMemorySessionStore()
+	}
+
 	if _, err := cfg.Validate(nil); err != nil {
 		return nil, err
 	}
@@ -173,6 +185,7 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 
 	g := &Gate{
 		cfg:           cfg,
+		sessions:      sessionStore,
 		identity:      identityCache,
 		escalations:   tokenStore,
 		pending:       NewInMemoryPendingStore(),
@@ -228,38 +241,42 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 		Version: version.Version,
 	}, nil)
 
-	mcp.AddTool(g.server,
-		&mcp.Tool{
-			Name:        "portcullis_status",
-			Description: "Returns the current operational status of Portcullis Gate, Keep, and Guard.",
-		},
-		func(ctx context.Context, _ *mcp.CallToolRequest, _ any) (*mcp.CallToolResult, any, error) {
-			msg, isErr := g.buildStatusReport(ctx)
-			return &mcp.CallToolResult{
-				IsError: isErr,
-				Content: []mcp.Content{&mcp.TextContent{Text: msg}},
-			}, nil, nil
-		},
-	)
+	// Native tools are single-tenant only. In multi-tenant mode health and
+	// readiness are served via /healthz and /readyz on the HTTP transport.
+	if cfg.Tenancy != "multi" {
+		mcp.AddTool(g.server,
+			&mcp.Tool{
+				Name:        "portcullis_status",
+				Description: "Returns the current operational status of Portcullis Gate, Keep, and Guard.",
+			},
+			func(ctx context.Context, _ *mcp.CallToolRequest, _ any) (*mcp.CallToolResult, any, error) {
+				msg, isErr := g.buildStatusReport(ctx)
+				return &mcp.CallToolResult{
+					IsError: isErr,
+					Content: []mcp.Content{&mcp.TextContent{Text: msg}},
+				}, nil, nil
+			},
+		)
 
-	mcp.AddTool(g.server,
-		&mcp.Tool{
-			Name:        "portcullis_login",
-			Description: "Starts or checks the Portcullis login process.",
-		},
-		func(ctx context.Context, _ *mcp.CallToolRequest, in any) (*mcp.CallToolResult, any, error) {
-			force := false
-			if inMap, ok := in.(map[string]any); ok {
-				if forceVal, ok := inMap["force"].(bool); ok {
-					force = forceVal
+		mcp.AddTool(g.server,
+			&mcp.Tool{
+				Name:        "portcullis_login",
+				Description: "Starts or checks the Portcullis login process.",
+			},
+			func(ctx context.Context, _ *mcp.CallToolRequest, in any) (*mcp.CallToolResult, any, error) {
+				force := false
+				if inMap, ok := in.(map[string]any); ok {
+					if forceVal, ok := inMap["force"].(bool); ok {
+						force = forceVal
+					}
 				}
-			}
-			msg := g.handleLoginTool(ctx, force)
-			return &mcp.CallToolResult{
-				Content: []mcp.Content{&mcp.TextContent{Text: msg}},
-			}, nil, nil
-		},
-	)
+				msg := g.handleLoginTool(ctx, force)
+				return &mcp.CallToolResult{
+					Content: []mcp.Content{&mcp.TextContent{Text: msg}},
+				}, nil, nil
+			},
+		)
+	}
 
 	if localFSSession != nil {
 		localTools, err := localFSSession.ListTools(ctx, &mcp.ListToolsParams{})
@@ -327,31 +344,35 @@ func (g *Gate) handleLoginTool(ctx context.Context, force bool) string {
 }
 
 func (g *Gate) Run(ctx context.Context) error {
-	mgmtEndpoint := g.cfg.Server.Endpoints[ManagementUIEndpoint]
-	// ManagementServer requires the concrete *IdentityCache (for Info/UpdateToken).
-	// The type assertion is safe: in single-tenant mode, identity is always *IdentityCache.
-	identityCache, _ := g.identity.(*IdentityCache)
-	tokenStore, _ := g.escalations.(*TokenStore)
-	mgmt, err := NewManagementServer(tokenStore, identityCache, mgmtEndpoint, g.cfg.Responsibility.AgentInteraction, g.oidcLogin, g.cfg.Identity.LoginCallbackPageFile)
-	if err != nil {
-		return fmt.Errorf("init management api: %w", err)
-	}
-	if err := mgmt.Start(ctx); err != nil {
-		return fmt.Errorf("start management api: %w", err)
-	}
-
-	if g.guardClient != nil {
-		interval := 60 * time.Second
-		if g.cfg.Responsibility.Escalation.PollInterval > 0 {
-			interval = time.Duration(g.cfg.Responsibility.Escalation.PollInterval) * time.Second
+	// Management server and guard polling are single-tenant concerns.
+	// Multi-tenant mode forbids both by config validation.
+	if g.cfg.Tenancy != "multi" {
+		mgmtEndpoint := g.cfg.Server.Endpoints[ManagementUIEndpoint]
+		// ManagementServer requires the concrete *IdentityCache (for Info/UpdateToken).
+		// The type assertion is safe: in single-tenant mode, identity is always *IdentityCache.
+		identityCache, _ := g.identity.(*IdentityCache)
+		tokenStore, _ := g.escalations.(*TokenStore)
+		mgmt, err := NewManagementServer(tokenStore, identityCache, mgmtEndpoint, g.cfg.Responsibility.AgentInteraction, g.oidcLogin, g.cfg.Identity.LoginCallbackPageFile)
+		if err != nil {
+			return fmt.Errorf("init management api: %w", err)
 		}
-		slog.Info("guard poll worker starting", "endpoint", g.cfg.Peers.Guard.resolvedAPIEndpoint(), "interval", interval)
-		go func() {
-			g.claimAllUnclaimedTokens(ctx)
-			g.pollGuardWorker(ctx)
-		}()
-	} else {
-		slog.Warn("guard endpoint not configured; escalation tokens must be added manually")
+		if err := mgmt.Start(ctx); err != nil {
+			return fmt.Errorf("start management api: %w", err)
+		}
+
+		if g.guardClient != nil {
+			interval := 60 * time.Second
+			if g.cfg.Responsibility.Escalation.PollInterval > 0 {
+				interval = time.Duration(g.cfg.Responsibility.Escalation.PollInterval) * time.Second
+			}
+			slog.Info("guard poll worker starting", "endpoint", g.cfg.Peers.Guard.resolvedAPIEndpoint(), "interval", interval)
+			go func() {
+				g.claimAllUnclaimedTokens(ctx)
+				g.pollGuardWorker(ctx)
+			}()
+		} else {
+			slog.Warn("guard endpoint not configured; escalation tokens must be added manually")
+		}
 	}
 
 	go func() {
@@ -359,6 +380,39 @@ func (g *Gate) Run(ctx context.Context) error {
 		close(g.logDone)
 		g.logWg.Wait()
 	}()
+
+	// HTTP transport if an MCP endpoint is configured; otherwise fall back to stdio.
+	mcpEp, hasHTTP := g.cfg.Server.Endpoints[MCPEndpoint]
+	if hasHTTP && mcpEp.Listen != "" {
+		var sdkOpts *mcp.StreamableHTTPOptions
+		if redisStore, ok := g.sessions.(*RedisSessionStore); ok {
+			sdkOpts = &mcp.StreamableHTTPOptions{EventStore: redisStore}
+		}
+		httpHandler := NewMCPHTTPHandler(g.server, sdkOpts, g.cfg, g.sessions, g.identity)
+
+		httpSrv := &http.Server{
+			Addr:    mcpEp.Listen,
+			Handler: httpHandler,
+		}
+		go func() {
+			<-ctx.Done()
+			shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = httpSrv.Shutdown(shutCtx)
+		}()
+
+		slog.Info("gate MCP HTTP transport starting", "addr", mcpEp.Listen, "tenancy", g.cfg.Tenancy)
+		if mcpEp.TLS.Cert != "" && mcpEp.TLS.Key != "" {
+			if err := httpSrv.ListenAndServeTLS(mcpEp.TLS.Cert, mcpEp.TLS.Key); !errors.Is(err, http.ErrServerClosed) {
+				return err
+			}
+			return nil
+		}
+		if err := httpSrv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		return nil
+	}
 
 	return g.server.Run(ctx, &mcp.StdioTransport{})
 }

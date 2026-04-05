@@ -15,9 +15,11 @@
 package gate
 
 import (
+	"context"
 	"strings"
 	"testing"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
 )
@@ -253,5 +255,108 @@ func TestBuildEscalationMessage_CustomInstructions_TraceIDOmitted(t *testing.T) 
 	}
 	if !strings.Contains(msg, "manager sign-off") {
 		t.Errorf("reason should still appear; got: %s", msg)
+	}
+}
+
+// ---- multi-tenant escalation interception -----------------------------------
+
+func newMultiTenantGate(marker string) *Gate {
+	return &Gate{
+		cfg: Config{
+			Tenancy: "multi",
+			Responsibility: ResponsibilityConfig{
+				Escalation: EscalationConfig{NoEscalationMarker: marker},
+			},
+		},
+		pending: NewInMemoryPendingStore(),
+		logChan: make(chan DecisionLogEntry, 10),
+		logDone: make(chan struct{}),
+	}
+}
+
+func TestMultiTenantEscalation_EscalationIntercepted(t *testing.T) {
+	// In multi-tenant mode, an EscalationPendingError must be converted to a
+	// deny result carrying the configured NoEscalationMarker.
+	g := newMultiTenantGate("SIEM-DENY")
+	escalationErr := &shared.EscalationPendingError{
+		Reason:        "manager approval required",
+		EscalationJTI: "jti-multi-1",
+		PendingJWT:    "h.p.s",
+	}
+	result, retErr := g.policyErrToResult(context.Background(), escalationErr, "sensitive_tool", "trace-mt-1")
+	if retErr != nil {
+		t.Fatalf("expected nil error, got: %v", retErr)
+	}
+	if !result.IsError {
+		t.Error("result.IsError should be true")
+	}
+	if len(result.Content) == 0 {
+		t.Fatal("result has no content")
+	}
+	tc, ok := result.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("expected *mcp.TextContent, got %T", result.Content[0])
+	}
+	if tc.Text != "SIEM-DENY" {
+		t.Errorf("expected NoEscalationMarker %q, got %q", "SIEM-DENY", tc.Text)
+	}
+}
+
+func TestMultiTenantEscalation_SIEMLogQueued(t *testing.T) {
+	// policyErrToResult must queue a DecisionLogEntry with the session and trace IDs.
+	g := newMultiTenantGate("SIEM-DENY")
+	ctx := withSessionID(context.Background(), "session-mt-abc")
+
+	escalationErr := &shared.EscalationPendingError{Reason: "needs approval"}
+	_, _ = g.policyErrToResult(ctx, escalationErr, "my_tool", "trace-mt-2")
+
+	select {
+	case entry := <-g.logChan:
+		if entry.SessionID != "session-mt-abc" {
+			t.Errorf("expected session_id %q, got %q", "session-mt-abc", entry.SessionID)
+		}
+		if entry.TraceID != "trace-mt-2" {
+			t.Errorf("expected trace_id %q, got %q", "trace-mt-2", entry.TraceID)
+		}
+		if entry.UserID != "" {
+			t.Errorf("UserID must be empty in multi-tenant mode (Gate never parses tokens); got %q", entry.UserID)
+		}
+		if entry.Decision != "deny" {
+			t.Errorf("expected decision %q, got %q", "deny", entry.Decision)
+		}
+		if entry.ToolName != "my_tool" {
+			t.Errorf("expected tool_name %q, got %q", "my_tool", entry.ToolName)
+		}
+	default:
+		t.Error("expected a DecisionLogEntry to be queued, but logChan was empty")
+	}
+}
+
+func TestMultiTenantEscalation_NoPendingStorageLeakage(t *testing.T) {
+	// maybeStorePendingEscalation must be a no-op in multi-tenant mode.
+	g := newMultiTenantGate("")
+	escalationErr := &shared.EscalationPendingError{
+		EscalationJTI: "jti-leak-check",
+		PendingJWT:    "h.p.s",
+	}
+	if err := g.maybeStorePendingEscalation(context.Background(), "server", "tool", escalationErr); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := g.pending.Get("server/tool"); ok {
+		t.Error("pending store must remain empty in multi-tenant mode (no state leakage)")
+	}
+}
+
+func TestMultiTenantEscalation_DefaultMarkerFallback(t *testing.T) {
+	// When NoEscalationMarker is empty, a sensible default must be used.
+	g := newMultiTenantGate("") // empty marker
+	err := &shared.EscalationPendingError{Reason: "needs approval"}
+	result, _ := g.policyErrToResult(context.Background(), err, "tool", "trace-mt-3")
+	tc, ok := result.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("expected *mcp.TextContent, got %T", result.Content[0])
+	}
+	if tc.Text == "" {
+		t.Error("default fallback marker must not be empty")
 	}
 }
