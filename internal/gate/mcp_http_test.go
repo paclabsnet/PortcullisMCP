@@ -59,7 +59,13 @@ func newTestHandler(
 			},
 		},
 	}
-	return NewMCPHTTPHandler(srv, nil, cfg, sessions, identity)
+	var provider TenancyProvider
+	if tenancy == "multi" {
+		provider = NewMultiTenantProvider(tokenHeader, sessions, nil)
+	} else {
+		provider = NewSingleTenantProvider(identity, tokenHeader)
+	}
+	return NewMCPHTTPHandler(srv, nil, cfg, provider)
 }
 
 // --- health check tests ---
@@ -228,7 +234,7 @@ func TestMCPHTTPMiddleware(t *testing.T) {
 				},
 			},
 		}
-		h := NewMCPHTTPHandler(srv, nil, cfg, store, nil)
+		h := NewMCPHTTPHandler(srv, nil, cfg, NewMultiTenantProvider("X-User-Token", store, nil))
 		// Replace the sdk handler with a capturing stub.
 		h.sdkHandler = http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 			capturedCtx = r.Context()

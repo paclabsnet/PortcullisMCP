@@ -15,28 +15,22 @@
 package gate
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
-	"errors"
 	"net/http"
+	"strings"
 
-	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 )
 
 // MCPHTTPHandler wraps the SDK's StreamableHTTPHandler with Portcullis
-// middleware: health checks, token extraction, session ownership validation,
-// and context injection.
+// middleware: health checks, authentication, and context injection.
 type MCPHTTPHandler struct {
-	tenancy     string         // "single" or "multi"
-	authType    string         // from endpoint.Auth.Type ("none", "bearer", "mtls")
-	tokenHeader string         // header name for inbound token (e.g. "X-User-Token")
-	sessions    SessionStore   // session persistence
-	identity    IdentitySource // global identity source (used for single-tenant fallback)
-	sdkHandler  http.Handler   // downstream StreamableHTTPHandler
+	provider   TenancyProvider
+	authType   string // from endpoint.Auth.Type ("none", "bearer", "mtls")
+	sdkHandler http.Handler
 }
 
 // credentialFingerprint returns a SHA-256 hash of the raw token string. This
@@ -52,8 +46,7 @@ func NewMCPHTTPHandler(
 	srv *mcp.Server,
 	sdkOpts *mcp.StreamableHTTPOptions,
 	cfg Config,
-	sessions SessionStore,
-	identity IdentitySource,
+	provider TenancyProvider,
 ) *MCPHTTPHandler {
 	sdkHandler := mcp.NewStreamableHTTPHandler(func(_ *http.Request) *mcp.Server {
 		return srv
@@ -62,12 +55,9 @@ func NewMCPHTTPHandler(
 	mcpEp := cfg.Server.Endpoints[MCPEndpoint]
 
 	return &MCPHTTPHandler{
-		tenancy:     cfg.Tenancy,
-		authType:    mcpEp.Auth.Type,
-		tokenHeader: mcpEp.Auth.Credentials.Header,
-		sessions:    sessions,
-		identity:    identity,
-		sdkHandler:  sdkHandler,
+		provider:   provider,
+		authType:   mcpEp.Auth.Type,
+		sdkHandler: sdkHandler,
 	}
 }
 
@@ -76,19 +66,10 @@ func NewMCPHTTPHandler(
 // /healthz and /readyz are served immediately with 200 OK, bypassing all
 // middleware (suitable for load-balancer health probes).
 //
-// All other paths pass through session management and identity injection:
-//
-//  1. Extract Mcp-Session-Id header.
-//  2. Extract the bearer token from the configured header.
-//     In single-tenant mode, fall back to the globally cached identity token.
-//  3. If auth is required and no token is available → 401 Unauthorized.
-//  4. In multi-tenant mode, if a session ID was supplied, validate the
-//     token's credential fingerprint against the stored fingerprint.
-//     Mismatch → 403. Storage error → 500.
-//  5. If the session was new or not found, generate a fresh session ID and
-//     persist the credential fingerprint.
-//  6. Inject session ID and raw token into the request context.
-//  7. Delegate to the SDK StreamableHTTPHandler.
+// All other paths pass through the TenancyProvider's Authenticate method,
+// which handles token extraction, session validation, and session allocation
+// according to the tenancy mode. On success the session ID and raw token are
+// injected into the request context before delegating to the SDK handler.
 func (h *MCPHTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Health checks bypass all middleware.
 	switch r.URL.Path {
@@ -98,63 +79,22 @@ func (h *MCPHTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := r.Context()
-
-	// --- Step 1: Extract Mcp-Session-Id ---
-	sessionID := r.Header.Get("Mcp-Session-Id")
-
-	// --- Step 2: Extract token ---
-	rawToken := ""
-	if h.tokenHeader != "" {
-		rawToken = r.Header.Get(h.tokenHeader)
-	}
-	// Single-tenant fallback: use the globally cached identity token when the
-	// per-request header is absent.
-	if rawToken == "" && h.tenancy != "multi" && h.identity != nil {
-		rawToken = h.identity.Get(ctx).RawToken
+	rawToken, sessionID, err := h.provider.Authenticate(r)
+	if err != nil {
+		if strings.Contains(err.Error(), "forbidden") {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+		} else {
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		}
+		return
 	}
 
-	// --- Step 3: Enforce auth requirement ---
 	if h.authType != "" && h.authType != "none" && rawToken == "" {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 
-	// --- Steps 4 & 5: Session ownership check / new-session generation ---
-	if h.sessions != nil {
-		if sessionID != "" && h.tenancy == "multi" {
-			storedState, _, err := h.sessions.GetSession(ctx, sessionID)
-			switch {
-			case errors.Is(err, ErrSessionNotFound):
-				// Session expired or unknown — generate a new one below.
-				sessionID = ""
-			case err != nil:
-				// Storage failure: preserve the security boundary.
-				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-				return
-			default:
-				// Session found: enforce credential fingerprint.
-				if !bytes.Equal(storedState, credentialFingerprint(rawToken)) {
-					http.Error(w, "Forbidden", http.StatusForbidden)
-					return
-				}
-			}
-		}
-
-		// --- Step 6: Generate new session when needed ---
-		if sessionID == "" && rawToken != "" {
-			sessionID = uuid.NewString()
-			fp := credentialFingerprint(rawToken)
-			// userID is intentionally empty in multi-tenant mode: Gate does not
-			// parse inbound tokens; the PDP is the authority on token identity.
-			if err := h.sessions.SaveSession(ctx, sessionID, "", fp); err != nil {
-				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-				return
-			}
-		}
-	}
-
-	// --- Step 7: Inject sessionID and raw token into context ---
+	ctx := r.Context()
 	if sessionID != "" {
 		ctx = withSessionID(ctx, sessionID)
 	}
@@ -166,6 +106,5 @@ func (h *MCPHTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	r = r.WithContext(ctx)
 
-	// --- Step 8: Delegate ---
 	h.sdkHandler.ServeHTTP(w, r)
 }

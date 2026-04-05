@@ -420,7 +420,7 @@ func (g *Gate) Run(ctx context.Context) error {
 		if redisStore, ok := g.sessions.(*RedisSessionStore); ok {
 			sdkOpts = &mcp.StreamableHTTPOptions{EventStore: redisStore}
 		}
-		httpHandler := NewMCPHTTPHandler(g.server, sdkOpts, g.cfg, g.sessions, g.identity)
+		httpHandler := NewMCPHTTPHandler(g.server, sdkOpts, g.cfg, g.provider)
 
 		httpSrv := &http.Server{
 			Addr:    mcpEp.Listen,
