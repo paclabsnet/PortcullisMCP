@@ -18,9 +18,13 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
+	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
 )
 
 // newMultiTenantHTTPHandler builds an MCPHTTPHandler configured for multi-tenant
@@ -61,32 +65,76 @@ func TestMultiTenantBoundary_CrossTenantIsolation(t *testing.T) {
 	}
 }
 
-// TestMultiTenantBoundary_RegistryStrictness verifies that a Gate configured
-// with tenancy: multi has zero local-filesystem tools registered and does not
-// expose native portcullis tools via the tool-server routing map.
-func TestMultiTenantBoundary_RegistryStrictness(t *testing.T) {
-	g := &Gate{
-		cfg: Config{
-			Tenancy: "multi",
+// newMultiTenantConfig returns a minimal Config that passes validation for
+// tenancy: multi. It uses the "os" identity strategy and "dev" mode so that
+// no OIDC configuration or TLS is required. A temp directory is used for the
+// escalation token store so the test leaves no files behind.
+//
+// The Keep peer is pointed at a non-existent address; New() will log a warning
+// when refreshKeepTools fails to connect, but will still return a valid Gate.
+func newMultiTenantConfig(t *testing.T) Config {
+	t.Helper()
+	return Config{
+		Mode:    cfgloader.ModeDev,
+		Tenancy: "multi",
+		Identity: IdentityConfig{Strategy: "os"},
+		Server: cfgloader.ServerConfig{
+			SessionTTL: 3600,
+			Endpoints: map[string]cfgloader.EndpointConfig{
+				MCPEndpoint: {Listen: "127.0.0.1:0"},
+			},
 		},
-		localFSTools:  make(map[string]bool),
-		toolServerMap: make(map[string]string),
+		Peers: PeersConfig{
+			Keep: cfgloader.PeerAuth{Endpoint: "http://127.0.0.1:19999"},
+		},
+		Responsibility: ResponsibilityConfig{
+			Escalation: EscalationConfig{
+				TokenStore: filepath.Join(t.TempDir(), "tokens.json"),
+			},
+		},
 	}
+}
 
-	// In multi-tenant mode, localFSTools must be empty because LocalFS is
-	// forbidden by config validation and the registration block is gated.
+// TestMultiTenantBoundary_RegistryStrictness verifies that a Gate constructed
+// via New() with tenancy: multi has zero local-filesystem tools registered, even
+// when the Keep peer is unreachable. This exercises the real initialization and
+// registration guards (server.go lines ~131 and ~281) rather than a hand-built
+// struct whose maps are trivially empty.
+func TestMultiTenantBoundary_RegistryStrictness(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	g, err := New(ctx, newMultiTenantConfig(t))
+	if err != nil {
+		t.Fatalf("New() with valid multi-tenant config: %v", err)
+	}
+	t.Cleanup(func() {
+		close(g.logDone)
+		g.logWg.Wait()
+	})
+
 	if len(g.localFSTools) != 0 {
-		t.Errorf("multi-tenant Gate must have zero localfs tools; got %d", len(g.localFSTools))
+		t.Errorf("multi-tenant Gate.localFSTools must be empty after New(); got %d: %v",
+			len(g.localFSTools), g.localFSTools)
 	}
+}
 
-	// Native portcullis tools must not appear in the tool-server routing map.
-	// They are registered directly on the mcp.Server in single-tenant mode only;
-	// in multi-tenant mode that block is skipped entirely.
-	nativeTools := []string{"portcullis_status", "portcullis_login"}
-	for _, name := range nativeTools {
-		if _, found := g.toolServerMap[name]; found {
-			t.Errorf("native tool %q must not be in toolServerMap in multi-tenant mode", name)
-		}
+// TestMultiTenantBoundary_LocalFSEnabledRejected verifies that New() refuses to
+// construct a multi-tenant Gate when LocalFS is misconfigured as Enabled: true.
+// This confirms the config-validation layer enforces the isolation constraint
+// before any runtime guard can be bypassed.
+func TestMultiTenantBoundary_LocalFSEnabledRejected(t *testing.T) {
+	ctx := context.Background()
+	cfg := newMultiTenantConfig(t)
+	cfg.Responsibility.Tools.LocalFS.Enabled = true
+	cfg.Responsibility.Tools.LocalFS.Workspace = SandboxConfig{Directory: t.TempDir()}
+
+	_, err := New(ctx, cfg)
+	if err == nil {
+		t.Fatal("New() must return an error when LocalFS.Enabled=true in multi-tenant mode")
+	}
+	if !strings.Contains(err.Error(), "portcullis-localfs") {
+		t.Errorf("error should mention portcullis-localfs; got: %v", err)
 	}
 }
 
