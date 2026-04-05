@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -126,6 +127,128 @@ func TestRedisSessionStore(t *testing.T) {
 		}
 		if len(gotState) != 0 {
 			t.Errorf("expected empty state, got: %q", gotState)
+		}
+	})
+}
+
+// collectAfter drains the After iterator into a [][]byte for easy comparison.
+func collectAfter(t *testing.T, store *RedisSessionStore, sessionID, streamID string, index int) [][]byte {
+	t.Helper()
+	var out [][]byte
+	for data, err := range store.After(context.Background(), sessionID, streamID, index) {
+		if err != nil {
+			t.Fatalf("After iterator error: %v", err)
+		}
+		out = append(out, data)
+	}
+	return out
+}
+
+func TestRedisEventStore(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("Open is a no-op and Append creates the list", func(t *testing.T) {
+		store, _ := newTestRedisStore(t, 3600)
+		if err := store.Open(ctx, "s1", "stream-a"); err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		if err := store.Append(ctx, "s1", "stream-a", []byte("hello")); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+		got := collectAfter(t, store, "s1", "stream-a", -1)
+		if len(got) != 1 || !bytes.Equal(got[0], []byte("hello")) {
+			t.Errorf("After(-1) = %v, want [hello]", got)
+		}
+	})
+
+	t.Run("After(-1) returns all appended events", func(t *testing.T) {
+		store, _ := newTestRedisStore(t, 3600)
+		events := [][]byte{[]byte("a"), []byte("b"), []byte("c")}
+		for _, e := range events {
+			if err := store.Append(ctx, "s2", "stream-b", e); err != nil {
+				t.Fatalf("Append: %v", err)
+			}
+		}
+		got := collectAfter(t, store, "s2", "stream-b", -1)
+		if !slices.EqualFunc(got, events, bytes.Equal) {
+			t.Errorf("After(-1) = %v, want %v", got, events)
+		}
+	})
+
+	t.Run("After(n) returns only events after index n", func(t *testing.T) {
+		store, _ := newTestRedisStore(t, 3600)
+		for _, e := range []string{"x", "y", "z"} {
+			_ = store.Append(ctx, "s3", "stream-c", []byte(e))
+		}
+		// After(0) means "after the first item" — should return ["y","z"]
+		got := collectAfter(t, store, "s3", "stream-c", 0)
+		want := [][]byte{[]byte("y"), []byte("z")}
+		if !slices.EqualFunc(got, want, bytes.Equal) {
+			t.Errorf("After(0) = %v, want %v", got, want)
+		}
+		// After(1) should return only ["z"]
+		got = collectAfter(t, store, "s3", "stream-c", 1)
+		want = [][]byte{[]byte("z")}
+		if !slices.EqualFunc(got, want, bytes.Equal) {
+			t.Errorf("After(1) = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("After on empty stream returns empty slice without error", func(t *testing.T) {
+		store, _ := newTestRedisStore(t, 3600)
+		got := collectAfter(t, store, "s4", "no-such-stream", -1)
+		if len(got) != 0 {
+			t.Errorf("expected empty result, got %v", got)
+		}
+	})
+
+	t.Run("SessionClosed removes all event keys for the session", func(t *testing.T) {
+		store, _ := newTestRedisStore(t, 3600)
+		_ = store.Append(ctx, "s5", "stream-1", []byte("data1"))
+		_ = store.Append(ctx, "s5", "stream-2", []byte("data2"))
+		// Both streams visible before close.
+		if got := collectAfter(t, store, "s5", "stream-1", -1); len(got) == 0 {
+			t.Fatal("expected data in stream-1 before SessionClosed")
+		}
+		if err := store.SessionClosed(ctx, "s5"); err != nil {
+			t.Fatalf("SessionClosed: %v", err)
+		}
+		// Both streams should now be empty (keys deleted).
+		if got := collectAfter(t, store, "s5", "stream-1", -1); len(got) != 0 {
+			t.Errorf("stream-1 not cleared after SessionClosed: %v", got)
+		}
+		if got := collectAfter(t, store, "s5", "stream-2", -1); len(got) != 0 {
+			t.Errorf("stream-2 not cleared after SessionClosed: %v", got)
+		}
+	})
+
+	t.Run("SessionClosed on unknown session is a no-op", func(t *testing.T) {
+		store, _ := newTestRedisStore(t, 3600)
+		if err := store.SessionClosed(ctx, "no-such-session"); err != nil {
+			t.Errorf("SessionClosed on unknown session: %v", err)
+		}
+	})
+
+	t.Run("Append refreshes TTL — events survive past original TTL", func(t *testing.T) {
+		store, mr := newTestRedisStore(t, 5)
+		_ = store.Append(ctx, "s6", "stream-ttl", []byte("first"))
+		mr.FastForward(3 * time.Second) // 3 of 5 seconds elapsed
+		_ = store.Append(ctx, "s6", "stream-ttl", []byte("second"))
+		// TTL refreshed to 5s from now; advancing 4 more seconds should still be valid.
+		mr.FastForward(4 * time.Second)
+		got := collectAfter(t, store, "s6", "stream-ttl", -1)
+		if len(got) != 2 {
+			t.Errorf("expected 2 events after TTL refresh, got %d: %v", len(got), got)
+		}
+	})
+
+	t.Run("events expire after TTL without further appends", func(t *testing.T) {
+		store, mr := newTestRedisStore(t, 1) // 1-second TTL
+		_ = store.Append(ctx, "s7", "stream-exp", []byte("gone"))
+		mr.FastForward(2 * time.Second)
+		got := collectAfter(t, store, "s7", "stream-exp", -1)
+		if len(got) != 0 {
+			t.Errorf("expected empty result after expiry, got %v", got)
 		}
 	})
 }

@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"iter"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -26,6 +27,7 @@ import (
 
 const (
 	redisSessionPrefix = "portcullis:session:"
+	redisEventPrefix   = "portcullis:events:"
 )
 
 // redisSessionValue is the JSON payload stored in Redis for each session.
@@ -97,6 +99,76 @@ func (s *RedisSessionStore) GetSession(ctx context.Context, sessionID string) ([
 func (s *RedisSessionStore) DeleteSession(ctx context.Context, sessionID string) error {
 	if err := s.client.Del(ctx, s.key(sessionID)).Err(); err != nil {
 		return fmt.Errorf("redis del session: %w", err)
+	}
+	return nil
+}
+
+// eventKey returns the Redis key for an SSE event list.
+func (s *RedisSessionStore) eventKey(sessionID, streamID string) string {
+	return redisEventPrefix + sessionID + ":" + streamID
+}
+
+// Open implements mcp.EventStore.Open. Redis lists are created lazily on the
+// first RPUSH, so no initialisation is required.
+func (s *RedisSessionStore) Open(_ context.Context, _, _ string) error {
+	return nil
+}
+
+// Append implements mcp.EventStore.Append by pushing data onto a Redis List
+// and refreshing the TTL of that list.
+func (s *RedisSessionStore) Append(ctx context.Context, sessionID, streamID string, data []byte) error {
+	key := s.eventKey(sessionID, streamID)
+	if err := s.client.RPush(ctx, key, data).Err(); err != nil {
+		return fmt.Errorf("redis rpush event: %w", err)
+	}
+	if err := s.client.Expire(ctx, key, s.ttl).Err(); err != nil {
+		return fmt.Errorf("redis expire event: %w", err)
+	}
+	return nil
+}
+
+// After implements mcp.EventStore.After. It returns an iterator over all data
+// items in the stream whose zero-based position is greater than index.
+//
+// Because this implementation does not purge items from the list, ErrEventsPurged
+// is never returned. LRANGE on a non-existent key returns an empty slice
+// (not an error), which is the correct behaviour for an empty or unwritten stream.
+func (s *RedisSessionStore) After(ctx context.Context, sessionID, streamID string, index int) iter.Seq2[[]byte, error] {
+	return func(yield func([]byte, error) bool) {
+		key := s.eventKey(sessionID, streamID)
+		start := int64(index + 1)
+		items, err := s.client.LRange(ctx, key, start, -1).Result()
+		if err != nil {
+			yield(nil, fmt.Errorf("redis lrange events: %w", err))
+			return
+		}
+		for _, item := range items {
+			if !yield([]byte(item), nil) {
+				return
+			}
+		}
+	}
+}
+
+// SessionClosed implements mcp.EventStore.SessionClosed. It scans for and
+// deletes all event-list keys belonging to the given session.
+func (s *RedisSessionStore) SessionClosed(ctx context.Context, sessionID string) error {
+	pattern := redisEventPrefix + sessionID + ":*"
+	var cursor uint64
+	for {
+		keys, next, err := s.client.Scan(ctx, cursor, pattern, 100).Result()
+		if err != nil {
+			return fmt.Errorf("redis scan events: %w", err)
+		}
+		if len(keys) > 0 {
+			if err := s.client.Del(ctx, keys...).Err(); err != nil {
+				return fmt.Errorf("redis del events: %w", err)
+			}
+		}
+		cursor = next
+		if cursor == 0 {
+			break
+		}
 	}
 	return nil
 }
