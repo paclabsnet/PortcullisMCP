@@ -810,7 +810,17 @@ func (g *Gate) claimAllUnclaimedTokens(ctx context.Context) {
 }
 
 func (g *Gate) policyErrToResult(ctx context.Context, err error, toolName, traceID string) (*mcp.CallToolResult, error) {
-	if g.cfg.Tenancy == "multi" {
+	var escalationErr *shared.EscalationPendingError
+	var denyErr *shared.DenyError
+	var identityErr *shared.IdentityVerificationError
+
+	// In multi-tenant mode, intercept only policy decisions (escalation and explicit
+	// denies) and convert them to a SIEM-logged deny marker. Infrastructure errors
+	// (IdentityVerificationError, transport failures, and any other unknown errors)
+	// are NOT intercepted: they propagate as real errors so callers can distinguish
+	// a policy denial from a PDP/transport outage.
+	if g.cfg.Tenancy == "multi" &&
+		(errors.As(err, &escalationErr) || errors.As(err, &denyErr) || errors.Is(err, shared.ErrDenied)) {
 		sid, _ := SessionIDFromContext(ctx)
 		// By design, Gate does not parse the user token in multi-tenant mode;
 		// UserID in SIEM logs will be empty and we supply the trace_id instead.
@@ -836,9 +846,10 @@ func (g *Gate) policyErrToResult(ctx context.Context, err error, toolName, trace
 		}, nil
 	}
 
-	var escalationErr *shared.EscalationPendingError
-	var denyErr *shared.DenyError
-	var identityErr *shared.IdentityVerificationError
+	// Reset so the switch cases below can re-evaluate cleanly.
+	escalationErr = nil
+	denyErr = nil
+
 	switch {
 	case errors.As(err, &escalationErr):
 		effectiveTraceID := escalationErr.TraceID

@@ -16,6 +16,7 @@ package gate
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -297,6 +298,58 @@ func TestMultiTenantBoundary_CorrelationAudit(t *testing.T) {
 				}
 			default:
 				t.Error("expected a SIEM DecisionLogEntry to be queued, but logChan was empty")
+			}
+		})
+	}
+}
+
+// TestMultiTenantBoundary_InfraErrorsNotMasked verifies that infrastructure errors
+// (identity verification failures, transport errors, and other unknown errors) are
+// NOT converted to deny markers in multi-tenant mode. They must propagate as real
+// errors so callers can distinguish a PDP/transport outage from a policy denial.
+func TestMultiTenantBoundary_InfraErrorsNotMasked(t *testing.T) {
+	g := &Gate{
+		cfg: Config{
+			Tenancy: "multi",
+			Responsibility: ResponsibilityConfig{
+				Escalation: EscalationConfig{NoEscalationMarker: "SIEM-DENY"},
+			},
+		},
+		pending: NewInMemoryPendingStore(),
+		logChan: make(chan DecisionLogEntry, 10),
+		logDone: make(chan struct{}),
+	}
+
+	infraErrors := []struct {
+		name string
+		err  error
+	}{
+		{
+			name: "IdentityVerificationError is returned as-is",
+			err:  &shared.IdentityVerificationError{Reason: "token expired"},
+		},
+		{
+			name: "unknown transport error is returned as-is",
+			err:  fmt.Errorf("connection refused"),
+		},
+	}
+
+	for _, tc := range infraErrors {
+		t.Run(tc.name, func(t *testing.T) {
+			result, retErr := g.policyErrToResult(context.Background(), tc.err, "tool", "trace-infra")
+
+			// Infrastructure errors must surface as a returned error, not a denied result.
+			if retErr == nil {
+				t.Error("expected a returned error for infrastructure failure, got nil")
+			}
+			if result != nil {
+				t.Errorf("expected nil result for infrastructure error, got: %+v", result)
+			}
+			// No SIEM log should be queued for infrastructure errors.
+			select {
+			case entry := <-g.logChan:
+				t.Errorf("infrastructure error must not emit a SIEM log entry; got: %+v", entry)
+			default:
 			}
 		})
 	}
