@@ -180,13 +180,15 @@ func TestMultiTenantBoundary_LocalFSBlockedByTenancy(t *testing.T) {
 // no "human-in-the-loop" state leaks across the tenant boundary.
 func TestMultiTenantBoundary_StatelessnessAudit(t *testing.T) {
 	pending := NewInMemoryPendingStore()
+	logChan := make(chan DecisionLogEntry, 10)
 	g := &Gate{
 		cfg: Config{
 			Tenancy: "multi",
 		},
-		pending: pending,
-		logChan: make(chan DecisionLogEntry, 10),
-		logDone: make(chan struct{}),
+		pending:  pending,
+		logChan:  logChan,
+		logDone:  make(chan struct{}),
+		provider: NewMultiTenantProvider("", nil, logChan),
 	}
 
 	escalationErr := &shared.EscalationPendingError{
@@ -257,9 +259,10 @@ func TestMultiTenantBoundary_CorrelationAudit(t *testing.T) {
 				Escalation: EscalationConfig{NoEscalationMarker: "DENIED"},
 			},
 		},
-		pending: NewInMemoryPendingStore(),
-		logChan: logChan,
-		logDone: make(chan struct{}),
+		pending:  NewInMemoryPendingStore(),
+		logChan:  logChan,
+		logDone:  make(chan struct{}),
+		provider: NewMultiTenantProvider("", nil, logChan),
 	}
 
 	testCases := []struct {
@@ -308,6 +311,7 @@ func TestMultiTenantBoundary_CorrelationAudit(t *testing.T) {
 // NOT converted to deny markers in multi-tenant mode. They must propagate as real
 // errors so callers can distinguish a PDP/transport outage from a policy denial.
 func TestMultiTenantBoundary_InfraErrorsNotMasked(t *testing.T) {
+	logChan := make(chan DecisionLogEntry, 10)
 	g := &Gate{
 		cfg: Config{
 			Tenancy: "multi",
@@ -315,9 +319,10 @@ func TestMultiTenantBoundary_InfraErrorsNotMasked(t *testing.T) {
 				Escalation: EscalationConfig{NoEscalationMarker: "SIEM-DENY"},
 			},
 		},
-		pending: NewInMemoryPendingStore(),
-		logChan: make(chan DecisionLogEntry, 10),
-		logDone: make(chan struct{}),
+		pending:  NewInMemoryPendingStore(),
+		logChan:  logChan,
+		logDone:  make(chan struct{}),
+		provider: NewMultiTenantProvider("", nil, logChan),
 	}
 
 	infraErrors := []struct {

@@ -39,6 +39,7 @@ func newGateForEscalationTests(approvalUI string, strategy string) *Gate {
 				Escalation: EscalationConfig{Strategy: strategy},
 			},
 		},
+		provider: NewSingleTenantProvider(nil, ""),
 	}
 }
 
@@ -128,6 +129,7 @@ func TestBuildEscalationMessage_CustomInstructions(t *testing.T) {
 				},
 			},
 		},
+		provider: NewSingleTenantProvider(nil, ""),
 	}
 	e := &shared.EscalationPendingError{
 		Reason:        "manager sign-off",
@@ -243,6 +245,7 @@ func TestBuildEscalationMessage_CustomInstructions_TraceIDOmitted(t *testing.T) 
 				},
 			},
 		},
+		provider: NewSingleTenantProvider(nil, ""),
 	}
 	e := &shared.EscalationPendingError{
 		Reason:        "manager sign-off",
@@ -261,6 +264,7 @@ func TestBuildEscalationMessage_CustomInstructions_TraceIDOmitted(t *testing.T) 
 // ---- multi-tenant escalation interception -----------------------------------
 
 func newMultiTenantGate(marker string) *Gate {
+	logChan := make(chan DecisionLogEntry, 10)
 	return &Gate{
 		cfg: Config{
 			Tenancy: "multi",
@@ -268,9 +272,10 @@ func newMultiTenantGate(marker string) *Gate {
 				Escalation: EscalationConfig{NoEscalationMarker: marker},
 			},
 		},
-		pending: NewInMemoryPendingStore(),
-		logChan: make(chan DecisionLogEntry, 10),
-		logDone: make(chan struct{}),
+		pending:  NewInMemoryPendingStore(),
+		logChan:  logChan,
+		logDone:  make(chan struct{}),
+		provider: NewMultiTenantProvider("", nil, logChan),
 	}
 }
 

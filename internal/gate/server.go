@@ -96,6 +96,7 @@ type Gate struct {
 	logChan       chan DecisionLogEntry
 	logDone       chan struct{}
 	logWg         sync.WaitGroup
+	provider      TenancyProvider
 
 	stateMachine *StateMachine
 	oidcLogin    *OIDCLoginManager
@@ -126,11 +127,20 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 		return nil, fmt.Errorf("create forwarder: %w", err)
 	}
 
+	// Initialize tenancy provider. Sessions are wired in after sessionStore is set up below.
+	mcpEpCfg := cfg.Server.Endpoints[MCPEndpoint]
+	var provider TenancyProvider
+	if cfg.Tenancy == "multi" {
+		provider = NewMultiTenantProvider(mcpEpCfg.Auth.Credentials.Header, nil, nil)
+	} else {
+		provider = NewSingleTenantProvider(identityCache, mcpEpCfg.Auth.Credentials.Header)
+	}
+
 	// Start the in-process local filesystem server if enabled and sandbox dirs are configured.
 	// Hard-blocked in multi-tenant mode regardless of the Enabled flag or workspace dirs,
 	// so that a misconfigured config file cannot violate tenant isolation at runtime.
 	var localFSSession *mcp.ClientSession
-	if cfg.Tenancy != "multi" && cfg.Responsibility.Tools.LocalFS.Enabled {
+	if provider.Capabilities().AllowLocalFS && cfg.Responsibility.Tools.LocalFS.Enabled {
 		if rawDirs := cfg.Responsibility.Tools.LocalFS.Workspace.EffectiveDirs(); len(rawDirs) > 0 {
 			expanded := make([]string, 0, len(rawDirs))
 			for _, d := range rawDirs {
@@ -176,6 +186,9 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 	} else {
 		sessionStore = NewMemorySessionStore()
 	}
+	if mtp, ok := provider.(*MultiTenantProvider); ok {
+		mtp.sessions = sessionStore
+	}
 
 	if _, err := cfg.Validate(nil); err != nil {
 		return nil, err
@@ -211,6 +224,10 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 		logChan:       make(chan DecisionLogEntry, 1000),
 		logDone:       make(chan struct{}),
 		stateMachine:  sm,
+		provider:      provider,
+	}
+	if mtp, ok := provider.(*MultiTenantProvider); ok {
+		mtp.logChan = g.logChan
 	}
 
 	if cfg.Identity.Strategy == "oidc-login" {
@@ -256,7 +273,7 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 
 	// Native tools are single-tenant only. In multi-tenant mode health and
 	// readiness are served via /healthz and /readyz on the HTTP transport.
-	if cfg.Tenancy != "multi" {
+	if provider.Capabilities().AllowNativeTools {
 		mcp.AddTool(g.server,
 			&mcp.Tool{
 				Name:        "portcullis_status",
@@ -293,7 +310,7 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 
 	// Double-guard: skip registration even if localFSSession is somehow non-nil
 	// in multi-tenant mode (defence-in-depth against future refactors).
-	if localFSSession != nil && cfg.Tenancy != "multi" {
+	if localFSSession != nil && provider.Capabilities().AllowLocalFS {
 		localTools, err := localFSSession.ListTools(ctx, &mcp.ListToolsParams{})
 		if err != nil {
 			return nil, fmt.Errorf("list local filesystem tools: %w", err)
@@ -361,7 +378,7 @@ func (g *Gate) handleLoginTool(ctx context.Context, force bool) string {
 func (g *Gate) Run(ctx context.Context) error {
 	// Management server and guard polling are single-tenant concerns.
 	// Multi-tenant mode forbids both by config validation.
-	if g.cfg.Tenancy != "multi" {
+	if g.provider.Capabilities().AllowManagementUI {
 		mgmtEndpoint := g.cfg.Server.Endpoints[ManagementUIEndpoint]
 		// ManagementServer requires the concrete *IdentityCache (for Info/UpdateToken).
 		// The type assertion is safe: in single-tenant mode, identity is always *IdentityCache.
@@ -652,7 +669,7 @@ func (g *Gate) collectEscalationTokens(ctx context.Context, serverName, toolName
 }
 
 func (g *Gate) maybeStorePendingEscalation(ctx context.Context, serverName, toolName string, err error) error {
-	if g.cfg.Tenancy == "multi" {
+	if !g.provider.Capabilities().AllowHumanInLoop {
 		return nil // block storage in PendingEscalationStore in multi-tenant mode
 	}
 
@@ -814,41 +831,9 @@ func (g *Gate) policyErrToResult(ctx context.Context, err error, toolName, trace
 	var denyErr *shared.DenyError
 	var identityErr *shared.IdentityVerificationError
 
-	// In multi-tenant mode, intercept only policy decisions (escalation and explicit
-	// denies) and convert them to a SIEM-logged deny marker. Infrastructure errors
-	// (IdentityVerificationError, transport failures, and any other unknown errors)
-	// are NOT intercepted: they propagate as real errors so callers can distinguish
-	// a policy denial from a PDP/transport outage.
-	if g.cfg.Tenancy == "multi" &&
-		(errors.As(err, &escalationErr) || errors.As(err, &denyErr) || errors.Is(err, shared.ErrDenied)) {
-		sid, _ := SessionIDFromContext(ctx)
-		// By design, Gate does not parse the user token in multi-tenant mode;
-		// UserID in SIEM logs will be empty and we supply the trace_id instead.
-		select {
-		case g.logChan <- DecisionLogEntry{
-			Timestamp: time.Now().UTC(),
-			SessionID: sid,
-			TraceID:   traceID,
-			ToolName:  toolName,
-			Decision:  "deny",
-			Reason:    "multi-tenant: escalation intercepted",
-			Source:    "gate-multitenant",
-		}:
-		default:
-		}
-		marker := g.cfg.Responsibility.Escalation.NoEscalationMarker
-		if marker == "" {
-			marker = "Access denied."
-		}
-		return &mcp.CallToolResult{
-			IsError: true,
-			Content: []mcp.Content{&mcp.TextContent{Text: marker}},
-		}, nil
+	if result, handled := g.provider.MapPolicyError(ctx, err, toolName, traceID, &g.cfg); handled {
+		return result, nil
 	}
-
-	// Reset so the switch cases below can re-evaluate cleanly.
-	escalationErr = nil
-	denyErr = nil
 
 	switch {
 	case errors.As(err, &escalationErr):

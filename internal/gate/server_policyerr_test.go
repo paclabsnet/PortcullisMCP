@@ -37,6 +37,7 @@ func newGateForPolicyErrTests(guardEndpoint string) *Gate {
 				},
 			},
 		},
+		provider: NewSingleTenantProvider(nil, ""),
 	}
 }
 
@@ -129,6 +130,7 @@ func TestPolicyErrToResult_DenyError_CustomTemplate_ReasonOnly(t *testing.T) {
 				},
 			},
 		},
+		provider: NewSingleTenantProvider(nil, ""),
 	}
 	denyErr := &shared.DenyError{Reason: "not permitted", TraceID: "trace-123"}
 	result, _ := g.policyErrToResult(context.Background(),denyErr, "test-tool", "trace-123")
@@ -158,6 +160,7 @@ func TestPolicyErrToResult_DenyError_CustomTemplate_TraceOnly(t *testing.T) {
 				},
 			},
 		},
+		provider: NewSingleTenantProvider(nil, ""),
 	}
 	denyErr := &shared.DenyError{Reason: "secret reason", TraceID: "trace-456"}
 	result, _ := g.policyErrToResult(context.Background(),denyErr, "test-tool", "trace-456")
