@@ -366,3 +366,263 @@ func TestConfig_TenancyValidation(t *testing.T) {
 		}
 	})
 }
+
+// --- GateSpecificGuardConfig.resolvedAPIEndpoint ---
+
+func TestResolvedAPIEndpoint(t *testing.T) {
+	tests := []struct {
+		name      string
+		tokenAPI  string
+		approvalUI string
+		want      string
+	}{
+		{
+			name:      "both empty returns empty",
+			tokenAPI:  "",
+			approvalUI: "",
+			want:      "",
+		},
+		{
+			name:      "token_api alone is returned",
+			tokenAPI:  "http://guard.example.com/token",
+			approvalUI: "",
+			want:      "http://guard.example.com/token",
+		},
+		{
+			name:      "approval_ui used when token_api is empty",
+			tokenAPI:  "",
+			approvalUI: "http://guard.example.com/ui",
+			want:      "http://guard.example.com/ui",
+		},
+		{
+			name:      "token_api wins over approval_ui",
+			tokenAPI:  "http://guard.example.com/token",
+			approvalUI: "http://guard.example.com/ui",
+			want:      "http://guard.example.com/token",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			g := GateSpecificGuardConfig{}
+			g.Endpoints.TokenAPI = tc.tokenAPI
+			g.Endpoints.ApprovalUI = tc.approvalUI
+			got := g.resolvedAPIEndpoint()
+			if got != tc.want {
+				t.Errorf("resolvedAPIEndpoint() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// --- IdentityConfig.Validate edge cases ---
+
+func TestIdentityConfig_Validate_OIDCLoginFlow(t *testing.T) {
+	tests := []struct {
+		name    string
+		flow    string
+		wantErr bool
+	}{
+		{"empty flow is valid", "", false},
+		{"authorization_code is valid", "authorization_code", false},
+		{"device_code is unsupported", "device_code", true},
+		{"implicit is unsupported", "implicit", true},
+		{"client_credentials is unsupported", "client_credentials", true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := IdentityConfig{
+				Strategy: "oidc-login",
+				Config: map[string]any{
+					"issuer_url": "https://idp.example.com",
+					"client_id":  "my-client",
+					"flow":       tc.flow,
+				},
+			}
+			err := cfg.Validate()
+			if (err != nil) != tc.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestIdentityConfig_Validate_OIDCLoginMissingIssuer(t *testing.T) {
+	cfg := IdentityConfig{
+		Strategy: "oidc-login",
+		Config:   map[string]any{"client_id": "c"},
+	}
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "issuer_url") {
+		t.Errorf("expected issuer_url error, got: %v", err)
+	}
+}
+
+func TestIdentityConfig_Validate_OIDCLoginMissingClientID(t *testing.T) {
+	cfg := IdentityConfig{
+		Strategy: "oidc-login",
+		Config:   map[string]any{"issuer_url": "https://idp.example.com"},
+	}
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "client_id") {
+		t.Errorf("expected client_id error, got: %v", err)
+	}
+}
+
+func TestIdentityConfig_Validate_NilConfig(t *testing.T) {
+	// nil Config map should be fine for "os" strategy.
+	cfg := IdentityConfig{Strategy: "os", Config: nil}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("os strategy with nil config should be valid; got: %v", err)
+	}
+}
+
+// --- Posture report WARN flags from Config.Validate ---
+
+func TestConfig_Validate_PostureReport_DevModeWarn(t *testing.T) {
+	cfg := validBaseConfig() // mode = "dev"
+	report, err := cfg.Validate(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	found := false
+	for _, f := range report.Findings {
+		if f.Property == "mode" && f.Status == "WARN" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected WARN finding for 'mode' in dev mode")
+	}
+}
+
+func TestConfig_Validate_PostureReport_ProductionModeNoWarn(t *testing.T) {
+	cfg := validBaseConfig()
+	cfg.Mode = "production"
+	cfg.Identity.Strategy = "oidc-file"
+	cfg.Identity.Config = map[string]any{"token_file": "/path/to/token"}
+	report, err := cfg.Validate(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, f := range report.Findings {
+		if f.Property == "mode" && f.Status == "WARN" {
+			t.Error("production mode should not have WARN finding for 'mode'")
+		}
+	}
+}
+
+func TestConfig_Validate_PostureReport_OSIdentityWarn(t *testing.T) {
+	cfg := validBaseConfig() // mode = "dev", strategy = ""
+	cfg.Identity.Strategy = "os"
+	report, err := cfg.Validate(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	found := false
+	for _, f := range report.Findings {
+		if f.Property == "identity.strategy" && f.Status == "WARN" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected WARN finding for 'identity.strategy' when using os identity")
+	}
+}
+
+func TestConfig_Validate_PostureReport_AuthNoneEndpointWarn(t *testing.T) {
+	cfg := validBaseConfig()
+	cfg.Server.Endpoints = map[string]cfgloader.EndpointConfig{
+		"mcp": {Listen: "127.0.0.1:8080", Auth: cfgloader.AuthSettings{Type: "none"}},
+	}
+	report, err := cfg.Validate(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	found := false
+	for _, f := range report.Findings {
+		if f.Property == "server.endpoints.mcp.auth.type" && f.Status == "WARN" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected WARN finding for auth.type=none endpoint")
+	}
+}
+
+func TestConfig_Validate_PostureReport_NoTLSEndpointWarn(t *testing.T) {
+	cfg := validBaseConfig()
+	cfg.Server.Endpoints = map[string]cfgloader.EndpointConfig{
+		"mcp": {Listen: "127.0.0.1:8080", Auth: cfgloader.AuthSettings{Type: "bearer"}},
+		// no TLS configured
+	}
+	report, err := cfg.Validate(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	found := false
+	for _, f := range report.Findings {
+		if f.Property == "server.endpoints.mcp.tls.cert" && f.Status == "WARN" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected WARN finding for missing TLS cert on endpoint")
+	}
+}
+
+// --- validateMultiTenant edge cases ---
+
+func TestConfig_ValidateMultiTenant_MCPListenEmpty(t *testing.T) {
+	// MCP endpoint key exists but listen is empty.
+	cfg := validMultiTenantConfig()
+	cfg.Server.Endpoints[MCPEndpoint] = cfgloader.EndpointConfig{Listen: ""}
+	_, err := cfg.Validate(nil)
+	if err == nil || !strings.Contains(err.Error(), "server.endpoints.mcp.listen") {
+		t.Errorf("expected mcp listen error for empty listen, got: %v", err)
+	}
+}
+
+func TestConfig_ValidateMultiTenant_GuardTokenAPIAlsoBlocked(t *testing.T) {
+	cfg := validMultiTenantConfig()
+	cfg.Peers.Guard.Endpoints.TokenAPI = "http://guard.example.com/token"
+	_, err := cfg.Validate(nil)
+	if err == nil || !strings.Contains(err.Error(), "peers.guard") {
+		t.Errorf("expected peers.guard error for token_api, got: %v", err)
+	}
+}
+
+func TestConfig_ValidateMultiTenant_RedisWithNonStringAddr(t *testing.T) {
+	// Storage config has addr but as a non-string type: should fail the type assertion.
+	cfg := validMultiTenantConfig()
+	cfg.Operations.Storage.Backend = "redis"
+	cfg.Operations.Storage.Config = map[string]any{"addr": 6379} // int, not string
+	_, err := cfg.Validate(nil)
+	if err == nil || !strings.Contains(err.Error(), "addr") {
+		t.Errorf("expected addr error for non-string addr, got: %v", err)
+	}
+}
+
+func TestConfig_ValidateMultiTenant_NonRedisBackendNoAddrRequired(t *testing.T) {
+	// A non-redis storage backend should not require addr.
+	cfg := validMultiTenantConfig()
+	cfg.Operations.Storage.Backend = "memory"
+	cfg.Operations.Storage.Config = map[string]any{}
+	if _, err := cfg.Validate(nil); err != nil {
+		t.Errorf("non-redis backend should not require addr; got: %v", err)
+	}
+}
+
+func TestConfig_ValidateMultiTenant_NegativeSessionTTLRejected(t *testing.T) {
+	cfg := validMultiTenantConfig()
+	cfg.Server.SessionTTL = -1
+	_, err := cfg.Validate(nil)
+	if err == nil || !strings.Contains(err.Error(), "session_ttl") {
+		t.Errorf("expected session_ttl error for negative value, got: %v", err)
+	}
+}

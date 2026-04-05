@@ -136,4 +136,5 @@ bundle.tar.gz
 
 # Internal development tracking files
 completed_work.md
+.gemini_task_tracking.md
 
