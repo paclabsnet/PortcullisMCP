@@ -583,6 +583,10 @@ func (g *Gate) collectEscalationTokens(ctx context.Context, serverName, toolName
 }
 
 func (g *Gate) maybeStorePendingEscalation(ctx context.Context, serverName, toolName string, err error) error {
+	if g.cfg.Tenancy == "multi" {
+		return nil // block storage in PendingEscalationStore in multi-tenant mode
+	}
+
 	var escalationErr *shared.EscalationPendingError
 	if !errors.As(err, &escalationErr) {
 		return nil
@@ -737,6 +741,32 @@ func (g *Gate) claimAllUnclaimedTokens(ctx context.Context) {
 }
 
 func (g *Gate) policyErrToResult(ctx context.Context, err error, toolName, traceID string) (*mcp.CallToolResult, error) {
+	if g.cfg.Tenancy == "multi" {
+		sid, _ := SessionIDFromContext(ctx)
+		// By design, Gate does not parse the user token in multi-tenant mode;
+		// UserID in SIEM logs will be empty and we supply the trace_id instead.
+		select {
+		case g.logChan <- DecisionLogEntry{
+			Timestamp: time.Now().UTC(),
+			SessionID: sid,
+			TraceID:   traceID,
+			ToolName:  toolName,
+			Decision:  "deny",
+			Reason:    "multi-tenant: escalation intercepted",
+			Source:    "gate-multitenant",
+		}:
+		default:
+		}
+		marker := g.cfg.Responsibility.Escalation.NoEscalationMarker
+		if marker == "" {
+			marker = "Access denied."
+		}
+		return &mcp.CallToolResult{
+			IsError: true,
+			Content: []mcp.Content{&mcp.TextContent{Text: marker}},
+		}, nil
+	}
+
 	var escalationErr *shared.EscalationPendingError
 	var denyErr *shared.DenyError
 	var identityErr *shared.IdentityVerificationError
