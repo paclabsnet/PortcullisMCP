@@ -162,8 +162,17 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 	// and development use.
 	var sessionStore SessionStore
 	if cfg.Operations.Storage.Backend == "redis" {
-		addr, _ := cfg.Operations.Storage.Config["addr"].(string)
-		sessionStore = NewRedisSessionStore(addr, cfg.Server.SessionTTL)
+		sc := cfg.Operations.Storage.Config
+		addr, _ := sc["addr"].(string)
+		password, _ := sc["password"].(string)
+		db, _ := sc["db"].(int)
+		keyPrefix, _ := sc["key_prefix"].(string)
+		sessionStore = NewRedisSessionStore(RedisConfig{
+			Addr:      addr,
+			Password:  password,
+			DB:        db,
+			KeyPrefix: keyPrefix,
+		}, cfg.Server.SessionTTL)
 	} else {
 		sessionStore = NewMemorySessionStore()
 	}

@@ -25,10 +25,17 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-const (
-	redisSessionPrefix = "portcullis:session:"
-	redisEventPrefix   = "portcullis:events:"
-)
+// defaultRedisKeyPrefix is the namespace prefix used when RedisConfig.KeyPrefix is empty.
+const defaultRedisKeyPrefix = "portcullis:"
+
+// RedisConfig holds all connection and namespace settings for a Redis-backed store.
+// Fields map directly to the keys in operations.storage.config in gate.yaml.
+type RedisConfig struct {
+	Addr      string // required; e.g. "localhost:6379"
+	Password  string // optional; empty = no auth
+	DB        int    // optional; 0 = default Redis database
+	KeyPrefix string // optional; namespaces all keys; defaults to "portcullis:"
+}
 
 // redisSessionValue is the JSON payload stored in Redis for each session.
 type redisSessionValue struct {
@@ -38,31 +45,42 @@ type redisSessionValue struct {
 
 // RedisSessionStore is a Redis-backed implementation of SessionStore with TTL.
 type RedisSessionStore struct {
-	client *redis.Client
-	ttl    time.Duration
+	client    *redis.Client
+	ttl       time.Duration
+	keyPrefix string
 }
 
-// NewRedisSessionStore creates a RedisSessionStore using the given Redis address
-// and session TTL in seconds.
-func NewRedisSessionStore(addr string, ttlSeconds int) *RedisSessionStore {
-	client := redis.NewClient(&redis.Options{Addr: addr})
+// NewRedisSessionStore creates a RedisSessionStore from a RedisConfig.
+// All Config fields (password, db, key_prefix) are honoured; addr is required.
+func NewRedisSessionStore(cfg RedisConfig, ttlSeconds int) *RedisSessionStore {
+	prefix := cfg.KeyPrefix
+	if prefix == "" {
+		prefix = defaultRedisKeyPrefix
+	}
+	client := redis.NewClient(&redis.Options{
+		Addr:     cfg.Addr,
+		Password: cfg.Password,
+		DB:       cfg.DB,
+	})
 	return &RedisSessionStore{
-		client: client,
-		ttl:    time.Duration(ttlSeconds) * time.Second,
+		client:    client,
+		ttl:       time.Duration(ttlSeconds) * time.Second,
+		keyPrefix: prefix,
 	}
 }
 
 // NewRedisSessionStoreFromClient creates a RedisSessionStore using a pre-built
-// redis.Client. Useful for testing with miniredis.
+// redis.Client. The default key prefix is applied. Useful for testing with miniredis.
 func NewRedisSessionStoreFromClient(client *redis.Client, ttlSeconds int) *RedisSessionStore {
 	return &RedisSessionStore{
-		client: client,
-		ttl:    time.Duration(ttlSeconds) * time.Second,
+		client:    client,
+		ttl:       time.Duration(ttlSeconds) * time.Second,
+		keyPrefix: defaultRedisKeyPrefix,
 	}
 }
 
 func (s *RedisSessionStore) key(sessionID string) string {
-	return redisSessionPrefix + sessionID
+	return s.keyPrefix + "session:" + sessionID
 }
 
 // SaveSession stores the session in Redis with the configured TTL.
@@ -105,7 +123,7 @@ func (s *RedisSessionStore) DeleteSession(ctx context.Context, sessionID string)
 
 // eventKey returns the Redis key for an SSE event list.
 func (s *RedisSessionStore) eventKey(sessionID, streamID string) string {
-	return redisEventPrefix + sessionID + ":" + streamID
+	return s.keyPrefix + "events:" + sessionID + ":" + streamID
 }
 
 // Open implements mcp.EventStore.Open. Redis lists are created lazily on the
@@ -153,7 +171,7 @@ func (s *RedisSessionStore) After(ctx context.Context, sessionID, streamID strin
 // SessionClosed implements mcp.EventStore.SessionClosed. It scans for and
 // deletes all event-list keys belonging to the given session.
 func (s *RedisSessionStore) SessionClosed(ctx context.Context, sessionID string) error {
-	pattern := redisEventPrefix + sessionID + ":*"
+	pattern := s.keyPrefix + "events:" + sessionID + ":*"
 	var cursor uint64
 	for {
 		keys, next, err := s.client.Scan(ctx, cursor, pattern, 100).Result()

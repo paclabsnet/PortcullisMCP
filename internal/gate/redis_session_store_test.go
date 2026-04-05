@@ -35,6 +35,19 @@ func newTestRedisStore(t *testing.T, ttlSeconds int) (*RedisSessionStore, *minir
 	return store, mr
 }
 
+// newTestRedisStoreWithPrefix starts a miniredis server and returns a store that
+// uses the given key prefix, sharing the same miniredis instance when mr is non-nil.
+func newTestRedisStoreWithPrefix(t *testing.T, mr *miniredis.Miniredis, prefix string) *RedisSessionStore {
+	t.Helper()
+	if mr == nil {
+		mr = miniredis.RunT(t)
+	}
+	return NewRedisSessionStore(RedisConfig{
+		Addr:      mr.Addr(),
+		KeyPrefix: prefix,
+	}, 3600)
+}
+
 func TestRedisSessionStore(t *testing.T) {
 	ctx := context.Background()
 
@@ -249,6 +262,59 @@ func TestRedisEventStore(t *testing.T) {
 		got := collectAfter(t, store, "s7", "stream-exp", -1)
 		if len(got) != 0 {
 			t.Errorf("expected empty result after expiry, got %v", got)
+		}
+	})
+}
+
+func TestRedisSessionStore_KeyPrefix(t *testing.T) {
+	ctx := context.Background()
+	mr := miniredis.RunT(t)
+
+	t.Run("default prefix is applied when KeyPrefix is empty", func(t *testing.T) {
+		store := newTestRedisStoreWithPrefix(t, mr, "")
+		if store.keyPrefix != defaultRedisKeyPrefix {
+			t.Errorf("keyPrefix = %q, want %q", store.keyPrefix, defaultRedisKeyPrefix)
+		}
+	})
+
+	t.Run("custom prefix is used for session keys", func(t *testing.T) {
+		store := newTestRedisStoreWithPrefix(t, mr, "env-a:")
+		_ = store.SaveSession(ctx, "sess-prefix", "user", []byte("state"))
+		// The raw Redis key must include the custom prefix.
+		expectedKey := "env-a:session:sess-prefix"
+		if !mr.Exists(expectedKey) {
+			t.Errorf("expected Redis key %q not found; key prefix not applied", expectedKey)
+		}
+	})
+
+	t.Run("two stores with different prefixes are isolated", func(t *testing.T) {
+		storeA := newTestRedisStoreWithPrefix(t, mr, "prod:")
+		storeB := newTestRedisStoreWithPrefix(t, mr, "staging:")
+
+		_ = storeA.SaveSession(ctx, "shared-id", "prod-user", []byte("prod-state"))
+
+		// storeB uses a different prefix so "shared-id" does not exist there.
+		_, _, err := storeB.GetSession(ctx, "shared-id")
+		if !errors.Is(err, ErrSessionNotFound) {
+			t.Errorf("expected ErrSessionNotFound in staging namespace, got: %v", err)
+		}
+
+		// storeA can still read its own session.
+		gotState, gotUser, err := storeA.GetSession(ctx, "shared-id")
+		if err != nil {
+			t.Fatalf("storeA.GetSession: %v", err)
+		}
+		if gotUser != "prod-user" || string(gotState) != "prod-state" {
+			t.Errorf("storeA round-trip failed: user=%q state=%q", gotUser, gotState)
+		}
+	})
+
+	t.Run("custom prefix is used for event keys", func(t *testing.T) {
+		store := newTestRedisStoreWithPrefix(t, mr, "env-b:")
+		_ = store.Append(ctx, "sess-ev", "stream-1", []byte("data"))
+		expectedKey := "env-b:events:sess-ev:stream-1"
+		if !mr.Exists(expectedKey) {
+			t.Errorf("expected Redis event key %q not found; key prefix not applied", expectedKey)
 		}
 	})
 }
