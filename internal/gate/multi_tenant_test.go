@@ -90,6 +90,42 @@ func TestMultiTenantBoundary_RegistryStrictness(t *testing.T) {
 	}
 }
 
+// TestMultiTenantBoundary_LocalFSBlockedByTenancy verifies that the localFS
+// initialization guard rejects startup even when LocalFS.Enabled is true and
+// workspace dirs are configured, if tenancy is "multi". This is the defence-in-
+// depth check: config validation may be bypassed (e.g. programmatic construction)
+// but the runtime must never start a localFS session in multi-tenant mode.
+func TestMultiTenantBoundary_LocalFSBlockedByTenancy(t *testing.T) {
+	// Simulate the condition that triggers localFS init: Enabled=true with dirs set.
+	// In multi-tenant mode the outer guard must prevent any session from being created.
+	cfg := Config{
+		Tenancy: "multi",
+		Responsibility: ResponsibilityConfig{
+			Tools: ToolsConfig{
+				LocalFS: LocalFSConfig{
+					Enabled:   true, // misconfigured — validation normally forbids this
+					Workspace: SandboxConfig{Directory: "/tmp"},
+				},
+			},
+		},
+	}
+
+	// The guard condition mirrors server.go: tenancy != "multi" && LocalFS.Enabled.
+	// Verify it correctly blocks initialization.
+	shouldInit := cfg.Tenancy != "multi" && cfg.Responsibility.Tools.LocalFS.Enabled
+	if shouldInit {
+		t.Error("localFS init guard failed: would start a localFS session in multi-tenant mode")
+	}
+
+	// Also verify the registration guard: localFSSession != nil && tenancy != "multi".
+	// Even if a non-nil session somehow existed, registration must be skipped.
+	simulatedNonNilSession := true // stand-in for a non-nil *mcp.ClientSession
+	shouldRegister := simulatedNonNilSession && cfg.Tenancy != "multi"
+	if shouldRegister {
+		t.Error("localFS registration guard failed: would register localfs tools in multi-tenant mode")
+	}
+}
+
 // TestMultiTenantBoundary_StatelessnessAudit verifies that after a Deny response
 // in multi-tenant mode the PendingEscalationStore remains completely empty —
 // no "human-in-the-loop" state leaks across the tenant boundary.

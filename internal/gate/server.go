@@ -126,21 +126,25 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 		return nil, fmt.Errorf("create forwarder: %w", err)
 	}
 
-	// Start the in-process local filesystem server if any sandbox dirs are configured.
+	// Start the in-process local filesystem server if enabled and sandbox dirs are configured.
+	// Hard-blocked in multi-tenant mode regardless of the Enabled flag or workspace dirs,
+	// so that a misconfigured config file cannot violate tenant isolation at runtime.
 	var localFSSession *mcp.ClientSession
-	if rawDirs := cfg.Responsibility.Tools.LocalFS.Workspace.EffectiveDirs(); len(rawDirs) > 0 {
-		expanded := make([]string, 0, len(rawDirs))
-		for _, d := range rawDirs {
-			exp, err := expandHome(d)
-			if err != nil {
-				return nil, fmt.Errorf("expand sandbox dir %q: %w", d, err)
+	if cfg.Tenancy != "multi" && cfg.Responsibility.Tools.LocalFS.Enabled {
+		if rawDirs := cfg.Responsibility.Tools.LocalFS.Workspace.EffectiveDirs(); len(rawDirs) > 0 {
+			expanded := make([]string, 0, len(rawDirs))
+			for _, d := range rawDirs {
+				exp, err := expandHome(d)
+				if err != nil {
+					return nil, fmt.Errorf("expand sandbox dir %q: %w", d, err)
+				}
+				expanded = append(expanded, exp)
 			}
-			expanded = append(expanded, exp)
-		}
-		var err error
-		localFSSession, err = localfs.Connect(ctx, expanded)
-		if err != nil {
-			return nil, fmt.Errorf("start local filesystem server: %w", err)
+			var err error
+			localFSSession, err = localfs.Connect(ctx, expanded)
+			if err != nil {
+				return nil, fmt.Errorf("start local filesystem server: %w", err)
+			}
 		}
 	}
 
@@ -278,7 +282,9 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 		)
 	}
 
-	if localFSSession != nil {
+	// Double-guard: skip registration even if localFSSession is somehow non-nil
+	// in multi-tenant mode (defence-in-depth against future refactors).
+	if localFSSession != nil && cfg.Tenancy != "multi" {
 		localTools, err := localFSSession.ListTools(ctx, &mcp.ListToolsParams{})
 		if err != nil {
 			return nil, fmt.Errorf("list local filesystem tools: %w", err)
