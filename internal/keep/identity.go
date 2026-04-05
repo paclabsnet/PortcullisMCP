@@ -199,8 +199,14 @@ func (n *oidcVerifyingNormalizer) Normalize(ctx context.Context, id shared.UserI
 		}
 	}
 
-	email, _ := claims["email"].(string)
-	displayName, _ := claims["name"].(string)
+	var email string
+	if v, ok := claims["email"].(string); ok {
+		email = v
+	}
+	var displayName string
+	if v, ok := claims["name"].(string); ok {
+		displayName = v
+	}
 
 	var groups []string
 	if g, ok := claims["groups"].([]any); ok {
@@ -220,7 +226,10 @@ func (n *oidcVerifyingNormalizer) Normalize(ctx context.Context, id shared.UserI
 		}
 	}
 
-	dept, _ := claims["department"].(string)
+	var dept string
+	if v, ok := claims["department"].(string); ok {
+		dept = v
+	}
 
 	var amr []string
 	if a, ok := claims["amr"].([]any); ok {
@@ -231,8 +240,14 @@ func (n *oidcVerifyingNormalizer) Normalize(ctx context.Context, id shared.UserI
 		}
 	}
 
-	preferredUsername, _ := claims["preferred_username"].(string)
-	acr, _ := claims["acr"].(string)
+	var preferredUsername string
+	if v, ok := claims["preferred_username"].(string); ok {
+		preferredUsername = v
+	}
+	var acr string
+	if v, ok := claims["acr"].(string); ok {
+		acr = v
+	}
 
 	var expUnix int64
 	if exp != nil {

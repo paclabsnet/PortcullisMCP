@@ -381,9 +381,14 @@ func (g *Gate) Run(ctx context.Context) error {
 	if g.provider.Capabilities().AllowManagementUI {
 		mgmtEndpoint := g.cfg.Server.Endpoints[ManagementUIEndpoint]
 		// ManagementServer requires the concrete *IdentityCache (for Info/UpdateToken).
-		// The type assertion is safe: in single-tenant mode, identity is always *IdentityCache.
-		identityCache, _ := g.identity.(*IdentityCache)
-		tokenStore, _ := g.escalations.(*TokenStore)
+		identityCache, ok := g.identity.(*IdentityCache)
+		if !ok {
+			return fmt.Errorf("identity source is not an *IdentityCache in single-tenant mode")
+		}
+		tokenStore, ok := g.escalations.(*TokenStore)
+		if !ok {
+			return fmt.Errorf("escalation store is not a *TokenStore in single-tenant mode")
+		}
 		mgmt, err := NewManagementServer(tokenStore, identityCache, mgmtEndpoint, g.cfg.Responsibility.AgentInteraction, g.oidcLogin, g.cfg.Identity.LoginCallbackPageFile)
 		if err != nil {
 			return fmt.Errorf("init management api: %w", err)
