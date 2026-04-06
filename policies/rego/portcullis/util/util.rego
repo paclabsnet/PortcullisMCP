@@ -28,7 +28,7 @@ import data.portcullis.rule_match
 #
 # returns the array of 
 #
-find_arg_restriction_matches( arg_restriction_rule_array, request_args) := rule_element_matched_list if {
+find_arg_restriction_matches( arg_restriction_rule_array, request_body) := rule_element_matched_list if {
 
    # because some of the matches can be an 'and' of multiple rules, we potentially get a mix of arrays
    # with one element, and arrays with multiple, and we want to flatten those out. The grants don't
@@ -36,7 +36,7 @@ find_arg_restriction_matches( arg_restriction_rule_array, request_args) := rule_
    # 
    unflattened_rule_element_matched_list := [ rule_element_matched_list |
                                some restriction in arg_restriction_rule_array
-                                  rule_element_matched_list := find_arg_restriction_matches_for_ANDED_group( restriction, request_args)
+                                  rule_element_matched_list := find_arg_restriction_matches_for_ANDED_group( restriction, request_body)
                            ]
 
    rule_element_matched_list := array.flatten(unflattened_rule_element_matched_list)
@@ -47,10 +47,10 @@ find_arg_restriction_matches( arg_restriction_rule_array, request_args) := rule_
 #
 # returns true if any of the arg restriction requirements are met
 #
-any_arg_restriction_rule_honored( arg_restriction_rule_array, request_args) := true if {
+any_arg_restriction_rule_honored( arg_restriction_rule_array, request_body) := true if {
 
    some restriction in arg_restriction_rule_array
-      arg_restriction_honored( restriction, request_args )
+      arg_restriction_honored( restriction, request_body )
    
 } else := no_arg_restrictions_to_honor( arg_restriction_rule_array )
 
@@ -67,9 +67,9 @@ no_arg_restrictions_to_honor( arg_restriction_rule_array ) := true if {
 #
 # check one specific arg_restriction, which can be several sub-restrictions ANDED together
 #
-arg_restriction_honored( restriction, request_args) := true if {
+arg_restriction_honored( restriction, request_body) := true if {
 
-  rule_element_matched_list := find_arg_restriction_matches_for_ANDED_group( restriction, request_args )
+  rule_element_matched_list := find_arg_restriction_matches_for_ANDED_group( restriction, request_body )
   count(rule_element_matched_list) > 0
 
 } else := false   
@@ -82,17 +82,17 @@ arg_restriction_honored( restriction, request_args) := true if {
 # we can add as many different types as we want by creating this ladder
 # of fail-through checks
 #
-find_arg_restriction_matches_for_ANDED_group( restriction, request_args ) := rule_element_matched_list if {
+find_arg_restriction_matches_for_ANDED_group( restriction, request_body ) := rule_element_matched_list if {
 
-   # print("#DEBUG: find_arg_restriction_matches_for_ANDED_group: ", request_args, ", ", restriction)
+   # print("#DEBUG: find_arg_restriction_matches_for_ANDED_group: ", request_body, ", ", restriction)
 
    lower(restriction.type) == "and"
 
-   rule_element_matched_list := find_every_arg_restriction_rule_matches( restriction.list, request_args)
+   rule_element_matched_list := find_every_arg_restriction_rule_matches( restriction.list, request_body)
 
    # print("#DEBUG++: rule_element_matched_list: ", rule_element_matched_list)
 
-} else := find_arg_restriction_matches_for_single_element( restriction, request_args)
+} else := find_arg_restriction_matches_for_single_element( restriction, request_body)
 
 
 #
@@ -100,9 +100,9 @@ find_arg_restriction_matches_for_ANDED_group( restriction, request_args ) := rul
 # the type. now we have to get into the details and start comparing values to actual
 # data restrictions
 #
-find_arg_restriction_matches_for_single_element( restriction, request_args ) := rule_element_matched_list if {
+find_arg_restriction_matches_for_single_element( restriction, request_body ) := rule_element_matched_list if {
 
-  # print("#DEBUG: find_arg_restriction_matches_for_single_element: args:", request_args, ", restriction:", restriction)
+  # print("#DEBUG: find_arg_restriction_matches_for_single_element: args:", request_body, ", restriction:", restriction)
 
   # turn the dot notation path into an array of keys  "domain.host" -> ["domain","host"]
   key_path_array := split(restriction.key_path, ".")
@@ -111,7 +111,7 @@ find_arg_restriction_matches_for_single_element( restriction, request_args ) := 
   #  given a complex object, and an array of keys, traverse the elements of the object
   #  by following each key
   #   
-  element := traverse_json( request_args, key_path_array)
+  element := traverse_json( request_body, key_path_array)
 
   rule_element_matched_list := rule_match.match(restriction, element)
 
@@ -126,7 +126,7 @@ find_arg_restriction_matches_for_single_element( restriction, request_args ) := 
 #  if there are <N> arg restrictions, we test each one and build a list of matches.
 #  if the match list is also size <N>, we know we have matched every restriction
 #
-find_every_arg_restriction_rule_matches( arg_restriction_rule_array, request_args ) := rule_element_matched_list if {
+find_every_arg_restriction_rule_matches( arg_restriction_rule_array, request_body ) := rule_element_matched_list if {
 
   #
   # we have <N> arg restrictions to look at, and so we'll go through each of them to see if one
@@ -138,7 +138,7 @@ find_every_arg_restriction_rule_matches( arg_restriction_rule_array, request_arg
   # 
   rule_element_matched_list := [ rule_element_item | 
                                  some restriction in arg_restriction_rule_array
-                                    child_rule_element_matched_list := find_arg_restriction_matches_for_single_element( restriction, request_args)
+                                    child_rule_element_matched_list := find_arg_restriction_matches_for_single_element( restriction, request_body)
                                     count(child_rule_element_matched_list) > 0
                                     rule_element_item := child_rule_element_matched_list[0]
                                     

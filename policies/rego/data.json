@@ -23,7 +23,7 @@
                                 },
                                 "deny" : {
                                         "arg_restrictions" :[
-                                                { "type":"suffix", "key_path": "path.filename.extension", "data": ".gz" }
+                                                { "type":"suffix", "key_path": "resource.arguments.path.filename.extension", "data": ".gz" }
                                         ]
                                 }
 
@@ -40,23 +40,23 @@
                                 },
                                 "escalate" : {
                                         "arg_restrictions" :[
-                                                { "type":"prefix", "key_path": "path", "data": "C:\\Program Files" },
-                                                { "type":"prefix", "key_path": "path", "data": "C:\\Users\\Public" },
-                                                { "type":"prefix", "key_path": "path", "data": "C:\\Program Files (x86)" },
-                                                { "type":"prefix", "key_path": "path", "data": "/var" }
+                                                { "type":"prefix", "key_path": "resource.arguments.path", "data": "C:\\Program Files" },
+                                                { "type":"prefix", "key_path": "resource.arguments.path", "data": "C:\\Users\\Public" },
+                                                { "type":"prefix", "key_path": "resource.arguments.path", "data": "C:\\Program Files (x86)" },
+                                                { "type":"prefix", "key_path": "resource.arguments.path", "data": "/var" }
                                         ]
                                 },
                                 "deny" : {
                                         "arg_restrictions" :[
-                                                { "type":"prefix", "key_path": "path", "data": "C:\\Windows" },
-                                                { "type":"prefix", "key_path": "path", "data": "C:\\ProgramData" },
-                                                { "type":"prefix", "key_path": "path", "data": "/boot" },
-                                                { "type":"prefix", "key_path": "path", "data": "/proc" },
-                                                { "type":"prefix", "key_path": "path", "data": "/sys" },
-                                                { "type":"prefix", "key_path": "path", "data": "/etc" },
-                                                { "type":"prefix", "key_path": "path", "data": "/lib" },
-                                                { "type":"prefix", "key_path": "path", "data": "~/.ssh" },
-                                                { "type":"prefix", "key_path": "path", "data": "~/.gnupg" }
+                                                { "type":"prefix", "key_path": "resource.arguments.path", "data": "C:\\Windows" },
+                                                { "type":"prefix", "key_path": "resource.arguments.path", "data": "C:\\ProgramData" },
+                                                { "type":"prefix", "key_path": "resource.arguments.path", "data": "/boot" },
+                                                { "type":"prefix", "key_path": "resource.arguments.path", "data": "/proc" },
+                                                { "type":"prefix", "key_path": "resource.arguments.path", "data": "/sys" },
+                                                { "type":"prefix", "key_path": "resource.arguments.path", "data": "/etc" },
+                                                { "type":"prefix", "key_path": "resource.arguments.path", "data": "/lib" },
+                                                { "type":"prefix", "key_path": "resource.arguments.path", "data": "~/.ssh" },
+                                                { "type":"prefix", "key_path": "resource.arguments.path", "data": "~/.gnupg" }
                                         ]
                                 }
 
@@ -149,8 +149,8 @@
 				}, 
                                 "escalate": {
                                         "arg_restrictions" :[
-						{ "type":"prefix","key_path":"customer_id", "data":"" },
-                                                { "type":"gte","key_path":"customer_id", "data":0 }
+						{ "type":"prefix","key_path":"resource.arguments.customer_id", "data":"" },
+                                                { "type":"gte","key_path":"resource.arguments.customer_id", "data":0 }
                                         ]
                                 }
                         },
@@ -165,7 +165,7 @@
 				},
                                 "escalate": {
                                         "arg_restrictions" :[
-						{ "type":"any","key_path":"order_id" }
+						{ "type":"any","key_path":"resource.arguments.order_id" }
                                         ]
                                 }
 
@@ -189,10 +189,10 @@
                                 },
                                 "escalate" : {
                                         "arg_restrictions" :[
-                                              { "type":"regex", "key_path":"host", "data":"(?i)^[a-z0-9.-]+\\.styra\\.com$"},
-                                              { "type":"prefix","key_path":"host", "data":"www.STyRa.CoM"},
-                                              { "type":"prefix","key_path":"host", "data":"www.OpenPolicyAgent.org"},
-                                              { "type":"prefix","key_path":"host", "data":"OpenPolicyAgent.org"}
+                                              { "type":"regex", "key_path":"resource.arguments.host", "data":"(?i)^[a-z0-9.-]+\\.styra\\.com$"},
+                                              { "type":"prefix","key_path":"resource.arguments.host", "data":"www.STyRa.CoM"},
+                                              { "type":"prefix","key_path":"resource.arguments.host", "data":"www.OpenPolicyAgent.org"},
+                                              { "type":"prefix","key_path":"resource.arguments.host", "data":"OpenPolicyAgent.org"}
                                         ]
                                 }
                         },
@@ -203,8 +203,8 @@
                                 "deny" : {
                                         "arg_restrictions" :[
                                                 { "type":"and", "list" :[
-                                                        { "type":"prefix", "key_path": "host", "data": "competitor.com" },
-                                                        { "type":"prefix", "key_path": "path", "data": "/v1/jobs" }
+                                                        { "type":"prefix", "key_path": "resource.arguments.host", "data": "competitor.com" },
+                                                        { "type":"prefix", "key_path": "resource.arguments.path", "data": "/v1/jobs" }
                                                    ]
                                                 }
                                         ]
@@ -212,13 +212,13 @@
                                 "escalate" : {
                                         "arg_restrictions" :[
                                                 { "type":"and", "list" :[
-                                                        { "type":"PREFIX", "key_path": "host", "data": "competitor.com" },
-                                                        { "type":"prefix", "key_path": "path", "data": "/v1/products" }
+                                                        { "type":"PREFIX", "key_path": "resource.arguments.host", "data": "competitor.com" },
+                                                        { "type":"prefix", "key_path": "resource.arguments.path", "data": "/v1/products" }
                                                    ]
                                                 }, 
-                                                { "type":"prefix","key_path":"host", "data":"STyRa.CoM"},
-                                                { "type":"regex","key_path":"host", "data":"(?i)^[a-z0-9.-]+\\.styra\\.com$"},
-                                                { "type":"prefix","key_path":"host", "data":"OpenPolicyAgent.com"}
+                                                { "type":"prefix","key_path":"resource.arguments.host", "data":"STyRa.CoM"},
+                                                { "type":"regex","key_path":"resource.arguments.host", "data":"(?i)^[a-z0-9.-]+\\.styra\\.com$"},
+                                                { "type":"prefix","key_path":"resource.arguments.host", "data":"OpenPolicyAgent.com"}
                                         ]
                                 }
                         }
@@ -227,13 +227,13 @@
                         "calculate" : {
                                 "allow" : {
                                         "arg_restrictions" :[
-                                              { "type":"equals","key_path":"equal_val", "data":1000},
-                                              { "type":"gt","key_path":"gt_val", "data":10},
-                                              { "type":"gte","key_path":"gte_val", "data":20},
-                                              { "type":"lt","key_path":"lt_val", "data":30},
-                                              { "type":"lte","key_path":"lte_val", "data":40},
-                                              { "type":"within_range","key_path":"range_val", "data":[50,60]},
-                                              { "type":"outside_range","key_path":"range_val", "data":[0,2000]}
+                                              { "type":"equals","key_path":"resource.arguments.equal_val", "data":1000},
+                                              { "type":"gt","key_path":"resource.arguments.gt_val", "data":10},
+                                              { "type":"gte","key_path":"resource.arguments.gte_val", "data":20},
+                                              { "type":"lt","key_path":"resource.arguments.lt_val", "data":30},
+                                              { "type":"lte","key_path":"resource.arguments.lte_val", "data":40},
+                                              { "type":"within_range","key_path":"resource.arguments.range_val", "data":[50,60]},
+                                              { "type":"outside_range","key_path":"resource.arguments.range_val", "data":[0,2000]}
                                         ]
                                 }
                         }

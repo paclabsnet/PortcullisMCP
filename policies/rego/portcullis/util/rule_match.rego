@@ -33,13 +33,13 @@ match( restriction, element ) := [ { "rule": restriction, "arg": element } ] if 
 }
 
 
-match( restriction, element ) := [ { "rule": restriction, "arg": element } ] if {
-
-   lower(restriction.type) == "suffix"
-   is_string(element)   
-   endswith(lower(element), lower(restriction.data))
-
-}
+# match( restriction, element ) := [ { "rule": restriction, "arg": element } ] if {
+#
+#   lower(restriction.type) == "suffix"
+#   is_string(element)   
+#   endswith(lower(element), lower(restriction.data))
+#
+# }
 
 
 match( restriction, element ) := [ { "rule": restriction, "arg": element } ] if {
@@ -63,11 +63,22 @@ match( restriction, element ) := [ { "rule": restriction, "arg": element } ] if 
 match( restriction, element ) := [ { "rule": restriction, "arg": element } ] if {
 
    lower(restriction.type) == "contains"
-   is_string(element)   
+   is_string(element)
+   not is_array(restriction.data)   
    contains(lower(element), lower(restriction.data))
 
 }
 
+
+match( restriction, element ) := [ { "rule": restriction, "arg": element } ] if {
+
+   lower(restriction.type) == "contains"
+   is_string(element)
+   is_array(restriction.data)
+   some x in restriction.data
+     contains(lower(element), lower(x))
+
+}
 
 
 

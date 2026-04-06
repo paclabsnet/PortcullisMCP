@@ -59,9 +59,9 @@ request_matches_principal_groups_and_arg_restrictions( request, rules ) := true 
    
    # we have to match both criteria around groups and arg restrictions
    util.has_group_membership( request.principal.groups, rules.groups)
-   util.any_arg_restriction_rule_honored( rules.arg_restrictions, request.resource.arguments)
+   util.any_arg_restriction_rule_honored( rules.arg_restrictions, request )
 
 # we don't have groups, but we do have arg restrictions
-} else := util.any_arg_restriction_rule_honored( rules.arg_restrictions, request.resource.arguments)
+} else := util.any_arg_restriction_rule_honored( rules.arg_restrictions, request )
 
 

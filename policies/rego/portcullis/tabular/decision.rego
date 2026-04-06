@@ -209,7 +209,7 @@ response_list contains { "decision" : "allow",
 			  "trace_id" : trace_id } if {
 
 				not rules_section.allow == null
-				print("#DEBUG: request: ", input.authorization_request)
+				# print("#DEBUG: request: ", input.authorization_request)
 				allowdeny.request_matches_rule_criteria( input.authorization_request, rules_section.allow )
 
 			  }
@@ -228,8 +228,8 @@ response_list contains { "decision" : "allow",
 				# and also negative rules (the principal must not be in one of the escalation groups)
 				escalate.request_matches_base_criteria( input.authorization_request, rules_section.escalate)
 
-				print("#DEBUG: allow scenario: we match the base case, do we match the escalation case?")
-				print("#DEBUG++: escalation_grants: ", escalation_grant_list)
+				# print("#DEBUG: allow scenario: we match the base case, do we match the escalation case?")
+				# print("#DEBUG++: escalation_grants: ", escalation_grant_list)
 
 				# and it meets the criteria of at least one escalation token
 				# this will also have two ways to match - with the escalated temporary group membership,

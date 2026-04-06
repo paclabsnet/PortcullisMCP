@@ -42,9 +42,9 @@ request_not_in_escalation_group_and_maches_arg_restrictions( request, rules) := 
    # we have to match both criteria. the negative test for escalate_to_groups
    # and the positive test for arg restrictions
    not util.has_group_membership( request.principal.groups, rules.escalate_to_groups)
-   util.any_arg_restriction_rule_honored( rules.arg_restrictions, request.resource.arguments)
+   util.any_arg_restriction_rule_honored( rules.arg_restrictions, request)
 
-} else := util.any_arg_restriction_rule_honored( rules.arg_restrictions, request.resource.arguments)
+} else := util.any_arg_restriction_rule_honored( rules.arg_restrictions, request)
 
 
 request_has_arg_restrictions( request, rules ) := true if {
@@ -55,7 +55,7 @@ request_has_arg_restrictions( request, rules ) := true if {
 
 #   print("#DEBUG++: comparing arg_restrictions against arguments ", request.resource.arguments)
 
-   util.any_arg_restriction_rule_honored( rules.arg_restrictions, request.resource.arguments)
+   util.any_arg_restriction_rule_honored( rules.arg_restrictions, request)
 
 }
 
@@ -118,13 +118,13 @@ request_matches_escalation_criteria( request, rules, escalation_grant_list) := t
 
 #   print("#DEBUG: request_matches_escalation_criteria: grants: ", escalation_grant_list)
 
-   request_arguments := object.get(request, ["resource", "arguments"], [])
+#   request_arguments := object.get(request, ["resource", "arguments"], [])
 
    escalation_grant_matches_service_tool_and_request_args( 
             escalation_grant_list, 
             request.action.service, 
             request.action.tool_name, 
-            request_arguments )   
+            request )   
 
 #   print("#DEBUG: request_matches_escalation_criteria: TRUE")
 
@@ -159,11 +159,11 @@ find_matching_escalation_criteria( request, rules, escalation_grant_list) := esc
    "arg_restrictions" in object.keys(rules)
    count(rules.arg_restrictions) > 0
 
-   request_arguments := object.get(request, ["resource", "arguments"], [])
+#   request_arguments := object.get(request, ["resource", "arguments"], [])
 
    escalation_claim_list := find_rule_arg_restrictions_matching_request_args(
       rules.arg_restrictions,
-      request_arguments
+      request
    )
 
 } else := []
@@ -184,9 +184,9 @@ find_matching_escalation_criteria( request, rules, escalation_grant_list) := esc
 #
 find_rule_arg_restrictions_matching_request_args(
     rule_arg_restrictions,
-    request_arguments) := escalation_claim_list if {
+    request) := escalation_claim_list if {
    
-    rule_element_matched_list := util.find_arg_restriction_matches( rule_arg_restrictions, request_arguments)
+    rule_element_matched_list := util.find_arg_restriction_matches( rule_arg_restrictions, request)
     
     # count the matches
     count(rule_element_matched_list) > 0
@@ -218,7 +218,7 @@ escalation_grant_matches_service_tool_and_request_args(
       escalation_grant_list, 
       service, 
       tool, 
-      request_args) := true if {
+      request) := true if {
 
 
 #  print("#DEBUG: escalation_matches_service_tool_and_request_args: service: ",service,", tool:",tool,", request: ", request_args) 
@@ -241,7 +241,7 @@ escalation_grant_matches_service_tool_and_request_args(
      tool in escalation_grant.portcullis.tools
 
 #     print("#DEBUG++: arg restrictions: ", escalation_grant.portcullis.arg_restrictions," request_args: ", request_args)
-     util.any_arg_restriction_rule_honored( escalation_grant.portcullis.arg_restrictions, request_args)	
+     util.any_arg_restriction_rule_honored( escalation_grant.portcullis.arg_restrictions, request)	
 
 
 

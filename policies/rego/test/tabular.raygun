@@ -779,20 +779,6 @@ tests:
         }
 
 
-#
-# source of the JWT 
-#
-# {
-#  "portcullis": {
-#    "tools":       ["fetch"],
-#    "services":    ["fetch"],
-#    "groups" :     ["developer"],
-#    "arg_restrictions": [
-#       { "type":"prefix", "key_path": "host", "data": "competitor.com", "required":true },
-#       { "type":"prefix", "key_path": "path", "data": "/v1/products", "required":true }       
-#    ]
-#  }
-# }
   - name: fetch - returns escalate
     skip: false
     description:  validating a URL fetch request to a sketchy URL that requires escalation
@@ -838,6 +824,7 @@ tests:
             "session_id": "sess-abc123",
             "trace_id": "req-def456"
         }
+
 
 
 
@@ -907,9 +894,9 @@ tests:
 #    ]
 #  }
 # }
-  - name: fetch - returns escalate because the token has expired
+  - name: fetch - returns escalate because the escalation-token has expired
     skip: false
-    description:  verifying case insensitivity
+    description:  verifying token expiration
     decision-path: /v1/data/portcullis/tabular/decision
     expects:
       - substring: '"decision":"escalate"'
@@ -1026,16 +1013,16 @@ tests:
 #    "services":    ["portcullis-localfs"],
 #    "groups" :     ["developer"],
 #    "arg_restrictions": [
-#       { "type":"prefix", "key_path": "path", "data": "/var/log/whatever.log" }
+#       { "type":"prefix", "key_path": "resource.arguments.path", "data": "/var/log/whatever.log" }
 #    ],
 #    "reason":      "Allow writing to /var/log"
 #     
 #  }
 # }
 #
-  - name: returns allow after escalation
+  - name: localfs-writefile returns allow after escalation
     skip: false
-    description: localfs - writefile - valid escalation token
+    description: localfs - writefile - valid escalation-token
     decision-path: /v1/data/portcullis/tabular/decision
     expects:
       - substring: '"decision":"allow"'
@@ -1060,7 +1047,7 @@ tests:
             },
             "context": {
               "escalation_tokens":[
-                  { "raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsIm5hbWUiOiJKb2huIERvZSIsImFkbWluIjp0cnVlLCJpYXQiOjE1MTYyMzkwMjIsInBvcnRjdWxsaXMiOnsidG9vbHMiOlsid3JpdGVfZmlsZSIsImVkaXRfZmlsZSJdLCJzZXJ2aWNlcyI6WyJwb3J0Y3VsbGlzLWxvY2FsZnMiXSwiZ3JvdXBzIjpbImRldmVsb3BlciJdLCJhcmdfcmVzdHJpY3Rpb25zIjpbeyJ0eXBlIjoicHJlZml4Iiwia2V5X3BhdGgiOiJwYXRoIiwiZGF0YSI6Ii92YXIvbG9nL3doYXRldmVyLmxvZyJ9XSwicmVhc29uIjoiQWxsb3cgd3JpdGluZyB0byAvdmFyL2xvZyJ9fQ.MjvpiBTVZPmwmVSpR4iSITt4hOTIPuLEfKN0ppejie0" }
+                  { "raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsIm5hbWUiOiJKb2huIERvZSIsImFkbWluIjp0cnVlLCJpYXQiOjE1MTYyMzkwMjIsInBvcnRjdWxsaXMiOnsidG9vbHMiOlsid3JpdGVfZmlsZSIsImVkaXRfZmlsZSJdLCJzZXJ2aWNlcyI6WyJwb3J0Y3VsbGlzLWxvY2FsZnMiXSwiZ3JvdXBzIjpbImRldmVsb3BlciJdLCJhcmdfcmVzdHJpY3Rpb25zIjpbeyJ0eXBlIjoicHJlZml4Iiwia2V5X3BhdGgiOiJyZXNvdXJjZS5hcmd1bWVudHMucGF0aCIsImRhdGEiOiIvdmFyL2xvZy93aGF0ZXZlci5sb2cifV0sInJlYXNvbiI6IkFsbG93IHdyaXRpbmcgdG8gL3Zhci9sb2cifX0.jPHW-bm079DNFDVSRI23A76N5pETbax6Rk4KU0vzaQo"}
               ]
             }
           },
@@ -1106,9 +1093,9 @@ tests:
 #  }
 # }
 #
-  - name: fetch - returns allow - sketchy - escalation
+  - name: fetch - sketchy URL - returns allow because of escalation-token
     skip: false
-    description:  validating a URL fetch request to a sketchy URL, but an escalation token exists
+    description:  validating a URL fetch request to a sketchy URL, but an escalation-token exists
     decision-path: /v1/data/portcullis/tabular/decision
     expects:
       - substring: '"decision":"allow"'
@@ -1145,6 +1132,7 @@ tests:
             "context": {
                 "escalation_tokens": [
                     {"raw": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsInBvcnRjdWxsaXMiOnsidG9vbHMiOlsiZmV0Y2giXSwic2VydmljZXMiOlsiZmV0Y2giXSwiZ3JvdXBzIjpbImRldmVsb3BlciJdLCJhcmdfcmVzdHJpY3Rpb25zIjpbeyJ0eXBlIjoicHJlZml4Iiwia2V5X3BhdGgiOiJob3N0IiwiZGF0YSI6ImNvbXBldGl0b3IuY29tIiwicmVxdWlyZWQiOnRydWV9LHsidHlwZSI6InByZWZpeCIsImtleV9wYXRoIjoicGF0aCIsImRhdGEiOiIvdjEvcHJvZHVjdHMiLCJyZXF1aXJlZCI6dHJ1ZX1dfX0.M2wJB1sZgslKfTMdU47sUVeovcsQqz8vqPg7OggfURE"},
+                    {"raw": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsInBvcnRjdWxsaXMiOnsidG9vbHMiOlsiZmV0Y2giXSwic2VydmljZXMiOlsiZmV0Y2giXSwiZ3JvdXBzIjpbImRldmVsb3BlciJdLCJhcmdfcmVzdHJpY3Rpb25zIjpbeyJ0eXBlIjoicHJlZml4Iiwia2V5X3BhdGgiOiJyZXNvdXJjZS5hcmd1bWVudHMuaG9zdCIsImRhdGEiOiJjb21wZXRpdG9yLmNvbSIsInJlcXVpcmVkIjp0cnVlfSx7InR5cGUiOiJwcmVmaXgiLCJrZXlfcGF0aCI6InJlc291cmNlLmFyZ3VtZW50cy5wYXRoIiwiZGF0YSI6Ii92MS9wcm9kdWN0cyIsInJlcXVpcmVkIjp0cnVlfV19fQ.5WVInH5-hyasjv237-P5G1DXFmfOujeQ9FfC4KSMBGI"},
                     {"raw": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJwb3J0Y3VsbGlzIjp7InRvb2xzIjpbImZldGNoIl0sInNlcnZpY2VzIjpbImZldGNoIl0sImdyb3VwcyI6WyJkZXZlbG9wZXIiXSwiYXJnX3Jlc3RyaWN0aW9ucyI6W3sidHlwZSI6InByZWZpeCIsImtleV9wYXRoIjoiaG9zdCIsImRhdGEiOiJjb21wZXRpdG9yLmNvbSIsInJlcXVpcmVkIjp0cnVlfSx7InR5cGUiOiJwcmVmaXgiLCJrZXlfcGF0aCI6InBhdGgiLCJkYXRhIjoiL3YxL3Byb2R1Y3RzIiwicmVxdWlyZWQiOnRydWV9XX19.Nt4BbzBywam-pmw65XS-M1Tvt0pIpz3YvM3joJVoJsk"}
                 ]
             }
@@ -1183,7 +1171,7 @@ tests:
 #    ]
 #  }
 # }
-  - name: fetch - returns allow after escalate (openpolicyagent.com)
+  - name: fetch - returns allow with good escalation-token (openpolicyagent.com)
     skip: false
     description:  verifying case insensitivity
     decision-path: /v1/data/portcullis/tabular/decision
@@ -1221,8 +1209,7 @@ tests:
             },
             "context": {
                 "escalation_tokens": [
-                   {"raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJwb3J0Y3VsbGlzIjp7InRvb2xzIjpbImZldGNoIl0sInNlcnZpY2VzIjpbImZldGNoIl0sImdyb3VwcyI6WyJkZXZlbG9wZXIiXSwiYXJnX3Jlc3RyaWN0aW9ucyI6W3sidHlwZSI6InByZWZpeCIsImtleV9wYXRoIjoiaG9zdCIsImRhdGEiOiJvcGVucG9saWN5QUdFTlQuY29tIiwicmVxdWlyZWQiOnRydWV9LHsidHlwZSI6InByZWZpeCIsImtleV9wYXRoIjoiaG9zdCIsImRhdGEiOiJTVFlSQS5jb20iLCJyZXF1aXJlZCI6dHJ1ZX1dfX0.AjQp3zI_rPRvxNwqPGVeY8hE7MeUAxqjqrTHXSHtN0Y"},
-                   {"raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsInBvcnRjdWxsaXMiOnsidG9vbHMiOlsiZmV0Y2giXSwic2VydmljZXMiOlsiZmV0Y2giXSwiZ3JvdXBzIjpbImRldmVsb3BlciJdLCJhcmdfcmVzdHJpY3Rpb25zIjpbeyJ0eXBlIjoicHJlZml4Iiwia2V5X3BhdGgiOiJob3N0IiwiZGF0YSI6Im9wZW5wb2xpY3lBR0VOVC5jb20iLCJyZXF1aXJlZCI6dHJ1ZX0seyJ0eXBlIjoicHJlZml4Iiwia2V5X3BhdGgiOiJob3N0IiwiZGF0YSI6IlNUWVJBLmNvbSIsInJlcXVpcmVkIjp0cnVlfV19fQ.ZnNpuN9ZqZuZnM3McmlYNIljyHDlndPs9rqz3GnLuyc"}
+                   {"raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsInBvcnRjdWxsaXMiOnsidG9vbHMiOlsiZmV0Y2giXSwic2VydmljZXMiOlsiZmV0Y2giXSwiZ3JvdXBzIjpbImRldmVsb3BlciJdLCJhcmdfcmVzdHJpY3Rpb25zIjpbeyJ0eXBlIjoicHJlZml4Iiwia2V5X3BhdGgiOiJyZXNvdXJjZS5hcmd1bWVudHMuaG9zdCIsImRhdGEiOiJvcGVucG9saWN5QUdFTlQuY29tIiwicmVxdWlyZWQiOnRydWV9LHsidHlwZSI6InByZWZpeCIsImtleV9wYXRoIjoicmVzb3VyY2UuYXJndW1lbnRzLmhvc3QiLCJkYXRhIjoiU1RZUkEuY29tIiwicmVxdWlyZWQiOnRydWV9XX19.7MJ92Ik7ehIaDsk0z7l6xGwmDob_YeyQN1xESi_gDLg"}
                 ]
             }
           },
@@ -1246,7 +1233,7 @@ tests:
 #    "services":    ["portcullis-localfs"],
 #    "groups" :     ["developer"],
 #    "arg_restrictions": [
-#       { "type":"prefix", "key_path": "path", "data": "/var/log/whatever.log" }
+#       { "type":"prefix", "key_path": "resource.argument.path", "data": "/var/log/whatever.log" }
 #    ],
 #    "reason":      "Allow writing to /var/log"
 #     
@@ -1254,7 +1241,7 @@ tests:
 # }
 #
 #
-  - name: allow - localfs - write_file - after escalation
+  - name: localfs - write_file - allow with escalation-token
     skip: false
     description: checking that the escalation token provides the appropriate override
     decision-path: /v1/data/portcullis/tabular/decision
@@ -1281,7 +1268,7 @@ tests:
             },
             "context": {
               "escalation_tokens":[
-                  { "raw": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsIm5hbWUiOiJKb2huIERvZSIsImFkbWluIjp0cnVlLCJpYXQiOjE1MTYyMzkwMjIsInBvcnRjdWxsaXMiOnsidG9vbHMiOlsid3JpdGVfZmlsZSIsImVkaXRfZmlsZSJdLCJzZXJ2aWNlcyI6WyJwb3J0Y3VsbGlzLWxvY2FsZnMiXSwiZ3JvdXBzIjpbImRldmVsb3BlciJdLCJhcmdfcmVzdHJpY3Rpb25zIjpbeyJ0eXBlIjoicHJlZml4Iiwia2V5X3BhdGgiOiJwYXRoIiwiZGF0YSI6Ii92YXIvbG9nL3doYXRldmVyLmxvZyJ9XSwicmVhc29uIjoiQWxsb3cgd3JpdGluZyB0byAvdmFyL2xvZyJ9fQ.MjvpiBTVZPmwmVSpR4iSITt4hOTIPuLEfKN0ppejie0" }
+                  {"raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsIm5hbWUiOiJKb2huIERvZSIsImFkbWluIjp0cnVlLCJpYXQiOjE1MTYyMzkwMjIsInBvcnRjdWxsaXMiOnsidG9vbHMiOlsid3JpdGVfZmlsZSIsImVkaXRfZmlsZSJdLCJzZXJ2aWNlcyI6WyJwb3J0Y3VsbGlzLWxvY2FsZnMiXSwiZ3JvdXBzIjpbImRldmVsb3BlciJdLCJhcmdfcmVzdHJpY3Rpb25zIjpbeyJ0eXBlIjoicHJlZml4Iiwia2V5X3BhdGgiOiJyZXNvdXJjZS5hcmd1bWVudHMucGF0aCIsImRhdGEiOiIvdmFyL2xvZy93aGF0ZXZlci5sb2cifV0sInJlYXNvbiI6IkFsbG93IHdyaXRpbmcgdG8gL3Zhci9sb2cifX0.jPHW-bm079DNFDVSRI23A76N5pETbax6Rk4KU0vzaQo"}
               ]
             }
           },
@@ -1291,7 +1278,7 @@ tests:
 
 
 
-  - name: fetch - returns escalation for https://api.styra.com/v1/data
+  - name: fetch - returns 'escalate' for https://api.styra.com/v1/data
     skip: false
     description:  validating a URL fetch request to a perfectly fine URL, but one that we have set up for escalation
     decision-path: /v1/data/portcullis/tabular/decision
@@ -1376,9 +1363,9 @@ tests:
 #  }
 # }
 #
-  - name: fetch - returns escalation for https://api.styra.com/v1/data - with tokens
+  - name: fetch - returns escalation for https://api.styra.com/v1/data - with misaligned escalation-tokens
     skip: false
-    description:  two tokens, one has the correct sub, but wrong content, the other has the right content, wrong sub
+    description:  two e-tokens, one has the correct sub, but wrong content, the other has the right content, wrong sub
     decision-path: /v1/data/portcullis/tabular/decision
     expects:
       - substring: '"data":"api.styra.com"'
@@ -1449,9 +1436,9 @@ tests:
 #  }
 # }
 #
-  - name: fetch - returns escalation because of incomplete token
+  - name: fetch - returns escalation because of incomplete escalation-token
     skip: false
-    description:  this action requires escalation, we offer a token, but the token is missing the 'sub' claim
+    description:  this action requires escalation, we offer a e-token, but the e-token is missing the 'sub' claim
     decision-path: /v1/data/portcullis/tabular/decision
     expects:
       - substring: '"data":"www.styra.com"'
@@ -1498,16 +1485,16 @@ tests:
 
 
 #
-# token contents:
+# token contents. Notice the different sub
 # {
 #  "iss": "portcullis-guard",
 #  "iat": 1773767336,
-#  "sub": "alice@example.com",  <---- DIFFERENT!
+#  "sub": "alice@example.com",
 #  "portcullis": {
 #    "arg_restrictions": [
 #      {
 #        "data": "www.styra.com",
-#        "key_path": "host",
+#        "key_path": "resource.arguments.host",
 #        "type": "prefix"
 #      }
 #    ],
@@ -1520,9 +1507,9 @@ tests:
 #  }
 # }
 #
-  - name: fetch - returns allow for https://www.styra.com/news - because of good token
+  - name: fetch - returns allow for https://www.styra.com/news - because of good escalation-token
     skip: false
-    description:  validating a URL fetch request to a perfectly fine URL, but one that we have set up for escalation
+    description:  this would normally require escalation, but we have a good escalation-token
     decision-path: /v1/data/portcullis/tabular/decision
     expects:
       - substring: '"decision":"allow"'
@@ -1558,7 +1545,7 @@ tests:
             },
             "context": {
                 "escalation_tokens": [
-                  {"raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJwb3J0Y3VsbGlzLWd1YXJkIiwiaWF0IjoxNzczNzY3MzM2LCJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsInBvcnRjdWxsaXMiOnsiYXJnX3Jlc3RyaWN0aW9ucyI6W3siZGF0YSI6Ind3dy5zdHlyYS5jb20iLCJrZXlfcGF0aCI6Imhvc3QiLCJ0eXBlIjoicHJlZml4In1dLCJ0b29scyI6WyJmZXRjaF91cmwiXSwic2VydmljZXMiOlsiZmV0Y2giXX19.xH9QEeRrGTitCFXF8JcpUPYRlZ4iQ0AyGlzBRN0ijFU"}
+                  {"raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJwb3J0Y3VsbGlzLWd1YXJkIiwiaWF0IjoxNzczNzY3MzM2LCJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsInBvcnRjdWxsaXMiOnsiYXJnX3Jlc3RyaWN0aW9ucyI6W3siZGF0YSI6Ind3dy5zdHlyYS5jb20iLCJrZXlfcGF0aCI6InJlc291cmNlLmFyZ3VtZW50cy5ob3N0IiwidHlwZSI6InByZWZpeCJ9XSwidG9vbHMiOlsiZmV0Y2hfdXJsIl0sInNlcnZpY2VzIjpbImZldGNoIl19fQ.dQz9HQOe6ny_D17w45AXyax58Gyyuga887tiVLYV4Qk"}
                 ]
             }
           },
@@ -2049,7 +2036,7 @@ tests:
 #     "arg_restrictions": [
 #       {
 #         "data": 3000,
-#         "key_path": "customer_id",
+#         "key_path": "resource.arguments.customer_id",
 #         "type": "gte"
 #       }
 #     ],
@@ -2088,7 +2075,9 @@ tests:
             },
             "context": {
               "NOTE":"One of these tokens was signed with the wrong key, leaving it here to exercise the filter",
+              "NOTE2":"We changed the way arguments are handled by escalation and rules, to broaden the scope of rulemaking",
               "escalation_tokens":[
+                {"raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJwb3J0Y3VsbGlzLWd1YXJkIiwiaWF0IjoxNzczNzY3MzM2LCJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsInBvcnRjdWxsaXMiOnsiYXJnX3Jlc3RyaWN0aW9ucyI6W3siZGF0YSI6MzAwMCwia2V5X3BhdGgiOiJyZXNvdXJjZS5hcmd1bWVudHMuY3VzdG9tZXJfaWQiLCJ0eXBlIjoiZ3RlIn1dLCJ0b29scyI6WyJ1cGRhdGVfY3VzdG9tZXIiXSwic2VydmljZXMiOlsibW9jay1lbnRlcnByaXNlLWFwaSJdfX0.biXcrc2VhY6dfDl5CyUHK_dgRtbnY_LNM6fqcpZqvNE"},
                 {"raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJwb3J0Y3VsbGlzLWd1YXJkIiwiaWF0IjoxNzczNzY3MzM2LCJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsInBvcnRjdWxsaXMiOnsiYXJnX3Jlc3RyaWN0aW9ucyI6W3siZGF0YSI6MzAwMCwia2V5X3BhdGgiOiJjdXN0b21lcl9pZCIsInR5cGUiOiJndGUifV0sInRvb2xzIjpbInVwZGF0ZV9jdXN0b21lciJdLCJzZXJ2aWNlcyI6WyJtb2NrLWVudGVycHJpc2UtYXBpIl19fQ._5RxZGRdlhb-qe8pvuss8yCVrBHF3d_-4r3zsEsYV4s"},
                 {"raw":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJwb3J0Y3VsbGlzLWd1YXJkIiwiaWF0IjoxNzczNzY3MzM2LCJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsInBvcnRjdWxsaXMiOnsiYXJnX3Jlc3RyaWN0aW9ucyI6W3siZGF0YSI6MzAwMCwia2V5X3BhdGgiOiJjdXN0b21lcl9pZCIsInR5cGUiOiJndGUifV0sInRvb2xzIjpbInVwZGF0ZV9jdXN0b21lciJdLCJzZXJ2aWNlcyI6WyJtb2NrLWVudGVycHJpc2UtYXBpIl19fQ.cZgIg06BR-VhVOvaufyr4UPqCwdZtmsYfvQdACo-OwU"}
               ]
