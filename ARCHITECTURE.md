@@ -25,7 +25,15 @@ Acts as the local, lightweight proxy for the user's access to the MCPs.
 - **Forwarding:** Sends enriched requests to `portcullis-keep` for central authorization.
 - **Audit:** Sends fast-path decision logs to `portcullis-keep` for centralized audit logging.
 - **Identity:** Resolves local user identity (OIDC or OS-fallback).
-- **Escalation:** Manages a local token store for approved escalation JWTs.
+- **Escalation:** Manages a local token store for approved escalation JWTs.  This allows Human-in-the-loop authorization
+
+**NOTE**
+We've recently expanded the responsibilities for Portcullis-Gate .  In addition to being a lightweight proxy for a single-user desktop scenario, it can also be used as a lightweight proxy for enterprise AI-enabled consoles. In this case:
+- It is a server that supports multiple agents in parallel
+- It doesn't provide escalation services
+- It can be clustered and connected to a distributed cache (redis) for fault-tolerance and HA
+
+If you're building some sort of ai-enhanced console for your customers, this model for Portcullis-Gate would help you cleanly separate authorization from the AI's decision process.
 
 ### portcullis-keep
 Acts as a central MCP proxy, responsible for authorizing all MCP requests against corporate policy rules.

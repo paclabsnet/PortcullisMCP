@@ -2,9 +2,7 @@
 
 ## What is it?
 
-PortcullisMCP is a security gateway for MCP: it sits between AI agents and an organization's MCP tools to enforce
-identity-aware policy on every tool call, so teams can adopt MCP safely without giving up control, auditability, or
-least-privilege access.
+PortcullisMCP is a policy enforcement gateway for MCP-based AI agents. It sits between AI agents and an organization's MCP tools to enforce identity-aware policy on every tool call, so teams can adopt MCP safely without giving up control, auditability, or least-privilege access.
 
    - Fine-Grained Policy Control: Use Policy-as-Code to define exactly which tools an agent can use,
      on which resources, and under what conditions.

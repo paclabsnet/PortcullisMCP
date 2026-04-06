@@ -4,6 +4,35 @@ Some of these tasks were deferred from Phase 2 because they are complicated and 
 cloud resources
 
 
+
+### Task: Add an external mechanism for converting OIDC-tokens into principals
+
+The "Cloud Native" Way: External Webhooks (gRPC/HTTP)
+
+Instead of executing a binary, Portcullis calls a configured URL with the identity JSON and receives back the normalized JSON.
+   * How it works: You define a standard NormalizationRequest and NormalizationResponse (Protobuf or JSON).
+   * Security: Communication is secured via mTLS or shared secrets. The enterprise builds their LDAP/AD logic in a separate "Sidecar" or microservice.
+   * Robustness: You get standard HTTP timeouts, retries, and circuit breaking. If the webhook is down, Portcullis can "fail-closed" safely.
+
+To make Portcullis a true platform, I would refactor the Identity Normalizer to support a Chain of Hooks:
+
+   1. Built-in Hooks: (e.g., OIDC claim extraction, standard email normalization).
+   2. Scripting Hook (Starlark): For high-speed, local data manipulation (e.g., "If group is admin-docs, add role editor").
+   3. External Hook (Webhook): For complex enterprise integrations that require network access (e.g., querying an LDAP server or a legacy HR database).
+
+Why this wins for OSS:
+   * The Core remains small and auditable.
+   * Security is preserved: local scripts are sandboxed; network calls are explicit.
+   * Enterprises get exactly the flexibility they need (their own microservice or a simple script) without forcing you to maintain
+     100 different "Connector" packages in the open-source repo.
+
+This turns Portcullis into the "Envoy of MCP"—a core engine that is extended, not modified.
+
+- priority: medium
+
+(this is a good one to implement when we start running into integration friction)
+
+
 ### Task: Support vault:// secret resolution for map[string]string config fields
 
 The secret resolver walks named struct fields via dot-notation and resolves secret
