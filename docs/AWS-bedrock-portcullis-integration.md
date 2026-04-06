@@ -45,7 +45,21 @@ Provide the resulting **client ID** and **client secret** to your Portcullis adm
 
 **Note for Portcullis Admins**
 
-Portcullis-Keep validates these client credentials. It supports both oidc and hmac based verification.  Make sure that the Portcullis-Keep identity strategy is hmac-verify and that the config includes the client secret.
+AgentCore Identity issues HMAC-signed JWTs (HS256) as workload access tokens. Portcullis-Keep must be configured with `identity.strategy: hmac-verify` to accept these tokens. The shared secret is the OAuth client secret registered in AgentCore Identity.
+
+A minimal Keep identity configuration for AgentCore looks like:
+
+```yaml
+identity:
+  strategy: hmac-verify
+  config:
+    secret: "envvar://AGENTCORE_CLIENT_SECRET"
+    algorithm: HS256
+```
+
+The `secret` field supports `envvar://`, `filevar://`, and `vault://` URI schemes. Never set the secret inline in the config file. See `SecretAllowlist` in Keep's config documentation for which fields support `vault://`.
+
+Keep will extract the `sub` claim from the verified HMAC token and use it as the principal identity forwarded to OPA. Ensure your OPA policy handles the AgentCore client ID (the `sub` value) appropriately — typically by granting it a specific role or group membership in your policy data.
 
 
 ---

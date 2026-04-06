@@ -36,8 +36,11 @@ type NormalizerConfig struct {
 	//                    sandbox deployments only.
 	//   "oidc-verify"  — Cryptographically verifies OIDC tokens via JWKS and
 	//                    extracts claims from the verified token only.
-	//                    Required for all production deployments.
-	Normalizer string `yaml:"normalizer"` // "passthrough" | "oidc-verify"
+	//                    Required for all production deployments using RSA-signed tokens.
+	//   "hmac-verify"  — Cryptographically verifies HMAC-signed JWTs (HS256/HS384/HS512)
+	//                    using a shared secret. Use when the IdP issues symmetric tokens
+	//                    (e.g. AWS AgentCore).
+	Normalizer string `yaml:"normalizer"` // "passthrough" | "oidc-verify" | "hmac-verify"
 
 	// AcceptForgedIdentities suppresses the per-request warning emitted in
 	// passthrough mode. Has no effect on other normalizers.
@@ -45,17 +48,21 @@ type NormalizerConfig struct {
 
 	// OIDCVerify holds configuration for the oidc-verify normalizer.
 	OIDCVerify OIDCVerifyConfig `yaml:"oidc_verify"`
+
+	// HMACVerify holds configuration for the hmac-verify normalizer.
+	// Decoding is handled via mapstructure in keep/config.go, not direct YAML unmarshalling.
+	HMACVerify HMACVerifyConfig `yaml:"-"`
 }
 
 // Validate returns an error if the normalizer config contains invalid values.
 func (c NormalizerConfig) Validate() error {
 	switch c.Normalizer {
-	case "passthrough", "oidc-verify":
+	case "passthrough", "oidc-verify", "hmac-verify":
 		// valid
 	case "":
-		return fmt.Errorf("identity.normalizer must be set; valid values: \"passthrough\" (dev/PoC only), \"oidc-verify\" (production)")
+		return fmt.Errorf("identity.normalizer must be set; valid values: \"passthrough\" (dev/PoC only), \"oidc-verify\", \"hmac-verify\"")
 	default:
-		return fmt.Errorf("invalid identity.normalizer %q: valid values: \"passthrough\" (dev/PoC only), \"oidc-verify\" (production)", c.Normalizer)
+		return fmt.Errorf("invalid identity.normalizer %q: valid values: \"passthrough\" (dev/PoC only), \"oidc-verify\", \"hmac-verify\"", c.Normalizer)
 	}
 	if c.Normalizer == "oidc-verify" {
 		if c.OIDCVerify.Issuer == "" {
@@ -66,6 +73,15 @@ func (c NormalizerConfig) Validate() error {
 		}
 		if !strings.HasPrefix(c.OIDCVerify.JWKSURL, "https://") && !c.OIDCVerify.AllowInsecureJWKSURL {
 			return fmt.Errorf("identity.oidc_verify.jwks_url must use https:// (got %q); set allow_insecure_jwks_url: true to override for non-production use only", c.OIDCVerify.JWKSURL)
+		}
+	}
+	if c.Normalizer == "hmac-verify" {
+		if c.HMACVerify.Secret == "" {
+			return fmt.Errorf("identity.hmac_verify.secret is required when normalizer is \"hmac-verify\"")
+		}
+		alg := strings.ToUpper(c.HMACVerify.Algorithm)
+		if alg != "" && alg != "HS256" && alg != "HS384" && alg != "HS512" {
+			return fmt.Errorf("invalid identity.hmac_verify.algorithm %q: must be HS256, HS384, or HS512", c.HMACVerify.Algorithm)
 		}
 	}
 	return nil
@@ -100,6 +116,32 @@ type OIDCVerifyConfig struct {
 	// MaxTokenAgeSecs is the maximum allowed age of the OIDC token in seconds,
 	// measured from the iat (issued-at) claim. 0 means no enforcement.
 	// Use this to enforce a short TTL regardless of the token's exp claim.
+	MaxTokenAgeSecs int `yaml:"max_token_age_secs"`
+}
+
+// HMACVerifyConfig holds settings for the hmac-verify identity normalizer.
+type HMACVerifyConfig struct {
+	// Secret is the shared secret used for HMAC signature verification.
+	// Supports envvar:// and vault:// URIs. Required.
+	Secret string `yaml:"secret"`
+
+	// Algorithm specifies the HMAC variant: "HS256", "HS384", or "HS512".
+	// Defaults to "HS256" if empty.
+	Algorithm string `yaml:"algorithm"`
+
+	// Issuer is the optional expected iss claim value.
+	Issuer string `yaml:"issuer"`
+
+	// Audiences is an optional list of allowed audience (aud) values.
+	// If provided, the token must contain at least one of these audiences.
+	Audiences []string `yaml:"audiences"`
+
+	// AllowMissingExpiry defaults to false. If false, tokens without an exp
+	// claim are rejected (fail secure).
+	AllowMissingExpiry bool `yaml:"allow_missing_expiry"`
+
+	// MaxTokenAgeSecs is the maximum allowed age of the token in seconds,
+	// measured from the iat (issued-at) claim. 0 means no enforcement.
 	MaxTokenAgeSecs int `yaml:"max_token_age_secs"`
 }
 
@@ -143,7 +185,7 @@ func Build(cfg NormalizerConfig) (Normalizer, error) {
 	registryMu.RUnlock()
 
 	if !ok {
-		return nil, fmt.Errorf("unknown identity normalizer %q; valid values: \"passthrough\" (dev/PoC only), \"oidc-verify\" (production)", cfg.Normalizer)
+		return nil, fmt.Errorf("unknown identity normalizer %q; valid values: \"passthrough\" (dev/PoC only), \"oidc-verify\", \"hmac-verify\"", cfg.Normalizer)
 	}
 
 	return factory(cfg)

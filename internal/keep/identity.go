@@ -23,6 +23,7 @@ import (
 	"log/slog"
 	"math/big"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -55,6 +56,206 @@ func init() {
 			httpClient:         &http.Client{Timeout: 10 * time.Second},
 		}, nil
 	})
+
+	identity.Register("hmac-verify", func(cfg identity.NormalizerConfig) (identity.Normalizer, error) {
+		hcfg := cfg.HMACVerify
+		if hcfg.Secret == "" {
+			return nil, fmt.Errorf("normalizer hmac-verify requires identity.hmac_verify.secret to be set")
+		}
+		alg := strings.ToUpper(hcfg.Algorithm)
+		if alg == "" {
+			alg = "HS256"
+		}
+		var method jwt.SigningMethod
+		switch alg {
+		case "HS256":
+			method = jwt.SigningMethodHS256
+		case "HS384":
+			method = jwt.SigningMethodHS384
+		case "HS512":
+			method = jwt.SigningMethodHS512
+		default:
+			return nil, fmt.Errorf("normalizer hmac-verify: unsupported algorithm %q; must be HS256, HS384, or HS512", hcfg.Algorithm)
+		}
+		return &hmacVerifyingNormalizer{
+			method:             method,
+			secret:             []byte(hcfg.Secret),
+			issuer:             hcfg.Issuer,
+			audiences:          hcfg.Audiences,
+			allowMissingExpiry: hcfg.AllowMissingExpiry,
+			maxTokenAgeSecs:    hcfg.MaxTokenAgeSecs,
+		}, nil
+	})
+}
+
+// hmacVerifyingNormalizer validates HMAC-signed JWT token claims before forwarding to the PDP.
+type hmacVerifyingNormalizer struct {
+	method             jwt.SigningMethod
+	secret             []byte
+	issuer             string
+	audiences          []string
+	allowMissingExpiry bool
+	maxTokenAgeSecs    int
+}
+
+func (n *hmacVerifyingNormalizer) Normalize(_ context.Context, id shared.UserIdentity) (shared.Principal, error) {
+	if id.SourceType != "oidc" && id.SourceType != "hmac" {
+		slog.Warn("keep: unexpected identity source in hmac-verify mode — directory claims stripped",
+			"user_id", id.UserID,
+			"source", id.SourceType,
+		)
+		return shared.Principal{
+			UserID:     id.UserID,
+			SourceType: id.SourceType,
+		}, nil
+	}
+
+	if id.RawToken == "" {
+		return shared.Principal{}, fmt.Errorf("hmac identity missing raw token")
+	}
+
+	token, err := jwt.Parse(id.RawToken, func(token *jwt.Token) (interface{}, error) {
+		if token.Method.Alg() != n.method.Alg() {
+			return nil, fmt.Errorf("hmac token uses algorithm %q but normalizer requires %q", token.Method.Alg(), n.method.Alg())
+		}
+		return n.secret, nil
+	})
+	if err != nil {
+		return shared.Principal{}, fmt.Errorf("verify hmac token: %w", err)
+	}
+
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok || !token.Valid {
+		return shared.Principal{}, fmt.Errorf("invalid hmac token claims")
+	}
+
+	iss, _ := claims.GetIssuer()
+	if n.issuer != "" && iss != n.issuer {
+		return shared.Principal{}, fmt.Errorf("hmac token issuer %q does not match configured issuer %q", iss, n.issuer)
+	}
+
+	sub, err := claims.GetSubject()
+	if err != nil {
+		return shared.Principal{}, fmt.Errorf("parse hmac token subject: %w", err)
+	}
+	if sub == "" {
+		return shared.Principal{}, fmt.Errorf("hmac token missing sub claim")
+	}
+
+	if len(n.audiences) > 0 {
+		aud, _ := claims.GetAudience()
+		found := false
+		for _, a := range n.audiences {
+			for _, t := range aud {
+				if a == t {
+					found = true
+					break
+				}
+			}
+			if found {
+				break
+			}
+		}
+		if !found {
+			return shared.Principal{}, fmt.Errorf("hmac token audience mismatch (aud=%v, expected=%v)", aud, n.audiences)
+		}
+	}
+
+	exp, err := claims.GetExpirationTime()
+	if err != nil {
+		return shared.Principal{}, fmt.Errorf("parse hmac token expiry: %w", err)
+	}
+	if exp == nil {
+		if !n.allowMissingExpiry {
+			return shared.Principal{}, fmt.Errorf("hmac token missing exp claim (required by default)")
+		}
+	} else if time.Now().After(exp.Time) {
+		return shared.Principal{}, fmt.Errorf("hmac token is expired (exp=%v)", exp.Time)
+	}
+
+	if n.maxTokenAgeSecs > 0 {
+		iat, iatErr := claims.GetIssuedAt()
+		if iatErr != nil {
+			return shared.Principal{}, fmt.Errorf("hmac token iat claim invalid (required when max_token_age_secs is set): %w", iatErr)
+		}
+		if iat == nil {
+			return shared.Principal{}, fmt.Errorf("hmac token missing iat claim (required when max_token_age_secs is set)")
+		}
+		age := time.Since(iat.Time)
+		maxAge := time.Duration(n.maxTokenAgeSecs) * time.Second
+		if age > maxAge {
+			return shared.Principal{}, fmt.Errorf("hmac token age %v exceeds max allowed age %v", age.Round(time.Second), maxAge)
+		}
+	}
+
+	var email string
+	if v, ok := claims["email"].(string); ok {
+		email = v
+	}
+	var displayName string
+	if v, ok := claims["name"].(string); ok {
+		displayName = v
+	}
+
+	var groups []string
+	if g, ok := claims["groups"].([]any); ok {
+		for _, v := range g {
+			if s, ok := v.(string); ok {
+				groups = append(groups, s)
+			}
+		}
+	}
+
+	var roles []string
+	if r, ok := claims["roles"].([]any); ok {
+		for _, v := range r {
+			if s, ok := v.(string); ok {
+				roles = append(roles, s)
+			}
+		}
+	}
+
+	var dept string
+	if v, ok := claims["department"].(string); ok {
+		dept = v
+	}
+
+	var amr []string
+	if a, ok := claims["amr"].([]any); ok {
+		for _, v := range a {
+			if s, ok := v.(string); ok {
+				amr = append(amr, s)
+			}
+		}
+	}
+
+	var preferredUsername string
+	if v, ok := claims["preferred_username"].(string); ok {
+		preferredUsername = v
+	}
+	var acr string
+	if v, ok := claims["acr"].(string); ok {
+		acr = v
+	}
+
+	var expUnix int64
+	if exp != nil {
+		expUnix = exp.Unix()
+	}
+
+	return shared.Principal{
+		UserID:            sub,
+		Email:             email,
+		DisplayName:       displayName,
+		Groups:            groups,
+		Roles:             roles,
+		Department:        dept,
+		AuthMethod:        amr,
+		PreferredUsername: preferredUsername,
+		ACR:               acr,
+		TokenExpiry:       expUnix,
+		SourceType:        id.SourceType,
+	}, nil
 }
 
 // passthroughNormalizer accepts all identity fields as-is.

@@ -33,6 +33,7 @@ var SecretAllowlist = []string{
 	"server.endpoints.main.auth.credentials.bearer_token",
 	"responsibility.issuance.signing_key",
 	"responsibility.admin.token",
+	"identity.config.secret",
 }
 
 // LoadConfig reads, parses, resolves secrets in, and validates a keep config file.
@@ -139,7 +140,7 @@ func (c *Config) Validate(sources cfgloader.SourceMap) (cfgloader.PostureReport,
 		report.SetStatus("mode", "WARN", "Use production mode for deployments")
 	}
 	if c.Identity.Strategy == "passthrough" {
-		report.SetStatus("identity.strategy", "WARN", "Passthrough identity is not suitable for production; use oidc-verify")
+		report.SetStatus("identity.strategy", "WARN", "Passthrough identity is not suitable for production; use oidc-verify or hmac-verify")
 	}
 	if c.Responsibility.Policy.Strategy == "noop" {
 		report.SetStatus("responsibility.policy.strategy", "WARN", "Noop policy allows all requests; configure OPA for production")
@@ -157,7 +158,7 @@ func (c *Config) Validate(sources cfgloader.SourceMap) (cfgloader.PostureReport,
 }
 
 type IdentityConfig struct {
-	Strategy string         `yaml:"strategy"` // "passthrough" | "oidc-verify"
+	Strategy string         `yaml:"strategy"` // "passthrough" | "oidc-verify" | "hmac-verify"
 	Config   map[string]any `yaml:"config"`
 
 	// Derived
@@ -192,6 +193,17 @@ func (c *IdentityConfig) Validate() error {
 			}
 			if err := decoder.Decode(c.Config); err != nil {
 				return fmt.Errorf("decode identity.config for passthrough: %w", err)
+			}
+		case "hmac-verify":
+			decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
+				Result:  &c.Normalizer.HMACVerify,
+				TagName: "yaml",
+			})
+			if err != nil {
+				return err
+			}
+			if err := decoder.Decode(c.Config); err != nil {
+				return fmt.Errorf("decode identity.config for hmac-verify: %w", err)
 			}
 		}
 	}

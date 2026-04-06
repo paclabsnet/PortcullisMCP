@@ -101,6 +101,72 @@ func TestConfigValidate(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "identity strategy hmac-verify is valid when secret set",
+			mutate: func(c *Config) {
+				c.Identity.Strategy = "hmac-verify"
+				c.Identity.Config = map[string]any{
+					"secret":    "a-sufficiently-long-test-secret",
+					"algorithm": "HS256",
+				}
+			},
+			wantErr: false,
+		},
+		{
+			name: "hmac-verify missing secret is invalid",
+			mutate: func(c *Config) {
+				c.Identity.Strategy = "hmac-verify"
+				c.Identity.Config = map[string]any{
+					"algorithm": "HS256",
+				}
+			},
+			wantErr:     true,
+			errContains: "identity.hmac_verify.secret is required",
+		},
+		{
+			name: "hmac-verify invalid algorithm is rejected",
+			mutate: func(c *Config) {
+				c.Identity.Strategy = "hmac-verify"
+				c.Identity.Config = map[string]any{
+					"secret":    "a-sufficiently-long-test-secret",
+					"algorithm": "RS256",
+				}
+			},
+			wantErr:     true,
+			errContains: "invalid identity.hmac_verify.algorithm",
+		},
+		{
+			name: "hmac-verify empty algorithm defaults to HS256",
+			mutate: func(c *Config) {
+				c.Identity.Strategy = "hmac-verify"
+				c.Identity.Config = map[string]any{
+					"secret": "a-sufficiently-long-test-secret",
+				}
+			},
+			wantErr: false,
+		},
+		{
+			name: "hmac-verify HS384 is valid",
+			mutate: func(c *Config) {
+				c.Identity.Strategy = "hmac-verify"
+				c.Identity.Config = map[string]any{
+					"secret":    "a-sufficiently-long-test-secret",
+					"algorithm": "HS384",
+				}
+			},
+			wantErr: false,
+		},
+		{
+			name: "hmac-verify HS512 is valid",
+			mutate: func(c *Config) {
+				c.Identity.Strategy = "hmac-verify"
+				c.Identity.Config = map[string]any{
+					"secret":    "a-sufficiently-long-test-secret",
+					"algorithm": "HS512",
+				}
+			},
+			wantErr: false,
+		},
 
 		// --- responsibility.workflow.strategy ---
 		{
@@ -253,4 +319,47 @@ func TestConfigValidate(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestConfigValidate_PostureWarnings(t *testing.T) {
+	findWarning := func(report cfgloader.PostureReport, property string) (cfgloader.PostureFinding, bool) {
+		for _, f := range report.Findings {
+			if f.Property == property && f.Status == "WARN" {
+				return f, true
+			}
+		}
+		return cfgloader.PostureFinding{}, false
+	}
+
+	t.Run("passthrough identity emits warning mentioning hmac-verify", func(t *testing.T) {
+		cfg := validBaseConfig()
+		cfg.Identity.Strategy = "passthrough"
+		report, err := cfg.Validate(nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		f, ok := findWarning(report, "identity.strategy")
+		if !ok {
+			t.Fatal("expected WARN posture finding for identity.strategy, got none")
+		}
+		if !strings.Contains(f.Recommendation, "hmac-verify") {
+			t.Errorf("warning should mention hmac-verify, got: %q", f.Recommendation)
+		}
+	})
+
+	t.Run("hmac-verify identity does not emit passthrough warning", func(t *testing.T) {
+		cfg := validBaseConfig()
+		cfg.Identity.Strategy = "hmac-verify"
+		cfg.Identity.Config = map[string]any{
+			"secret":    "a-sufficiently-long-test-secret",
+			"algorithm": "HS256",
+		}
+		report, err := cfg.Validate(nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if _, ok := findWarning(report, "identity.strategy"); ok {
+			t.Error("hmac-verify should not trigger passthrough warning")
+		}
+	})
 }

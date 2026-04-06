@@ -344,6 +344,292 @@ func TestPassthroughNormalizer_PreferredUsernameAndACR(t *testing.T) {
 	}
 }
 
+// signHMAC signs a JWT with the given HMAC method and secret.
+func signHMAC(t *testing.T, secret []byte, method jwt.SigningMethod, claims jwt.MapClaims) string {
+	t.Helper()
+	token := jwt.NewWithClaims(method, claims)
+	s, err := token.SignedString(secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func newHMACNormalizer(method jwt.SigningMethod, secret []byte, opts ...func(*hmacVerifyingNormalizer)) *hmacVerifyingNormalizer {
+	n := &hmacVerifyingNormalizer{method: method, secret: secret}
+	for _, o := range opts {
+		o(n)
+	}
+	return n
+}
+
+func TestHMACVerifyingNormalizer(t *testing.T) {
+	secret := []byte("test-secret-at-least-256-bits-long-padding")
+	issuer := "https://idp.example.com"
+	future := time.Now().Add(1 * time.Hour).Unix()
+	past := time.Now().Add(-1 * time.Hour).Unix()
+
+	validClaims := jwt.MapClaims{
+		"sub":    "alice@example.com",
+		"email":  "alice@example.com",
+		"name":   "Alice Admin",
+		"groups": []any{"admin", "user"},
+		"iss":    issuer,
+		"aud":    []any{"portcullis-mcp"},
+		"exp":    future,
+		"iat":    time.Now().Add(-30 * time.Second).Unix(),
+	}
+
+	tests := []struct {
+		name        string
+		normalizer  *hmacVerifyingNormalizer
+		identity    shared.UserIdentity
+		wantErr     string
+		wantUserID  string
+		wantGroups  []string
+		wantEmail   string
+	}{
+		{
+			name:       "valid HS256 token",
+			normalizer: newHMACNormalizer(jwt.SigningMethodHS256, secret),
+			identity: shared.UserIdentity{
+				SourceType: "oidc",
+				RawToken:   signHMAC(t, secret, jwt.SigningMethodHS256, validClaims),
+			},
+			wantUserID: "alice@example.com",
+			wantGroups: []string{"admin", "user"},
+			wantEmail:  "alice@example.com",
+		},
+		{
+			name:       "valid HS384 token",
+			normalizer: newHMACNormalizer(jwt.SigningMethodHS384, secret),
+			identity: shared.UserIdentity{
+				SourceType: "oidc",
+				RawToken:   signHMAC(t, secret, jwt.SigningMethodHS384, validClaims),
+			},
+			wantUserID: "alice@example.com",
+		},
+		{
+			name:       "valid HS512 token",
+			normalizer: newHMACNormalizer(jwt.SigningMethodHS512, secret),
+			identity: shared.UserIdentity{
+				SourceType: "oidc",
+				RawToken:   signHMAC(t, secret, jwt.SigningMethodHS512, validClaims),
+			},
+			wantUserID: "alice@example.com",
+		},
+		{
+			name:       "hmac source type accepted",
+			normalizer: newHMACNormalizer(jwt.SigningMethodHS256, secret),
+			identity: shared.UserIdentity{
+				SourceType: "hmac",
+				RawToken:   signHMAC(t, secret, jwt.SigningMethodHS256, validClaims),
+			},
+			wantUserID: "alice@example.com",
+		},
+		{
+			name:       "wrong secret",
+			normalizer: newHMACNormalizer(jwt.SigningMethodHS256, secret),
+			identity: shared.UserIdentity{
+				SourceType: "oidc",
+				RawToken:   signHMAC(t, []byte("wrong-secret"), jwt.SigningMethodHS256, validClaims),
+			},
+			wantErr: "verify hmac token",
+		},
+		{
+			name:       "algorithm mismatch — HS512 token to HS256 normalizer",
+			normalizer: newHMACNormalizer(jwt.SigningMethodHS256, secret),
+			identity: shared.UserIdentity{
+				SourceType: "oidc",
+				RawToken:   signHMAC(t, secret, jwt.SigningMethodHS512, validClaims),
+			},
+			wantErr: "verify hmac token",
+		},
+		{
+			name:       "RS256 token rejected by HMAC normalizer",
+			normalizer: newHMACNormalizer(jwt.SigningMethodHS256, secret),
+			identity: func() shared.UserIdentity {
+				key, _ := rsa.GenerateKey(rand.Reader, 2048)
+				raw := signToken(t, key, "kid", jwt.MapClaims{"sub": "alice", "exp": future, "iss": issuer})
+				return shared.UserIdentity{SourceType: "oidc", RawToken: raw}
+			}(),
+			wantErr: "verify hmac token",
+		},
+		{
+			name:       "expired token",
+			normalizer: newHMACNormalizer(jwt.SigningMethodHS256, secret),
+			identity: shared.UserIdentity{
+				SourceType: "oidc",
+				RawToken: signHMAC(t, secret, jwt.SigningMethodHS256, jwt.MapClaims{
+					"sub": "alice@example.com",
+					"iss": issuer,
+					"exp": past,
+					"iat": time.Now().Add(-2 * time.Hour).Unix(),
+				}),
+			},
+			wantErr: "verify hmac token",
+		},
+		{
+			name:       "missing exp rejected by default",
+			normalizer: newHMACNormalizer(jwt.SigningMethodHS256, secret),
+			identity: shared.UserIdentity{
+				SourceType: "oidc",
+				RawToken: signHMAC(t, secret, jwt.SigningMethodHS256, jwt.MapClaims{
+					"sub": "alice@example.com",
+					"iss": issuer,
+					"iat": time.Now().Unix(),
+				}),
+			},
+			wantErr: "missing exp claim",
+		},
+		{
+			name: "missing exp allowed when allow_missing_expiry set",
+			normalizer: newHMACNormalizer(jwt.SigningMethodHS256, secret, func(n *hmacVerifyingNormalizer) {
+				n.allowMissingExpiry = true
+			}),
+			identity: shared.UserIdentity{
+				SourceType: "oidc",
+				RawToken: signHMAC(t, secret, jwt.SigningMethodHS256, jwt.MapClaims{
+					"sub": "alice@example.com",
+					"iss": issuer,
+					"iat": time.Now().Unix(),
+				}),
+			},
+			wantUserID: "alice@example.com",
+		},
+		{
+			name: "issuer mismatch",
+			normalizer: newHMACNormalizer(jwt.SigningMethodHS256, secret, func(n *hmacVerifyingNormalizer) {
+				n.issuer = "https://expected.example.com"
+			}),
+			identity: shared.UserIdentity{
+				SourceType: "oidc",
+				RawToken: signHMAC(t, secret, jwt.SigningMethodHS256, jwt.MapClaims{
+					"sub": "alice@example.com",
+					"iss": "https://wrong.example.com",
+					"exp": future,
+				}),
+			},
+			wantErr: "does not match configured issuer",
+		},
+		{
+			name: "audience mismatch",
+			normalizer: newHMACNormalizer(jwt.SigningMethodHS256, secret, func(n *hmacVerifyingNormalizer) {
+				n.audiences = []string{"portcullis-mcp"}
+			}),
+			identity: shared.UserIdentity{
+				SourceType: "oidc",
+				RawToken: signHMAC(t, secret, jwt.SigningMethodHS256, jwt.MapClaims{
+					"sub": "alice@example.com",
+					"iss": issuer,
+					"aud": []any{"other-service"},
+					"exp": future,
+				}),
+			},
+			wantErr: "audience mismatch",
+		},
+		{
+			name:       "missing sub rejected",
+			normalizer: newHMACNormalizer(jwt.SigningMethodHS256, secret),
+			identity: shared.UserIdentity{
+				SourceType: "oidc",
+				RawToken: signHMAC(t, secret, jwt.SigningMethodHS256, jwt.MapClaims{
+					"iss": issuer,
+					"exp": future,
+				}),
+			},
+			wantErr: "missing sub claim",
+		},
+		{
+			name: "token age exceeds max_token_age_secs",
+			normalizer: newHMACNormalizer(jwt.SigningMethodHS256, secret, func(n *hmacVerifyingNormalizer) {
+				n.maxTokenAgeSecs = 60
+			}),
+			identity: shared.UserIdentity{
+				SourceType: "oidc",
+				RawToken: signHMAC(t, secret, jwt.SigningMethodHS256, jwt.MapClaims{
+					"sub": "alice@example.com",
+					"iss": issuer,
+					"exp": future,
+					"iat": time.Now().Add(-5 * time.Minute).Unix(),
+				}),
+			},
+			wantErr: "exceeds max allowed age",
+		},
+		{
+			name:       "unexpected source type strips claims",
+			normalizer: newHMACNormalizer(jwt.SigningMethodHS256, secret),
+			identity: shared.UserIdentity{
+				SourceType: "os",
+				UserID:     "alice",
+			},
+			wantUserID: "alice",
+		},
+		{
+			name:       "missing raw token",
+			normalizer: newHMACNormalizer(jwt.SigningMethodHS256, secret),
+			identity: shared.UserIdentity{
+				SourceType: "oidc",
+				RawToken:   "",
+			},
+			wantErr: "missing raw token",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := tc.normalizer.Normalize(context.Background(), tc.identity)
+			if tc.wantErr != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tc.wantErr)
+				}
+				if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Errorf("error = %q, want substring %q", err.Error(), tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tc.wantUserID != "" && got.UserID != tc.wantUserID {
+				t.Errorf("UserID = %q, want %q", got.UserID, tc.wantUserID)
+			}
+			if tc.wantEmail != "" && got.Email != tc.wantEmail {
+				t.Errorf("Email = %q, want %q", got.Email, tc.wantEmail)
+			}
+			if tc.wantGroups != nil {
+				if len(got.Groups) != len(tc.wantGroups) {
+					t.Errorf("Groups = %v, want %v", got.Groups, tc.wantGroups)
+				} else {
+					for i, g := range tc.wantGroups {
+						if got.Groups[i] != g {
+							t.Errorf("Groups[%d] = %q, want %q", i, got.Groups[i], g)
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestBuildIdentityNormalizer_HMACVerify(t *testing.T) {
+	cfg := IdentityConfig{
+		Strategy: "hmac-verify",
+		Config: map[string]any{
+			"secret":    "a-test-secret-that-is-long-enough",
+			"algorithm": "HS256",
+		},
+	}
+	_ = cfg.Validate()
+	n, err := buildIdentityNormalizer(&cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := n.(*hmacVerifyingNormalizer); !ok {
+		t.Errorf("expected *hmacVerifyingNormalizer, got %T", n)
+	}
+}
+
 func TestRegisterNormalizer(t *testing.T) {
 	name := "custom-test"
 	identity.Register(name, func(cfg identity.NormalizerConfig) (identity.Normalizer, error) {
