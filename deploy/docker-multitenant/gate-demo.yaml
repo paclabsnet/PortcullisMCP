@@ -33,7 +33,7 @@ responsibility:
       enabled: false
   escalation:
     enabled: false
-    no_escalation_marker: "Access denied. Contact your administrator."
+    no_escalation_marker: "ESCALATION_DENIED"
 
 operations:
   storage:

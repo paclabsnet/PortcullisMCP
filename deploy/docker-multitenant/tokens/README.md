@@ -7,11 +7,13 @@ below.
 
 ## Token files
 
-| File | Tenant | Groups | Access |
+| File | Sub and Email | Groups | Access |
 |------|--------|--------|--------|
 | `alice.jwt` | alice@example.com | `admin` | All tools |
-| `bob.jwt` | bob@example.com | `developer` | `get_customer`, `query_inventory`, `fetch_url` |
-| `charlie.jwt` | charlie@example.com | `intern` | `query_inventory`, `fetch_url` only |
+| `bob.jwt` | bob@example.com | `developer` | All tools |
+| `charlie.jwt` | charlie@example.com | `intern` | All tools |
+
+
 
 ## Access matrix (from existing OPA policy in policies/rego/data.json)
 
@@ -48,6 +50,8 @@ MCP client config (Claude Desktop / similar):
 }
 ```
 
+*note* in a production solution, such as an ai-enabled console, you will have a different way to attaching the mcp to the Agent
+
 ## Regenerating tokens at mock-idp.dev
 
 Visit https://mock-idp.dev and create a token with the following settings.
@@ -59,6 +63,8 @@ Set expiry to 10 years. The issuer and audience are fixed.
 |-------|-------|
 | `iss` | `https://mock-idp.dev` |
 | `aud` | `portcullis-mcp` |
+
+*note*: `iss` will be correct by default, but `aud` is incorrect by default
 
 **alice.jwt**
 
