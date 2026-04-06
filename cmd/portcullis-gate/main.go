@@ -36,23 +36,6 @@ type cliArgs struct {
 	logLevel string
 }
 
-// parseFlags parses argv using a fresh FlagSet so it can be called in tests
-// without touching flag.CommandLine or calling os.Exit.
-func parseFlags(argv []string) (cliArgs, error) {
-	fs := flag.NewFlagSet("portcullis-gate", flag.ContinueOnError)
-	var a cliArgs
-	fs.StringVar(&a.config, "config", "~/.portcullis/gate.yaml", "path to gate config file")
-	fs.StringVar(&a.logLevel, "log-level", "", "override logging level (debug, info, warn, error)")
-	return a, fs.Parse(argv)
-}
-
-// applyLogging calls logSetupFn with the loaded config and parsed CLI args.
-// It is the only call site that forwards args.logLevel into the logging setup,
-// which makes the forwarding path directly testable.
-func applyLogging(cfg gate.Config, args cliArgs) error {
-	return logSetupFn(cfg.Operations.Logging, cfg.Mode, args.logLevel)
-}
-
 func main() {
 	cfgloader.BootstrapLogger()
 
@@ -72,13 +55,13 @@ func main() {
 	cfg, report, err := gate.LoadConfig(ctx, args.config)
 	if err != nil {
 		slog.Error("load config", "error", err)
-		runDegraded(ctx, "configuration error: "+err.Error())
+		handleStartupError(ctx, gate.Config{}, "configuration error: "+err.Error())
 		return
 	}
 
 	if err := applyLogging(cfg, args); err != nil {
 		slog.Error("invalid log level", "error", err)
-		runDegraded(ctx, "invalid log level: "+err.Error())
+		handleStartupError(ctx, cfg, "invalid log level: "+err.Error())
 		return
 	}
 
@@ -95,7 +78,7 @@ func main() {
 	g, err := gate.New(ctx, cfg)
 	if err != nil {
 		slog.Error("init gate", "error", err)
-		runDegraded(ctx, err.Error())
+		handleStartupError(ctx, cfg, err.Error())
 		return
 	}
 
@@ -105,11 +88,37 @@ func main() {
 	}
 }
 
-// runDegraded starts Gate in degraded mode and exits when the MCP session ends.
-// Startup errors are surfaced to the MCP agent via a portcullis_status pseudo-tool.
-func runDegraded(ctx context.Context, reason string) {
-	if err := gate.RunDegraded(ctx, reason); err != nil && err != context.Canceled {
-		slog.Error("degraded gate exited with error", "error", err)
+// handleStartupError is called when Gate encounters a fatal error during
+// initialization. In single-tenant mode, Gate enters diagnostic mode: a
+// minimal MCP server whose portcullis_status tool surfaces the error to the
+// connected agent so a human can investigate. In multi-tenant mode, Gate
+// exits immediately — a dead process is equivalent to a failing health probe
+// from the load balancer's perspective, and the appropriate response is for
+// monitoring to alert an admin.
+func handleStartupError(ctx context.Context, cfg gate.Config, reason string) {
+	if cfg.Tenancy == "multi" {
+		slog.Error("fatal startup error in multi-tenant mode, exiting", "reason", reason)
 		os.Exit(1)
 	}
+	if err := gate.RunDiagnosticMode(ctx, reason); err != nil && err != context.Canceled {
+		slog.Error("diagnostic mode exited with error", "error", err)
+		os.Exit(1)
+	}
+}
+
+// parseFlags parses argv using a fresh FlagSet so it can be called in tests
+// without touching flag.CommandLine or calling os.Exit.
+func parseFlags(argv []string) (cliArgs, error) {
+	fs := flag.NewFlagSet("portcullis-gate", flag.ContinueOnError)
+	var a cliArgs
+	fs.StringVar(&a.config, "config", "~/.portcullis/gate.yaml", "path to gate config file")
+	fs.StringVar(&a.logLevel, "log-level", "", "override logging level (debug, info, warn, error)")
+	return a, fs.Parse(argv)
+}
+
+// applyLogging calls logSetupFn with the loaded config and parsed CLI args.
+// It is the only call site that forwards args.logLevel into the logging setup,
+// which makes the forwarding path directly testable.
+func applyLogging(cfg gate.Config, args cliArgs) error {
+	return logSetupFn(cfg.Operations.Logging, cfg.Mode, args.logLevel)
 }

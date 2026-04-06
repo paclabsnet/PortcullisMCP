@@ -17,15 +17,11 @@ package gate
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"time"
-
-	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 )
 
-// pingHealth performs a GET to <endpoint>/healthz with a 3-second timeout.
+// pingReadiness performs a GET to <endpoint>/readyz with a 3-second timeout.
 // Returns "available" if any HTTP response is received, "unavailable" otherwise.
 func pingReadiness(ctx context.Context, endpoint string) string {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
@@ -44,7 +40,7 @@ func pingReadiness(ctx context.Context, endpoint string) string {
 }
 
 // buildStatusReport returns the portcullis_status message and whether Gate is
-// in an error state. It performs live /healthz checks against Keep and Guard.
+// in an error state. It performs live /readyz checks against Keep and Guard.
 func (g *Gate) buildStatusReport(ctx context.Context) (msg string, isErr bool) {
 	gateStatus := "operating normally"
 	if g.stateMachine != nil {
@@ -79,38 +75,4 @@ func (g *Gate) buildStatusReport(ctx context.Context) (msg string, isErr bool) {
 		gateStatus, keepStatus, guardStatus,
 	)
 	return msg, isErr
-}
-
-// RunDegraded starts a minimal MCP server that registers a single
-// portcullis_status pseudo-tool. Every call to that tool returns the provided
-// startup error message so the connected agent receives a human-readable
-// explanation of why Gate could not initialize normally.
-//
-// This allows Gate to remain connected to the MCP client (Claude, Copilot, etc.)
-// rather than crashing, which would surface as an unresponsive tool server with
-// no actionable feedback.
-func RunDegraded(ctx context.Context, reason string) error {
-	slog.Error("gate entered degraded mode", "reason", reason)
-
-	srv := mcp.NewServer(&mcp.Implementation{
-		Name:    shared.ServiceGate,
-		Version: "0.1.0",
-	}, nil)
-
-	mcp.AddTool(srv,
-		&mcp.Tool{
-			Name:        "portcullis_status",
-			Description: "Returns the current status of Portcullis Gate. Portcullis Gate has failed to start — call this tool to see the error.",
-		},
-		func(_ context.Context, _ *mcp.CallToolRequest, _ any) (*mcp.CallToolResult, any, error) {
-			return &mcp.CallToolResult{
-				IsError: true,
-				Content: []mcp.Content{&mcp.TextContent{
-					Text: "Portcullis Gate is degraded: " + reason,
-				}},
-			}, nil, nil
-		},
-	)
-
-	return srv.Run(ctx, &mcp.StdioTransport{})
 }
