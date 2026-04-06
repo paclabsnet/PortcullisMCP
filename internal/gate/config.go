@@ -17,8 +17,10 @@ package gate
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/mitchellh/mapstructure"
+	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
 )
 
@@ -81,6 +83,21 @@ func (c *Config) Validate(sources cfgloader.SourceMap) (cfgloader.PostureReport,
 
 	if c.Peers.Keep.Endpoint == "" {
 		return cfgloader.PostureReport{}, fmt.Errorf("peers.keep.endpoint is required")
+	}
+
+	for name, ep := range c.Server.Endpoints {
+		for _, pattern := range ep.ForwardHeaders {
+			// Wildcards are fine — they never explicitly name a forbidden header.
+			if strings.ContainsRune(pattern, '*') {
+				continue
+			}
+			if shared.IsForbiddenHeader(pattern) {
+				return cfgloader.PostureReport{}, fmt.Errorf(
+					"server.endpoints.%s.forward_headers: %q is a forbidden header and must not be explicitly listed",
+					name, pattern,
+				)
+			}
+		}
 	}
 	if err := c.Identity.Validate(); err != nil {
 		return cfgloader.PostureReport{}, err

@@ -216,6 +216,56 @@ func TestMCPHTTPMiddleware(t *testing.T) {
 		}
 	})
 
+	t.Run("client headers are extracted into request context", func(t *testing.T) {
+		var capturedCtx context.Context
+		store := NewMemorySessionStore()
+
+		srv := mcp.NewServer(&mcp.Implementation{Name: "cap", Version: "0.0.0"}, nil)
+		cfg := Config{
+			Tenancy: "multi",
+			Server: cfgloader.ServerConfig{
+				Endpoints: map[string]cfgloader.EndpointConfig{
+					MCPEndpoint: {
+						Auth: cfgloader.AuthSettings{
+							Type: "bearer",
+							Credentials: cfgloader.AuthCredentials{Header: "X-User-Token"},
+						},
+						// Default forward_headers (empty = ["*"])
+					},
+				},
+			},
+		}
+		h := NewMCPHTTPHandler(srv, nil, cfg, NewMultiTenantProvider("X-User-Token", store, nil))
+		h.sdkHandler = http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			capturedCtx = r.Context()
+		})
+
+		req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+		req.Header.Set("X-User-Token", "tok")
+		req.Header.Set("Authorization", "Bearer some-token")
+		req.Header.Set("X-Tenant-Id", "acme")
+		// Forbidden header — must NOT appear in context.
+		req.Header.Set("Connection", "keep-alive")
+		h.ServeHTTP(httptest.NewRecorder(), req)
+
+		if capturedCtx == nil {
+			t.Fatal("sdk handler was not called")
+		}
+		hdrs := clientHeadersFromContext(capturedCtx)
+		if hdrs == nil {
+			t.Fatal("no client headers in context")
+		}
+		if _, ok := hdrs["Authorization"]; !ok {
+			t.Error("Authorization header should be forwarded by default")
+		}
+		if _, ok := hdrs["X-Tenant-Id"]; !ok {
+			t.Error("X-Tenant-Id header should be forwarded by default")
+		}
+		if _, ok := hdrs["Connection"]; ok {
+			t.Error("Connection is a forbidden header and must not be forwarded")
+		}
+	})
+
 	t.Run("session ID and raw token are injected into request context", func(t *testing.T) {
 		var capturedCtx context.Context
 		store := NewMemorySessionStore()

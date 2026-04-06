@@ -42,9 +42,10 @@ import (
 type gateCtxKey string
 
 const (
-	sessionIDKey gateCtxKey = "sessionID"
-	userIDKey    gateCtxKey = "userID"
-	identityKey  gateCtxKey = "identity"
+	sessionIDKey     gateCtxKey = "sessionID"
+	userIDKey        gateCtxKey = "userID"
+	identityKey      gateCtxKey = "identity"
+	clientHeadersKey gateCtxKey = "clientHeaders"
 )
 
 // SessionIDFromContext returns the session ID stored in ctx, or ("", false) if absent.
@@ -56,6 +57,17 @@ func SessionIDFromContext(ctx context.Context) (string, bool) {
 // withSessionID returns a new context carrying the given session ID.
 func withSessionID(ctx context.Context, sessionID string) context.Context {
 	return context.WithValue(ctx, sessionIDKey, sessionID)
+}
+
+// withClientHeaders returns a new context carrying the extracted client headers.
+func withClientHeaders(ctx context.Context, headers map[string][]string) context.Context {
+	return context.WithValue(ctx, clientHeadersKey, headers)
+}
+
+// clientHeadersFromContext returns the client headers stored in ctx, or nil if absent.
+func clientHeadersFromContext(ctx context.Context) map[string][]string {
+	v, _ := ctx.Value(clientHeadersKey).(map[string][]string)
+	return v
 }
 
 // DecisionLogEntry is a fast-path decision log entry sent to Keep.
@@ -617,6 +629,7 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 		EscalationTokens: g.collectEscalationTokens(ctx, serverName, toolName),
 		SessionID:        sessionID,
 		TraceID:          traceID,
+		ClientHeaders:    clientHeadersFromContext(ctx),
 	}
 	result, err := g.forwarder.CallTool(ctx, enriched)
 	if err != nil {

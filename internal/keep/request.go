@@ -32,6 +32,11 @@ type AuthorizedRequest struct {
 	TraceID          string
 	EscalationTokens []shared.EscalationToken
 	Principal        shared.Principal
+	// ClientHeaders are the HTTP request headers forwarded by Gate.
+	// Header names are in Canonical-Format. The PDP receives these so that
+	// policies can make decisions based on client identity headers (e.g.
+	// X-Tenant-Id, Authorization) without requiring a separate token exchange.
+	ClientHeaders map[string][]string
 }
 
 // NewAuthorizedRequest constructs a trusted internal request from a raw inbound
@@ -45,5 +50,6 @@ func NewAuthorizedRequest(req shared.EnrichedMCPRequest, p shared.Principal) Aut
 		TraceID:          req.TraceID,
 		EscalationTokens: req.EscalationTokens,
 		Principal:        p,
+		ClientHeaders:    req.ClientHeaders,
 	}
 }

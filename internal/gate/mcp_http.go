@@ -28,9 +28,10 @@ import (
 // MCPHTTPHandler wraps the SDK's StreamableHTTPHandler with Portcullis
 // middleware: health checks, authentication, and context injection.
 type MCPHTTPHandler struct {
-	provider   TenancyProvider
-	authType   string // from endpoint.Auth.Type ("none", "bearer", "mtls")
-	sdkHandler http.Handler
+	provider       TenancyProvider
+	authType       string   // from endpoint.Auth.Type ("none", "bearer", "mtls")
+	forwardHeaders []string // from endpoint.ForwardHeaders; default ["*"]
+	sdkHandler     http.Handler
 }
 
 // credentialFingerprint returns a SHA-256 hash of the raw token string. This
@@ -54,10 +55,16 @@ func NewMCPHTTPHandler(
 
 	mcpEp := cfg.Server.Endpoints[MCPEndpoint]
 
+	fwdHeaders := mcpEp.ForwardHeaders
+	if len(fwdHeaders) == 0 {
+		fwdHeaders = []string{"*"}
+	}
+
 	return &MCPHTTPHandler{
-		provider:   provider,
-		authType:   mcpEp.Auth.Type,
-		sdkHandler: sdkHandler,
+		provider:       provider,
+		authType:       mcpEp.Auth.Type,
+		forwardHeaders: fwdHeaders,
+		sdkHandler:     sdkHandler,
 	}
 }
 
@@ -107,7 +114,38 @@ func (h *MCPHTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// re-reading the request headers.
 		ctx = context.WithValue(ctx, identityKey, shared.UserIdentity{RawToken: rawToken})
 	}
+
+	if hdrs := extractClientHeaders(r, h.forwardHeaders); len(hdrs) > 0 {
+		ctx = withClientHeaders(ctx, hdrs)
+	}
+
 	r = r.WithContext(ctx)
 
 	h.sdkHandler.ServeHTTP(w, r)
+}
+
+// extractClientHeaders filters r.Header against forwardHeaders patterns, strips
+// forbidden headers, and returns the surviving set with canonical key names.
+// Returns nil when no headers survive filtering.
+func extractClientHeaders(r *http.Request, forwardHeaders []string) map[string][]string {
+	if len(forwardHeaders) == 0 {
+		forwardHeaders = []string{"*"}
+	}
+	var result map[string][]string
+	for name, vals := range r.Header {
+		canonical := http.CanonicalHeaderKey(name)
+		if shared.IsForbiddenHeader(canonical) {
+			continue
+		}
+		for _, pattern := range forwardHeaders {
+			if shared.MatchesHeaderPattern(pattern, canonical) {
+				if result == nil {
+					result = make(map[string][]string)
+				}
+				result[canonical] = vals
+				break
+			}
+		}
+	}
+	return result
 }

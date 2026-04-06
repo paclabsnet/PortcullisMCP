@@ -94,6 +94,11 @@ type EndpointConfig struct {
 	Listen string            `yaml:"listen"`
 	TLS    tlsutil.TLSConfig `yaml:"tls"`
 	Auth   AuthSettings      `yaml:"auth"`
+	// ForwardHeaders specifies which HTTP request headers are forwarded from the
+	// client into the Portcullis pipeline via EnrichedMCPRequest.ClientHeaders.
+	// Supports exact names, prefix wildcards (x-tenant-*), or "*" for all
+	// non-forbidden headers. Default: ["*"] (forward everything allowed).
+	ForwardHeaders []string `yaml:"forward_headers"`
 }
 
 // IsSecure returns true if TLS is configured with a cert and key.

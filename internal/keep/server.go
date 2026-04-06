@@ -34,6 +34,21 @@ import (
 	"github.com/paclabsnet/PortcullisMCP/internal/telemetry"
 )
 
+type keepCtxKey string
+
+const clientHeadersKey keepCtxKey = "clientHeaders"
+
+// withClientHeaders returns a new context carrying the validated client headers.
+func withClientHeaders(ctx context.Context, headers map[string][]string) context.Context {
+	return context.WithValue(ctx, clientHeadersKey, headers)
+}
+
+// clientHeadersFromContext returns the client headers stored in ctx, or nil if absent.
+func clientHeadersFromContext(ctx context.Context) map[string][]string {
+	v, _ := ctx.Value(clientHeadersKey).(map[string][]string)
+	return v
+}
+
 // MCPRouter defines the interface for routing MCP tool calls to backends.
 type MCPRouter interface {
 	CallTool(ctx context.Context, serverName, toolName string, args map[string]any) (*mcp.CallToolResult, error)
@@ -172,6 +187,15 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 	if err := shared.CheckFields(enrichedRequestChecks(rawReq, s.cfg.Limits)); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+
+	if err := validateClientHeaders(rawReq.ClientHeaders, s.cfg.Limits); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if len(rawReq.ClientHeaders) > 0 {
+		ctx = withClientHeaders(ctx, rawReq.ClientHeaders)
 	}
 
 	traceID := telemetry.TraceIDFromContext(ctx)
@@ -489,6 +513,35 @@ func enrichedRequestChecks(req shared.EnrichedMCPRequest, limits LimitsConfig) [
 		{Value: req.TraceID, Name: "trace_id", Max: limits.MaxTraceIDBytes},
 		{Value: req.SessionID, Name: "session_id", Max: limits.MaxSessionIDBytes},
 	}
+}
+
+// validateClientHeaders checks that the forwarded headers do not exceed the
+// resource limits defined in LimitsConfig. Returns an error if any limit is
+// breached; the caller should respond with 400 Bad Request.
+func validateClientHeaders(headers map[string][]string, limits LimitsConfig) error {
+	if len(headers) == 0 {
+		return nil
+	}
+	if limits.MaxForwardedHeaders > 0 && len(headers) > limits.MaxForwardedHeaders {
+		return fmt.Errorf("too many forwarded headers: %d exceeds limit of %d", len(headers), limits.MaxForwardedHeaders)
+	}
+	totalBytes := 0
+	for name, vals := range headers {
+		if limits.MaxHeaderNameBytes > 0 && len(name) > limits.MaxHeaderNameBytes {
+			return fmt.Errorf("forwarded header name %q exceeds maximum length of %d bytes", name, limits.MaxHeaderNameBytes)
+		}
+		totalBytes += len(name)
+		for _, v := range vals {
+			if limits.MaxHeaderValueBytes > 0 && len(v) > limits.MaxHeaderValueBytes {
+				return fmt.Errorf("value for forwarded header %q exceeds maximum length of %d bytes", name, limits.MaxHeaderValueBytes)
+			}
+			totalBytes += len(v)
+		}
+	}
+	if limits.MaxForwardedHeadersTotalBytes > 0 && totalBytes > limits.MaxForwardedHeadersTotalBytes {
+		return fmt.Errorf("forwarded headers total size %d bytes exceeds limit of %d bytes", totalBytes, limits.MaxForwardedHeadersTotalBytes)
+	}
+	return nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

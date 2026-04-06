@@ -48,6 +48,7 @@ type Router struct {
 }
 
 type backendConn struct {
+	cfgMu       sync.RWMutex
 	cfg         BackendConfig
 	client      *mcp.Client
 	session     *mcp.ClientSession
@@ -153,11 +154,15 @@ func (r *Router) Reload(ctx context.Context, backends []BackendConfig) error {
 		}
 	}
 
-	// Register new backends and update configs for existing ones (so ToolMap
-	// and other non-connection settings take effect without a restart).
+	// Register new backends and update configs for existing ones (so ToolMap,
+	// ForwardHeaders, DropHeaders, and other non-connection settings take effect
+	// without a restart). cfg writes are protected by the per-conn cfgMu so
+	// concurrent RoundTrip calls always see a consistent snapshot.
 	for name, cfg := range newBackends {
 		if conn, exists := r.backends[name]; exists {
+			conn.cfgMu.Lock()
 			conn.cfg = cfg
+			conn.cfgMu.Unlock()
 		} else {
 			r.backends[name] = &backendConn{cfg: cfg}
 		}
@@ -297,7 +302,7 @@ func (r *Router) sessionFor(ctx context.Context, serverName string) (*mcp.Client
 		return conn.session, nil
 	}
 
-	transport, err := buildBackendTransport(conn.cfg)
+	transport, err := buildBackendTransport(conn)
 	if err != nil {
 		return nil, fmt.Errorf("build transport for %q: %w", serverName, err)
 	}
@@ -316,7 +321,12 @@ func (r *Router) sessionFor(ctx context.Context, serverName string) (*mcp.Client
 }
 
 // buildBackendTransport creates the appropriate MCP transport for a backend.
-func buildBackendTransport(cfg BackendConfig) (mcp.Transport, error) {
+// For HTTP and SSE backends the HTTP client is wrapped with a
+// headerInjectingRoundTripper that forwards client headers from the request
+// context according to the live ForwardHeaders/DropHeaders config on conn.
+// Called from sessionFor which holds r.mu, so reading conn.cfg directly is safe.
+func buildBackendTransport(conn *backendConn) (mcp.Transport, error) {
+	cfg := conn.cfg
 	switch cfg.Type {
 	case "stdio":
 		if cfg.Command == "" {
@@ -339,9 +349,11 @@ func buildBackendTransport(cfg BackendConfig) (mcp.Transport, error) {
 		if err := checkBackendURL(cfg.URL, cfg.AllowPrivateAddresses); err != nil {
 			return nil, fmt.Errorf("http backend URL rejected: %w", err)
 		}
+		httpClient := noRedirectHTTPClient()
+		httpClient.Transport = &headerInjectingRoundTripper{conn: conn, inner: http.DefaultTransport}
 		return &mcp.StreamableClientTransport{
 			Endpoint:   cfg.URL,
-			HTTPClient: noRedirectHTTPClient(),
+			HTTPClient: httpClient,
 		}, nil
 	case "sse":
 		if cfg.URL == "" {
@@ -350,13 +362,78 @@ func buildBackendTransport(cfg BackendConfig) (mcp.Transport, error) {
 		if err := checkBackendURL(cfg.URL, cfg.AllowPrivateAddresses); err != nil {
 			return nil, fmt.Errorf("sse backend URL rejected: %w", err)
 		}
+		httpClient := noRedirectHTTPClient()
+		httpClient.Transport = &headerInjectingRoundTripper{conn: conn, inner: http.DefaultTransport}
 		return &mcp.SSEClientTransport{
 			Endpoint:   cfg.URL,
-			HTTPClient: noRedirectHTTPClient(),
+			HTTPClient: httpClient,
 		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported backend type %q (valid types: stdio, http, sse)", cfg.Type)
 	}
+}
+
+// headerInjectingRoundTripper is a stateful http.RoundTripper that injects
+// client headers from the request context into every outgoing backend request.
+//
+// It reads ForwardHeaders and DropHeaders from conn.cfg at call time (protected
+// by conn.cfgMu) so that config changes applied by Router.Reload take effect
+// immediately without requiring a backend reconnection.
+//
+// Header selection follows strict precedence:
+//  1. Forbidden (hard-coded) — always stripped, regardless of configuration.
+//  2. DropHeaders (config deny) — stripped next if matched.
+//  3. ForwardHeaders (config allow) — forwarded if matched; default is ["*"].
+type headerInjectingRoundTripper struct {
+	conn  *backendConn
+	inner http.RoundTripper
+}
+
+// RoundTrip injects allowed client headers into the outgoing request and
+// delegates to the inner transport. The original request is never mutated.
+func (t *headerInjectingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	clientHeaders := clientHeadersFromContext(req.Context())
+	if len(clientHeaders) == 0 {
+		return t.inner.RoundTrip(req)
+	}
+
+	t.conn.cfgMu.RLock()
+	fwdHeaders := t.conn.cfg.ForwardHeaders
+	dropHeaders := t.conn.cfg.DropHeaders
+	t.conn.cfgMu.RUnlock()
+
+	if len(fwdHeaders) == 0 {
+		fwdHeaders = []string{"*"}
+	}
+
+	outReq := req.Clone(req.Context())
+	for name, vals := range clientHeaders {
+		// Step 1: skip forbidden headers (should already be excluded by Gate,
+		// but enforce again as defence-in-depth).
+		if shared.IsForbiddenHeader(name) {
+			continue
+		}
+		// Step 2: skip headers matched by the drop list.
+		dropped := false
+		for _, pattern := range dropHeaders {
+			if shared.MatchesHeaderPattern(pattern, name) {
+				dropped = true
+				break
+			}
+		}
+		if dropped {
+			continue
+		}
+		// Step 3: forward headers matched by the forward list.
+		for _, pattern := range fwdHeaders {
+			if shared.MatchesHeaderPattern(pattern, name) {
+				outReq.Header[name] = vals
+				break
+			}
+		}
+	}
+
+	return t.inner.RoundTrip(outReq)
 }
 
 // noRedirectHTTPClient returns an http.Client that refuses to follow any

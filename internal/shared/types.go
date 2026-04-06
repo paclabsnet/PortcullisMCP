@@ -116,6 +116,10 @@ type EnrichedMCPRequest struct {
 	// When telemetry is disabled (noop exporter) Gate generates a UUID so this
 	// field is always non-empty and can be used for log correlation and deny messages.
 	TraceID string `json:"trace_id"`
+	// ClientHeaders are HTTP headers from the original client request to Gate.
+	// Header names are in Canonical-Format (http.CanonicalHeaderKey). Values are
+	// unmodified. Forbidden headers are never included regardless of configuration.
+	ClientHeaders map[string][]string `json:"client_headers,omitempty"`
 }
 
 // PDPResponse is the decision returned by the Policy Decision Point.

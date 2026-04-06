@@ -290,6 +290,13 @@ type BackendConfig struct {
 	URL                   string            `yaml:"url"` // for http
 	AllowPrivateAddresses bool              `yaml:"allow_private_addresses"`
 	ToolMap               map[string]string `yaml:"tool_map"`
+	// ForwardHeaders filters which headers from EnrichedMCPRequest.ClientHeaders are
+	// sent to this backend. Supports exact names, prefix wildcards (x-tenant-*), or
+	// "*" for all non-forbidden headers. Default: ["*"]
+	ForwardHeaders []string `yaml:"forward_headers"`
+	// DropHeaders lists headers that must never be sent to this backend, regardless
+	// of ForwardHeaders. Evaluated after the Forbidden hard-coded list. Default: []
+	DropHeaders []string `yaml:"drop_headers"`
 }
 
 type ServiceNowConfig struct {
@@ -311,14 +318,18 @@ type SigningConfig = shared.SigningConfig
 // LimitsConfig controls request body and field length limits for Keep.
 // Zero values are replaced with service defaults by ApplyDefaults.
 type LimitsConfig struct {
-	MaxRequestBodyBytes int `yaml:"max_request_body_bytes" mapstructure:"max_request_body_bytes"` // default: 1048576 (1 MB)
-	MaxServerNameBytes  int `yaml:"max_server_name_bytes" mapstructure:"max_server_name_bytes"`   // default: 256
-	MaxToolNameBytes    int `yaml:"max_tool_name_bytes" mapstructure:"max_tool_name_bytes"`       // default: 256
-	MaxUserIDBytes      int `yaml:"max_user_id_bytes" mapstructure:"max_user_id_bytes"`           // default: 512
-	MaxTraceIDBytes     int `yaml:"max_trace_id_bytes" mapstructure:"max_trace_id_bytes"`         // default: 128
-	MaxSessionIDBytes   int `yaml:"max_session_id_bytes" mapstructure:"max_session_id_bytes"`     // default: 128
-	MaxReasonBytes      int `yaml:"max_reason_bytes" mapstructure:"max_reason_bytes"`             // default: 4096
-	MaxLogBatchSize     int `yaml:"max_log_batch_size" mapstructure:"max_log_batch_size"`         // default: 1000
+	MaxRequestBodyBytes           int `yaml:"max_request_body_bytes" mapstructure:"max_request_body_bytes"`                         // default: 1048576 (1 MB)
+	MaxServerNameBytes            int `yaml:"max_server_name_bytes" mapstructure:"max_server_name_bytes"`                           // default: 256
+	MaxToolNameBytes              int `yaml:"max_tool_name_bytes" mapstructure:"max_tool_name_bytes"`                               // default: 256
+	MaxUserIDBytes                int `yaml:"max_user_id_bytes" mapstructure:"max_user_id_bytes"`                                   // default: 512
+	MaxTraceIDBytes               int `yaml:"max_trace_id_bytes" mapstructure:"max_trace_id_bytes"`                                 // default: 128
+	MaxSessionIDBytes             int `yaml:"max_session_id_bytes" mapstructure:"max_session_id_bytes"`                             // default: 128
+	MaxReasonBytes                int `yaml:"max_reason_bytes" mapstructure:"max_reason_bytes"`                                     // default: 4096
+	MaxLogBatchSize               int `yaml:"max_log_batch_size" mapstructure:"max_log_batch_size"`                                 // default: 1000
+	MaxForwardedHeaders           int `yaml:"max_forwarded_headers" mapstructure:"max_forwarded_headers"`                           // default: 20
+	MaxHeaderNameBytes            int `yaml:"max_header_name_bytes" mapstructure:"max_header_name_bytes"`                           // default: 128
+	MaxHeaderValueBytes           int `yaml:"max_header_value_bytes" mapstructure:"max_header_value_bytes"`                         // default: 4096
+	MaxForwardedHeadersTotalBytes int `yaml:"max_forwarded_headers_total_bytes" mapstructure:"max_forwarded_headers_total_bytes"` // default: 16384 (16 KB)
 }
 
 // ApplyDefaults fills any zero-value fields with their service defaults.
@@ -346,5 +357,17 @@ func (l *LimitsConfig) ApplyDefaults() {
 	}
 	if l.MaxLogBatchSize == 0 {
 		l.MaxLogBatchSize = 1000
+	}
+	if l.MaxForwardedHeaders == 0 {
+		l.MaxForwardedHeaders = 20
+	}
+	if l.MaxHeaderNameBytes == 0 {
+		l.MaxHeaderNameBytes = 128
+	}
+	if l.MaxHeaderValueBytes == 0 {
+		l.MaxHeaderValueBytes = 4096
+	}
+	if l.MaxForwardedHeadersTotalBytes == 0 {
+		l.MaxForwardedHeadersTotalBytes = 16384 // 16 KB
 	}
 }

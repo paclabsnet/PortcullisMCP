@@ -14,7 +14,43 @@
 
 package shared
 
-import "fmt"
+import (
+	"fmt"
+	"net/http"
+	"strings"
+)
+
+// ForbiddenHeaders is the hard-coded set of headers that must never be forwarded
+// from clients to backend MCPs, regardless of operator configuration. It covers
+// hop-by-hop headers (RFC 2616), protocol-integrity headers, and Portcullis
+// internal tracing headers. Keys are in http.CanonicalHeaderKey form.
+var ForbiddenHeaders = map[string]bool{
+	"Connection":          true,
+	"Keep-Alive":          true,
+	"Proxy-Authenticate":  true,
+	"Proxy-Authorization": true,
+	"Te":                  true, // canonical form of TE
+	"Trailer":             true,
+	"Transfer-Encoding":   true,
+	"Upgrade":             true,
+	"Host":                true,
+	"Content-Length":      true,
+	"Expect":              true,
+	"Content-Type":        true,
+	"Traceparent":         true,
+	"Tracestate":          true,
+}
+
+// IsForbiddenHeader reports whether name is a header that must never be forwarded.
+// The check covers the hard-coded ForbiddenHeaders set and any header whose
+// canonical name begins with "X-Portcullis-".
+func IsForbiddenHeader(name string) bool {
+	canonical := http.CanonicalHeaderKey(name)
+	if ForbiddenHeaders[canonical] {
+		return true
+	}
+	return strings.HasPrefix(strings.ToLower(canonical), "x-portcullis-")
+}
 
 // FieldCheck pairs a string value with a field name and its maximum allowed
 // byte length. A Max of 0 means no limit is configured — the check is skipped.

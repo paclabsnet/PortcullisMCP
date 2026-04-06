@@ -49,7 +49,7 @@ func TestRouter_BuildBackendTransport_Stdio(t *testing.T) {
 		},
 	}
 
-	transport, err := buildBackendTransport(cfg)
+	transport, err := buildBackendTransport(&backendConn{cfg: cfg})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestRouter_BuildBackendTransport_StdioMissingCommand(t *testing.T) {
 		// Command is missing
 	}
 
-	_, err := buildBackendTransport(cfg)
+	_, err := buildBackendTransport(&backendConn{cfg: cfg})
 	if err == nil {
 		t.Fatal("expected error for stdio backend without command, got nil")
 	}
@@ -81,7 +81,7 @@ func TestRouter_BuildBackendTransport_UnsupportedType(t *testing.T) {
 		Type: "unsupported",
 	}
 
-	_, err := buildBackendTransport(cfg)
+	_, err := buildBackendTransport(&backendConn{cfg: cfg})
 	if err == nil {
 		t.Fatal("expected error for unsupported backend type, got nil")
 	}
@@ -112,7 +112,7 @@ func TestRouter_BuildBackendTransport_HTTP(t *testing.T) {
 		URL:  "https://mcp-server.example.com/mcp",
 	}
 
-	transport, err := buildBackendTransport(cfg)
+	transport, err := buildBackendTransport(&backendConn{cfg: cfg})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestRouter_BuildBackendTransport_HTTPMissingURL(t *testing.T) {
 		// URL is missing
 	}
 
-	_, err := buildBackendTransport(cfg)
+	_, err := buildBackendTransport(&backendConn{cfg: cfg})
 	if err == nil {
 		t.Fatal("expected error for http backend without URL, got nil")
 	}
@@ -145,7 +145,7 @@ func TestRouter_BuildBackendTransport_SSE(t *testing.T) {
 		URL:  "https://mcp-server.example.com/sse",
 	}
 
-	transport, err := buildBackendTransport(cfg)
+	transport, err := buildBackendTransport(&backendConn{cfg: cfg})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestRouter_BuildBackendTransport_SSEMissingURL(t *testing.T) {
 		Type: "sse",
 	}
 
-	_, err := buildBackendTransport(cfg)
+	_, err := buildBackendTransport(&backendConn{cfg: cfg})
 	if err == nil {
 		t.Fatal("expected error for sse backend without URL, got nil")
 	}

@@ -186,6 +186,7 @@ type opaPrincipal struct {
 
 type opaContext struct {
 	EscalationTokens []shared.EscalationToken `json:"escalation_tokens"`
+	Headers          map[string][]string      `json:"headers,omitempty"`
 }
 
 // opaResponse is the envelope OPA returns: {"result": <decision>}.
@@ -232,6 +233,7 @@ func (c *opaClient) Evaluate(ctx context.Context, req AuthorizedRequest) (shared
 				},
 				Context: opaContext{
 					EscalationTokens: req.EscalationTokens,
+					Headers:          req.ClientHeaders,
 				},
 			},
 			SessionID: req.SessionID,
