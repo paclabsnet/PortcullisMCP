@@ -40,7 +40,7 @@ Enhance Portcullis for Enterprise Architect review by improving visibility, cons
     - Update `AgentInteractionConfig.Validate()` to map the deprecated `RequireApproval` to `Escalate` for backward compatibility.
 - **File**: `internal/gate/server.go`
 - **Action**: Update `buildEscalationMessage` to use the new `Escalate` field for instructions.
-- **Files**: `config/*.yaml` and `deploy/docker-sandbox/*.yaml`
+- **Files**: `config/*.yaml` and `deploy/docker-singletenant/*.yaml`
 - **Action**: Update example and demo configs to use `escalate` instead of `requires_approval`.
 
 ## Verification & Testing

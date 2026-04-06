@@ -244,9 +244,9 @@ make demo-stop
 
 ### Demo stack configs
 
-- `deploy/docker-sandbox/keep-demo.yaml` â€” Keep config for the Docker demo
-- `deploy/docker-sandbox/guard-demo.yaml` â€” Guard config for the Docker demo
-- `deploy/docker-sandbox/opa-config.yaml` â€” OPA config for the Docker demo
+- `deploy/docker-singletenant/keep-demo.yaml` â€” Keep config for the Docker demo
+- `deploy/docker-singletenant/guard-demo.yaml` â€” Guard config for the Docker demo
+- `deploy/docker-singletenant/opa-config.yaml` â€” OPA config for the Docker demo
 
 ### Overriding identity in gate.yaml
 

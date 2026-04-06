@@ -45,9 +45,9 @@ peers:
   # auth:
   #   type: "mtls"
   #   credentials:
-  #     cert:      "/path/to/deploy/docker-sandbox/tls/gate-client.crt"
-  #     key:       "/path/to/deploy/docker-sandbox/tls/gate-client.key"
-  #     server_ca: "/path/to/deploy/docker-sandbox/tls/ca.crt"
+  #     cert:      "/path/to/deploy/docker-singletenant/tls/gate-client.crt"
+  #     key:       "/path/to/deploy/docker-singletenant/tls/gate-client.key"
+  #     server_ca: "/path/to/deploy/docker-singletenant/tls/ca.crt"
 
   guard:
     endpoints:

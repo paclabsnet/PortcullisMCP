@@ -19,6 +19,15 @@ import (
 	"sync"
 )
 
+/*
+ *  In production instances, we would expect that the IT admins
+ *  would use redis as a backend (or something similar).  But
+ *  for experimentation and PoC development, we want to avoid
+ *  adding requirements. You could conceivably run a multi-tenant
+ *  Gate in a cluster with sticky sessions using this, but we
+ *  don't recommend it.
+ */
+
 // memorySession holds the state for a single session.
 type memorySession struct {
 	userID string

@@ -1,0 +1,45 @@
+# Portcullis Gate — multi-tenant demo configuration
+#
+# Gate runs as an HTTP service inside the compose stack.
+# MCP clients connect to http://localhost:9090/mcp and present
+# a bearer token in the Authorization header.
+#
+# See tokens/README.md for the demo tokens and what each one can do.
+
+mode: dev
+tenancy: multi
+
+server:
+  endpoints:
+    mcp:
+      listen: "0.0.0.0:9090"
+      auth:
+        type: "bearer"
+        credentials:
+          header: "Authorization"
+  session_ttl: 3600
+
+peers:
+  keep:
+    endpoint: "http://keep:8080"
+    auth:
+      type: "bearer"
+      credentials:
+        bearer_token: "dev-secret-token"
+
+responsibility:
+  tools:
+    portcullis-localfs:
+      enabled: false
+  escalation:
+    enabled: false
+    no_escalation_marker: "Access denied. Contact your administrator."
+
+operations:
+  storage:
+    backend: "memory"
+  telemetry:
+    exporter: "noop"
+  logging:
+    level: "info"
+    format: "text"

@@ -165,7 +165,7 @@ This starts five containers:
 
 Wait a few seconds for all containers to become healthy. You can check with:
 ```powershell
-docker compose -f deploy/docker-sandbox/docker-compose.yml ps
+docker compose -f deploy/docker-singletenant/docker-compose.yml ps
 ```
 
 ---
@@ -216,7 +216,7 @@ The demo stack may not be fully up yet. Wait a few seconds and restart your agen
 if any container is still starting.
 
 **Docker containers exit immediately**
-Run `docker compose -f deploy/docker-sandbox/docker-compose.yml logs` to see error output. The most common cause is a
+Run `docker compose -f deploy/docker-singletenant/docker-compose.yml logs` to see error output. The most common cause is a
 port conflict — check that ports 8080, 8181, and 8444 are not already in use.
 
 **Make says "missing separator"**

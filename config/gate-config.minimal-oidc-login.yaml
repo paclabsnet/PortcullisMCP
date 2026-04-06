@@ -1,7 +1,7 @@
 #
 #  OIDC Login Version (Unified Peer Model)
 #
-#  This is the version of gate.yaml that is compatible with the docker-sandbox deployment. 
+#  This is the version of gate.yaml that is compatible with the docker-singletenant deployment. 
 #  It will require a login to the portcullis-dex container, collect an oidc-token from
 #  Dex, and then send that token along with requests to portcullis-keep.  Keep will be
 #  able to validate that Dex created the token, and trust it.

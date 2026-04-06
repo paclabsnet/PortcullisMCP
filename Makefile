@@ -18,12 +18,12 @@ VERSION     := $(shell git describe --tags --always --dirty 2>/dev/null || echo 
 VERSION_PKG := github.com/paclabsnet/PortcullisMCP/internal/version
 LDFLAGS     := -ldflags "-X $(VERSION_PKG).Version=$(VERSION)"
 
-# Write deploy/docker-sandbox/.env so docker compose picks up the same version automatically
-deploy/docker-sandbox/.env:
-	@echo "VERSION=$(VERSION)" > deploy/docker-sandbox/.env
+# Write deploy/docker-singletenant/.env so docker compose picks up the same version automatically
+deploy/docker-singletenant/.env:
+	@echo "VERSION=$(VERSION)" > deploy/docker-singletenant/.env
 
 # Build all binaries into bin/
-build: deploy/docker-sandbox/.env
+build: deploy/docker-singletenant/.env
 	@echo "Building portcullis-gate..."
 	@go build $(LDFLAGS) -o $(GATE_BIN) ./cmd/portcullis-gate
 	@echo "Building portcullis-keep..."
@@ -52,12 +52,12 @@ clean:
 
 # Start demo stack (OPA + Keep + Guard + mock backends) via docker compose
 demo-start:
-	@docker compose -f deploy/docker-sandbox/docker-compose.yml up -d --build
+	@docker compose -f deploy/docker-singletenant/docker-compose.yml up -d --build
 	@echo "Demo stack running. Keep: http://localhost:8080  Guard: http://localhost:8444  OPA: http://localhost:8181"
 
 # Stop demo stack
 demo-stop:
-	@docker compose -f deploy/docker-sandbox/docker-compose.yml down
+	@docker compose -f deploy/docker-singletenant/docker-compose.yml down
 
 # Run the mock enterprise API backend (development only)
 run-mock:

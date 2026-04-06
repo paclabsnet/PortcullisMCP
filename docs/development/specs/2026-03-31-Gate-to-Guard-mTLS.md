@@ -93,15 +93,15 @@ guard:
 
 ### Step 4 — New sandbox cert: Guard server cert
 
-- Update `deploy/docker-sandbox/tls/gen_certs.go` to emit `guard-server.crt` / `.key`.
+- Update `deploy/docker-singletenant/tls/gen_certs.go` to emit `guard-server.crt` / `.key`.
 - SANs: `localhost`, `127.0.0.1`, `portcullis-guard`.
 
 ---
 
 ### Step 5 — Docker sandbox config updates
 
-- `deploy/docker-sandbox/guard-demo.yaml`: Update to the new dual-listener and nested auth schema.
-- `deploy/docker-sandbox/docker-compose.yml`: Expose both ports (8444, 8445) and mount TLS volume.
+- `deploy/docker-singletenant/guard-demo.yaml`: Update to the new dual-listener and nested auth schema.
+- `deploy/docker-singletenant/docker-compose.yml`: Expose both ports (8444, 8445) and mount TLS volume.
 
 ---
 
@@ -155,8 +155,8 @@ Increment `internal/version/version.go` to `0.3.7` (reflecting the significant a
 | `internal/gate/config.go` | required nested guard.auth and endpoint config |
 | `internal/gate/guardclient.go` | API-only communication in GuardClient |
 | `internal/gate/server.go` | UI-only endpoint in escalation messages; update status tool |
-| `deploy/docker-sandbox/tls/gen_certs.go` | add Guard server certs |
-| `deploy/docker-sandbox/gate-demo.yaml` | update for dual-endpoint Guard config |
-| `deploy/docker-sandbox/guard-demo.yaml` | update for dual-listener and nested auth |
-| `deploy/docker-sandbox/docker-compose.yml` | expose port 8445 and mount TLS volume |
+| `deploy/docker-singletenant/tls/gen_certs.go` | add Guard server certs |
+| `deploy/docker-singletenant/gate-demo.yaml` | update for dual-endpoint Guard config |
+| `deploy/docker-singletenant/guard-demo.yaml` | update for dual-listener and nested auth |
+| `deploy/docker-singletenant/docker-compose.yml` | expose port 8445 and mount TLS volume |
 | `internal/version/version.go` | 0.3.7 |

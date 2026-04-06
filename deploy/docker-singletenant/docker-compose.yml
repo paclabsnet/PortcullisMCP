@@ -24,7 +24,7 @@ services:
   keep:
     build:
       context: ../..
-      dockerfile: deploy/docker-sandbox/Dockerfile
+      dockerfile: deploy/docker-singletenant/Dockerfile
       target: keep
       args:
         VERSION: ${VERSION:-0.1.0-dev}
@@ -55,7 +55,7 @@ services:
   guard:
     build:
       context: ../..
-      dockerfile: deploy/docker-sandbox/Dockerfile
+      dockerfile: deploy/docker-singletenant/Dockerfile
       target: guard
       args:
         VERSION: ${VERSION:-0.1.0-dev}
@@ -76,7 +76,7 @@ services:
   mock-enterprise-api:
     build:
       context: ../..
-      dockerfile: deploy/docker-sandbox/Dockerfile
+      dockerfile: deploy/docker-singletenant/Dockerfile
       target: mock-enterprise-api
     container_name: portcullis-mock-enterprise-api
     networks:
@@ -85,7 +85,7 @@ services:
   fetch-mcp:
     build:
       context: ../..
-      dockerfile: deploy/docker-sandbox/Dockerfile
+      dockerfile: deploy/docker-singletenant/Dockerfile
       target: fetch-mcp
     container_name: portcullis-fetch-mcp
     networks:

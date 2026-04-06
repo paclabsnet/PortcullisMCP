@@ -1,0 +1,63 @@
+# Portcullis Keep — multi-tenant demo configuration
+#
+# Keep validates bearer tokens presented by Gate's tenants against
+# mock-idp.dev's public JWKS. No Guard or escalation in this stack.
+
+mode: dev
+
+server:
+  endpoints:
+    main:
+      listen: "0.0.0.0:8080"
+      auth:
+        type: "bearer"
+        credentials:
+          bearer_token: "dev-secret-token"
+
+identity:
+  strategy: "oidc-verify"
+  config:
+    issuer: "https://mock-idp.dev"
+    jwks_url: "https://mock-idp.dev/jwt/.well-known/jwks.json"
+    audiences:
+      - "portcullis-mcp"
+
+responsibility:
+  policy:
+    strategy: "opa"
+    config:
+      endpoint: "http://opa:8181/v1/data/portcullis/tabular/decision"
+
+  mcp_backends:
+    - name: "mock-enterprise-api"
+      type: "http"
+      url: "http://mock-enterprise-api:3000/mcp"
+      allow_private_addresses: true
+
+    - name: "fetch"
+      type: "http"
+      url: "http://fetch-mcp:8080/mcp"
+      allow_private_addresses: true
+
+  issuance:
+    signing_key: "dev-keep-signing-secret"
+    ttl: 86400
+
+operations:
+  storage:
+    backend: "memory"
+    config:
+      decision_log:
+        enabled: true
+        console: true
+        buffer_size: 100
+        flush_interval: 5
+        max_batch_size: 50
+
+  telemetry:
+    exporter: "noop"
+    service_name: "portcullis-keep"
+
+  logging:
+    level: "info"
+    format: "text"
