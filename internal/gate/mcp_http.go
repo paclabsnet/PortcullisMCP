@@ -73,6 +73,9 @@ func NewMCPHTTPHandler(
 func (h *MCPHTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Health checks bypass all middleware.
 	switch r.URL.Path {
+
+	// there's no 'spin-up' time for Gate, so no special case for
+	// a delayed /readyz response
 	case "/healthz", "/readyz":
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
