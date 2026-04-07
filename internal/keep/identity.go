@@ -17,7 +17,9 @@ package keep
 import (
 	"context"
 	"crypto/rsa"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -28,7 +30,9 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/mitchellh/mapstructure"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
+	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
 	identity "github.com/paclabsnet/PortcullisMCP/internal/shared/identity"
 )
 
@@ -96,9 +100,16 @@ type hmacVerifyingNormalizer struct {
 	audiences          []string
 	allowMissingExpiry bool
 	maxTokenAgeSecs    int
+
+	// Optional webhook delegation (set by initNormalizerWebhook).
+	webhook     *NormalizationClient
+	cache       PrincipalCacher
+	normCfg     identity.NormalizerConfig
+	allowClaims []string
+	denyClaims  []string
 }
 
-func (n *hmacVerifyingNormalizer) Normalize(_ context.Context, id shared.UserIdentity) (shared.Principal, error) {
+func (n *hmacVerifyingNormalizer) Normalize(ctx context.Context, id shared.UserIdentity) (shared.Principal, error) {
 	if id.SourceType != "oidc" && id.SourceType != "hmac" {
 		slog.Warn("keep: unexpected identity source in hmac-verify mode — directory claims stripped",
 			"user_id", id.UserID,
@@ -188,6 +199,16 @@ func (n *hmacVerifyingNormalizer) Normalize(_ context.Context, id shared.UserIde
 		}
 	}
 
+	var expUnix int64
+	if exp != nil {
+		expUnix = exp.Unix()
+	}
+
+	// Webhook delegation: if configured, replace default claim extraction.
+	if n.webhook != nil {
+		return n.normalizeViaWebhook(ctx, id.RawToken, map[string]any(claims), id.SourceType, expUnix)
+	}
+
 	var email string
 	if v, ok := claims["email"].(string); ok {
 		email = v
@@ -238,11 +259,6 @@ func (n *hmacVerifyingNormalizer) Normalize(_ context.Context, id shared.UserIde
 		acr = v
 	}
 
-	var expUnix int64
-	if exp != nil {
-		expUnix = exp.Unix()
-	}
-
 	return shared.Principal{
 		UserID:            sub,
 		Email:             email,
@@ -256,6 +272,37 @@ func (n *hmacVerifyingNormalizer) Normalize(_ context.Context, id shared.UserIde
 		TokenExpiry:       expUnix,
 		SourceType:        id.SourceType,
 	}, nil
+}
+
+// normalizeViaWebhook implements the cache→filter→webhook→validate flow shared
+// by both HMAC and OIDC normalizers.
+func (n *hmacVerifyingNormalizer) normalizeViaWebhook(ctx context.Context, rawToken string, claims map[string]any, sourceType string, expUnix int64) (shared.Principal, error) {
+	cacheKey := tokenCacheKey(rawToken)
+	if n.cache != nil {
+		if cached, ok := n.cache.Get(cacheKey); ok {
+			return cached, nil
+		}
+	}
+
+	filtered := identity.FilterClaims(claims, n.allowClaims, n.denyClaims)
+	p, err := n.webhook.Normalize(ctx, filtered)
+	if err != nil {
+		return shared.Principal{}, fmt.Errorf("normalization webhook: %w", err)
+	}
+
+	if err := identity.ValidatePrincipal(p, n.normCfg); err != nil {
+		return shared.Principal{}, &NormalizationValidationError{Reason: err.Error()}
+	}
+
+	p.SourceType = sourceType
+	if expUnix != 0 && p.TokenExpiry == 0 {
+		p.TokenExpiry = expUnix
+	}
+
+	if n.cache != nil && n.normCfg.CacheTTL > 0 {
+		n.cache.Add(cacheKey, p, time.Duration(n.normCfg.CacheTTL)*time.Second)
+	}
+	return p, nil
 }
 
 // passthroughNormalizer accepts all identity fields as-is.
@@ -298,6 +345,13 @@ type oidcVerifyingNormalizer struct {
 	jwksMu sync.RWMutex
 	jwks   *jwks
 	last   time.Time
+
+	// Optional webhook delegation (set by initNormalizerWebhook).
+	webhook     *NormalizationClient
+	cache       PrincipalCacher
+	normCfg     identity.NormalizerConfig
+	allowClaims []string
+	denyClaims  []string
 }
 
 type jwks struct {
@@ -400,6 +454,16 @@ func (n *oidcVerifyingNormalizer) Normalize(ctx context.Context, id shared.UserI
 		}
 	}
 
+	var expUnix int64
+	if exp != nil {
+		expUnix = exp.Unix()
+	}
+
+	// Webhook delegation: if configured, replace default claim extraction.
+	if n.webhook != nil {
+		return n.normalizeViaWebhook(ctx, id.RawToken, map[string]any(claims), id.SourceType, expUnix)
+	}
+
 	var email string
 	if v, ok := claims["email"].(string); ok {
 		email = v
@@ -450,11 +514,6 @@ func (n *oidcVerifyingNormalizer) Normalize(ctx context.Context, id shared.UserI
 		acr = v
 	}
 
-	var expUnix int64
-	if exp != nil {
-		expUnix = exp.Unix()
-	}
-
 	return shared.Principal{
 		UserID:            sub,
 		Email:             email,
@@ -468,6 +527,37 @@ func (n *oidcVerifyingNormalizer) Normalize(ctx context.Context, id shared.UserI
 		TokenExpiry:       expUnix,
 		SourceType:        id.SourceType,
 	}, nil
+}
+
+// normalizeViaWebhook implements the cache→filter→webhook→validate flow for
+// the OIDC normalizer.
+func (n *oidcVerifyingNormalizer) normalizeViaWebhook(ctx context.Context, rawToken string, claims map[string]any, sourceType string, expUnix int64) (shared.Principal, error) {
+	cacheKey := tokenCacheKey(rawToken)
+	if n.cache != nil {
+		if cached, ok := n.cache.Get(cacheKey); ok {
+			return cached, nil
+		}
+	}
+
+	filtered := identity.FilterClaims(claims, n.allowClaims, n.denyClaims)
+	p, err := n.webhook.Normalize(ctx, filtered)
+	if err != nil {
+		return shared.Principal{}, fmt.Errorf("normalization webhook: %w", err)
+	}
+
+	if err := identity.ValidatePrincipal(p, n.normCfg); err != nil {
+		return shared.Principal{}, &NormalizationValidationError{Reason: err.Error()}
+	}
+
+	p.SourceType = sourceType
+	if expUnix != 0 && p.TokenExpiry == 0 {
+		p.TokenExpiry = expUnix
+	}
+
+	if n.cache != nil && n.normCfg.CacheTTL > 0 {
+		n.cache.Add(cacheKey, p, time.Duration(n.normCfg.CacheTTL)*time.Second)
+	}
+	return p, nil
 }
 
 func (n *oidcVerifyingNormalizer) keyFuncCtx(ctx context.Context, token *jwt.Token) (interface{}, error) {
@@ -569,7 +659,102 @@ func (n *oidcVerifyingNormalizer) getJWKS(ctx context.Context, force bool) (*jwk
 	return n.jwks, nil
 }
 
+// NormalizationValidationError is returned when a normalization webhook responds
+// successfully but the returned Principal fails validation (e.g. missing user_id,
+// oversized group names). Keep maps this to 403 Forbidden — the request is
+// structurally valid but the identity cannot be accepted as configured.
+// Contrast with a webhook timeout or 5xx, which maps to 503.
+type NormalizationValidationError struct {
+	Reason string
+}
+
+func (e *NormalizationValidationError) Error() string {
+	return "normalization webhook response invalid: " + e.Reason
+}
+
+// tokenCacheKey returns a hex-encoded SHA-256 hash of rawToken for use as a
+// cache key. Using the hash rather than the raw token avoids retaining the
+// full credential string in memory as a map key.
+func tokenCacheKey(rawToken string) string {
+	h := sha256.Sum256([]byte(rawToken))
+	return hex.EncodeToString(h[:])
+}
+
 // buildIdentityNormalizer constructs the configured IdentityNormalizer using the global registry.
 func buildIdentityNormalizer(cfg *IdentityConfig) (IdentityNormalizer, error) {
 	return identity.Build(cfg.Normalizer)
+}
+
+// initNormalizerWebhook injects a NormalizationClient and PrincipalCacher into
+// the normalizer when peers.normalization.endpoint is configured. It is a
+// no-op when peers is nil or the endpoint is empty.
+//
+// The cache backend is selected from storage.Backend:
+//   - "redis" — shared Redis cache suitable for clustered Keep deployments.
+//   - "memory" or "" — in-process LRU cache (default; suitable for single-instance).
+func initNormalizerWebhook(ctx context.Context, n IdentityNormalizer, peers *PeersConfig, normCfg identity.NormalizerConfig, storage cfgloader.StorageConfig, mode string) (IdentityNormalizer, error) {
+	if peers == nil || peers.Normalization.Endpoint == "" {
+		return n, nil
+	}
+
+	client, err := newNormalizationClient(peers.Normalization, mode)
+	if err != nil {
+		return nil, fmt.Errorf("init normalization webhook: %w", err)
+	}
+
+	var cache PrincipalCacher
+	if normCfg.CacheTTL > 0 {
+		cache, err = buildPrincipalCache(ctx, storage, normCfg)
+		if err != nil {
+			return nil, fmt.Errorf("init normalization cache: %w", err)
+		}
+	}
+
+	allowClaims := peers.Normalization.AllowClaims
+	denyClaims := peers.Normalization.DenyClaims
+
+	switch typed := n.(type) {
+	case *oidcVerifyingNormalizer:
+		typed.webhook = client
+		typed.cache = cache
+		typed.normCfg = normCfg
+		typed.allowClaims = allowClaims
+		typed.denyClaims = denyClaims
+	case *hmacVerifyingNormalizer:
+		typed.webhook = client
+		typed.cache = cache
+		typed.normCfg = normCfg
+		typed.allowClaims = allowClaims
+		typed.denyClaims = denyClaims
+	default:
+		slog.Warn("keep: peers.normalization.endpoint is configured but the identity strategy does not support webhook normalization; webhook is inactive",
+			"strategy", fmt.Sprintf("%T", n),
+			"endpoint", peers.Normalization.Endpoint)
+	}
+
+	return n, nil
+}
+
+// buildPrincipalCache constructs the PrincipalCacher selected by storage.Backend.
+func buildPrincipalCache(ctx context.Context, storage cfgloader.StorageConfig, normCfg identity.NormalizerConfig) (PrincipalCacher, error) {
+	switch storage.Backend {
+	case "redis":
+		var redisCfg RedisConfig
+		if err := mapstructure.Decode(storage.Config, &redisCfg); err != nil {
+			return nil, fmt.Errorf("decode redis config: %w", err)
+		}
+		redisClient, err := newKeepRedisClient(ctx, redisCfg)
+		if err != nil {
+			return nil, err
+		}
+		return NewRedisPrincipalCache(redisClient, redisCfg.KeyPrefix), nil
+	case "memory", "":
+		maxEntries := normCfg.CacheMaxEntries
+		if maxEntries <= 0 {
+			maxEntries = 1000
+		}
+		return NewPrincipalCache(maxEntries), nil
+	default:
+		return nil, fmt.Errorf("unknown storage backend %q for normalization cache: must be \"memory\" or \"redis\"", storage.Backend)
+	}
 }

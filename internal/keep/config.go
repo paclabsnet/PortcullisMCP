@@ -17,6 +17,7 @@ package keep
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/mitchellh/mapstructure"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
@@ -34,6 +35,8 @@ var SecretAllowlist = []string{
 	"responsibility.issuance.signing_key",
 	"responsibility.admin.token",
 	"identity.config.secret",
+	"peers.normalization.auth.credentials.bearer_token",
+	"operations.storage.config.password",
 }
 
 // LoadConfig reads, parses, resolves secrets in, and validates a keep config file.
@@ -76,7 +79,8 @@ type IssuanceConfig struct {
 
 // PeersConfig defines outbound connectivity to other Portcullis services.
 type PeersConfig struct {
-	Guard cfgloader.GuardPeerConfig `yaml:"guard"`
+	Guard         cfgloader.GuardPeerConfig         `yaml:"guard"`
+	Normalization cfgloader.NormalizationPeerConfig `yaml:"normalization"`
 }
 
 // Validate returns a PostureReport and an error if the configuration contains invalid values.
@@ -92,6 +96,10 @@ func (c *Config) Validate(sources cfgloader.SourceMap) (cfgloader.PostureReport,
 		if c.Responsibility.Policy.Strategy == "noop" {
 			return cfgloader.PostureReport{}, fmt.Errorf("policy.strategy \"noop\" is not allowed in production mode")
 		}
+		normEP := c.Peers.Normalization.Endpoint
+		if normEP != "" && !strings.HasPrefix(normEP, "https://") {
+			return cfgloader.PostureReport{}, fmt.Errorf("peers.normalization.endpoint must use https:// in production mode (got %q)", normEP)
+		}
 		if val, ok := c.Identity.Config["allow_insecure_jwks_url"]; ok {
 			if b, ok := val.(bool); ok && b {
 				return cfgloader.PostureReport{}, fmt.Errorf("identity.config.allow_insecure_jwks_url is not allowed in production mode")
@@ -104,6 +112,21 @@ func (c *Config) Validate(sources cfgloader.SourceMap) (cfgloader.PostureReport,
 			if !cfgloader.IsLoopback(ep.Listen) && !ep.IsSecure() {
 				return cfgloader.PostureReport{}, fmt.Errorf("TLS is required for non-loopback endpoint %q in production mode", name)
 			}
+		}
+	}
+
+	if normEP := c.Peers.Normalization.Endpoint; normEP != "" {
+		switch c.Peers.Normalization.Auth.Type {
+		case "", "none":
+			// valid; no credentials required
+		case "bearer":
+			if c.Peers.Normalization.Auth.Credentials.BearerToken == "" {
+				return cfgloader.PostureReport{}, fmt.Errorf("peers.normalization.auth.credentials.bearer_token is required when auth.type is \"bearer\"")
+			}
+		case "mtls":
+			return cfgloader.PostureReport{}, fmt.Errorf("peers.normalization.auth.type \"mtls\" is not supported for webhook peers; use \"none\" or \"bearer\"")
+		default:
+			return cfgloader.PostureReport{}, fmt.Errorf("peers.normalization.auth.type %q is not valid; must be \"none\" or \"bearer\"", c.Peers.Normalization.Auth.Type)
 		}
 	}
 
@@ -141,6 +164,9 @@ func (c *Config) Validate(sources cfgloader.SourceMap) (cfgloader.PostureReport,
 	}
 	if c.Identity.Strategy == "passthrough" {
 		report.SetStatus("identity.strategy", "WARN", "Passthrough identity is not suitable for production; use oidc-verify or hmac-verify")
+		if c.Peers.Normalization.Endpoint != "" {
+			report.SetStatus("peers.normalization.endpoint", "WARN", "Normalization webhook is configured but has no effect: passthrough identity does not invoke the webhook")
+		}
 	}
 	if c.Responsibility.Policy.Strategy == "noop" {
 		report.SetStatus("responsibility.policy.strategy", "WARN", "Noop policy allows all requests; configure OPA for production")
@@ -210,6 +236,21 @@ func (c *IdentityConfig) Validate() error {
 
 	// Ensure Normalizer field is set after any possible overwrites from Decode.
 	c.Normalizer.Normalizer = c.Strategy
+
+	// Decode cache and validation limit fields that live at the top level of
+	// identity.config alongside strategy-specific settings.
+	if c.Config != nil {
+		limitDecoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
+			Result:  &c.Normalizer,
+			TagName: "yaml",
+		})
+		if err != nil {
+			return err
+		}
+		if err := limitDecoder.Decode(c.Config); err != nil {
+			return fmt.Errorf("decode identity.config cache/validation fields: %w", err)
+		}
+	}
 
 	return c.Normalizer.Validate()
 }
@@ -370,4 +411,16 @@ func (l *LimitsConfig) ApplyDefaults() {
 	if l.MaxForwardedHeadersTotalBytes == 0 {
 		l.MaxForwardedHeadersTotalBytes = 16384 // 16 KB
 	}
+}
+
+// RedisConfig holds connection and security settings for a Redis-backed store.
+// Fields map directly to the keys in operations.storage.config in keep.yaml.
+type RedisConfig struct {
+	Addr          string `yaml:"addr"            mapstructure:"addr"`
+	Password      string `yaml:"password"        mapstructure:"password"`
+	DB            int    `yaml:"db"              mapstructure:"db"`
+	KeyPrefix     string `yaml:"key_prefix"      mapstructure:"key_prefix"`
+	TLSEnabled    bool   `yaml:"tls_enabled"     mapstructure:"tls_enabled"`
+	TLSSkipVerify bool   `yaml:"tls_skip_verify" mapstructure:"tls_skip_verify"`
+	TLSCACert     string `yaml:"tls_ca_cert"     mapstructure:"tls_ca_cert"`
 }

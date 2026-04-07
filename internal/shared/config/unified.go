@@ -62,6 +62,15 @@ type GuardPeerConfig struct {
 	Endpoints GuardEndpoints `yaml:"endpoints"`
 }
 
+// NormalizationPeerConfig holds settings for the identity normalization webhook peer.
+type NormalizationPeerConfig struct {
+	PeerAuth     `yaml:",inline"`
+	AllowClaims  []string `yaml:"allow_claims"`  // if non-empty, only these claims are forwarded
+	DenyClaims   []string `yaml:"deny_claims"`   // claims always excluded from the webhook payload
+	Timeout      int      `yaml:"timeout"`       // seconds; default 10
+	MaxPayloadKB int      `yaml:"max_payload_kb"` // max request/response body size; default 128
+}
+
 // GuardEndpoints holds URLs for human and machine interfaces of Guard.
 type GuardEndpoints struct {
 	ApprovalUI string `yaml:"approval_ui"`

@@ -95,6 +95,10 @@ func NewServer(ctx context.Context, cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build identity normalizer: %w", err)
 	}
+	normalizer, err = initNormalizerWebhook(ctx, normalizer, &cfg.Peers, cfg.Identity.Normalizer, cfg.Operations.Storage, cfg.Mode)
+	if err != nil {
+		return nil, fmt.Errorf("init normalization webhook: %w", err)
+	}
 
 	return &Server{
 		cfg: cfg,
@@ -215,6 +219,10 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 
 		if verifyErr := (*shared.IdentityVerificationError)(nil); errors.As(normErr, &verifyErr) {
 			writeError(w, http.StatusUnauthorized, normErr.Error())
+			return
+		}
+		if validErr := (*NormalizationValidationError)(nil); errors.As(normErr, &validErr) {
+			writeError(w, http.StatusForbidden, normErr.Error())
 			return
 		}
 
@@ -387,6 +395,14 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 
 	principal, normErr := s.normalizer.Normalize(ctx, rawReq.UserIdentity)
 	if normErr != nil {
+		if verifyErr := (*shared.IdentityVerificationError)(nil); errors.As(normErr, &verifyErr) {
+			writeError(w, http.StatusUnauthorized, normErr.Error())
+			return
+		}
+		if validErr := (*NormalizationValidationError)(nil); errors.As(normErr, &validErr) {
+			writeError(w, http.StatusForbidden, normErr.Error())
+			return
+		}
 		writeError(w, http.StatusServiceUnavailable, "identity normalization failed")
 		return
 	}

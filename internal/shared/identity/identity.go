@@ -52,6 +52,23 @@ type NormalizerConfig struct {
 	// HMACVerify holds configuration for the hmac-verify normalizer.
 	// Decoding is handled via mapstructure in keep/config.go, not direct YAML unmarshalling.
 	HMACVerify HMACVerifyConfig `yaml:"-"`
+
+	// Cache and validation limits for the normalization webhook flow.
+	// These apply when peers.normalization.endpoint is configured.
+
+	// CacheTTL is the number of seconds to cache a normalized principal. Default 0 (no caching).
+	CacheTTL int `yaml:"cache_ttl"`
+	// CacheMaxEntries is the maximum number of entries in the LRU cache. Default 0 (disabled).
+	CacheMaxEntries int `yaml:"cache_max_entries"`
+	// MaxUserIDLength is the maximum allowed length of Principal.UserID returned by the webhook.
+	// 0 means no limit.
+	MaxUserIDLength int `yaml:"max_userid_length"`
+	// MaxGroupNameLength is the maximum allowed length of each group name returned by the webhook.
+	// 0 means no limit.
+	MaxGroupNameLength int `yaml:"max_group_name_length"`
+	// MaxGroupsCount is the maximum number of groups allowed in the Principal returned by the webhook.
+	// 0 means no limit.
+	MaxGroupsCount int `yaml:"max_groups_count"`
 }
 
 // Validate returns an error if the normalizer config contains invalid values.
@@ -143,6 +160,64 @@ type HMACVerifyConfig struct {
 	// MaxTokenAgeSecs is the maximum allowed age of the token in seconds,
 	// measured from the iat (issued-at) claim. 0 means no enforcement.
 	MaxTokenAgeSecs int `yaml:"max_token_age_secs"`
+}
+
+// FilterClaims returns a copy of claims filtered by the allow and deny lists.
+// If allow is non-empty, only those keys are included. Deny keys are always
+// excluded, even if they appear in the allow list.
+func FilterClaims(claims map[string]any, allow []string, deny []string) map[string]any {
+	filtered := make(map[string]any, len(claims))
+	for k, v := range claims {
+		if len(allow) > 0 {
+			found := false
+			for _, a := range allow {
+				if a == k {
+					found = true
+					break
+				}
+			}
+			if !found {
+				continue
+			}
+		}
+		denied := false
+		for _, d := range deny {
+			if d == k {
+				denied = true
+				break
+			}
+		}
+		if denied {
+			continue
+		}
+		filtered[k] = v
+	}
+	return filtered
+}
+
+// ValidatePrincipal checks the Principal returned by a normalization webhook
+// against the limits defined in cfg. Returns an error if any limit is exceeded
+// or if the UserID is empty.
+func ValidatePrincipal(p shared.Principal, cfg NormalizerConfig) error {
+	if p.UserID == "" {
+		return fmt.Errorf("normalized identity missing user_id")
+	}
+	if cfg.MaxUserIDLength > 0 && len(p.UserID) > cfg.MaxUserIDLength {
+		return fmt.Errorf("user_id exceeds maximum length of %d", cfg.MaxUserIDLength)
+	}
+	if len(p.Groups) > 0 {
+		if cfg.MaxGroupsCount > 0 && len(p.Groups) > cfg.MaxGroupsCount {
+			return fmt.Errorf("groups count %d exceeds maximum of %d", len(p.Groups), cfg.MaxGroupsCount)
+		}
+		if cfg.MaxGroupNameLength > 0 {
+			for _, g := range p.Groups {
+				if len(g) > cfg.MaxGroupNameLength {
+					return fmt.Errorf("group name %q exceeds maximum length of %d", g, cfg.MaxGroupNameLength)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // Normalizer transforms a raw UserIdentity received from portcullis-gate into

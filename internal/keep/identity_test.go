@@ -21,6 +21,7 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -627,6 +628,232 @@ func TestBuildIdentityNormalizer_HMACVerify(t *testing.T) {
 	}
 	if _, ok := n.(*hmacVerifyingNormalizer); !ok {
 		t.Errorf("expected *hmacVerifyingNormalizer, got %T", n)
+	}
+}
+
+// --- Webhook integration tests ---
+
+// newWebhookNormalizer is a test helper that builds an OIDC normalizer wired to
+// a test HTTP server acting as the normalization webhook.
+func newWebhookNormalizer(t *testing.T, webhookSrv *httptest.Server, allowClaims, denyClaims []string, cacheTTL int) (*oidcVerifyingNormalizer, *rsa.PrivateKey, string, string) {
+	t.Helper()
+	n, key, kid, issuer := newOIDCNormalizerWithJWKS(t, 0)
+
+	n.webhook = &NormalizationClient{
+		endpoint:   webhookSrv.URL,
+		maxBytes:   128 * 1024,
+		httpClient: &http.Client{},
+	}
+	n.cache = NewPrincipalCache(100)
+	n.normCfg = identity.NormalizerConfig{
+		CacheTTL:       cacheTTL,
+		MaxUserIDLength: 256,
+	}
+	n.allowClaims = allowClaims
+	n.denyClaims = denyClaims
+	return n, key, kid, issuer
+}
+
+func TestOIDCNormalizer_WebhookFlow_Success(t *testing.T) {
+	want := shared.Principal{UserID: "alice-123", Email: "alice@corp.com", Groups: []string{"admins"}}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewEncoder(w).Encode(want); err != nil {
+			t.Errorf("encode response: %v", err)
+		}
+	}))
+	defer srv.Close()
+
+	n, key, kid, issuer := newWebhookNormalizer(t, srv, nil, nil, 0)
+	raw := signToken(t, key, kid, jwt.MapClaims{
+		"iss": issuer,
+		"sub": "alice-123",
+		"exp": time.Now().Add(time.Hour).Unix(),
+	})
+
+	got, err := n.Normalize(context.Background(), shared.UserIdentity{SourceType: "oidc", RawToken: raw})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.UserID != want.UserID {
+		t.Errorf("UserID = %q, want %q", got.UserID, want.UserID)
+	}
+	if got.Email != want.Email {
+		t.Errorf("Email = %q, want %q", got.Email, want.Email)
+	}
+	if got.SourceType != "oidc" {
+		t.Errorf("SourceType = %q, want oidc (should be set from verified token)", got.SourceType)
+	}
+}
+
+func TestOIDCNormalizer_WebhookFlow_ClaimFilteringApplied(t *testing.T) {
+	var receivedClaims map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&receivedClaims)
+		_ = json.NewEncoder(w).Encode(shared.Principal{UserID: "alice"})
+	}))
+	defer srv.Close()
+
+	n, key, kid, issuer := newWebhookNormalizer(t, srv, []string{"sub", "iss"}, []string{"email"}, 0)
+	raw := signToken(t, key, kid, jwt.MapClaims{
+		"iss":   issuer,
+		"sub":   "alice",
+		"email": "alice@corp.com",
+		"exp":   time.Now().Add(time.Hour).Unix(),
+	})
+
+	_, err := n.Normalize(context.Background(), shared.UserIdentity{SourceType: "oidc", RawToken: raw})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, ok := receivedClaims["sub"]; !ok {
+		t.Error("expected 'sub' claim to be forwarded to webhook")
+	}
+	if _, ok := receivedClaims["email"]; ok {
+		t.Error("'email' claim should be excluded by deny list")
+	}
+	if _, ok := receivedClaims["exp"]; ok {
+		t.Error("'exp' claim should be excluded by allow list")
+	}
+}
+
+func TestOIDCNormalizer_WebhookFlow_CacheHit(t *testing.T) {
+	callCount := 0
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		_ = json.NewEncoder(w).Encode(shared.Principal{UserID: "alice"})
+	}))
+	defer srv.Close()
+
+	n, key, kid, issuer := newWebhookNormalizer(t, srv, nil, nil, 600)
+	raw := signToken(t, key, kid, jwt.MapClaims{
+		"iss": issuer,
+		"sub": "alice",
+		"exp": time.Now().Add(time.Hour).Unix(),
+	})
+	id := shared.UserIdentity{SourceType: "oidc", RawToken: raw}
+
+	if _, err := n.Normalize(context.Background(), id); err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+	if _, err := n.Normalize(context.Background(), id); err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+
+	if callCount != 1 {
+		t.Errorf("webhook called %d times, want 1 (second call should be cache hit)", callCount)
+	}
+}
+
+func TestOIDCNormalizer_WebhookFlow_CacheMissWhenTTLZero(t *testing.T) {
+	callCount := 0
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		_ = json.NewEncoder(w).Encode(shared.Principal{UserID: "alice"})
+	}))
+	defer srv.Close()
+
+	n, key, kid, issuer := newWebhookNormalizer(t, srv, nil, nil, 0) // TTL=0 disables caching
+	raw := signToken(t, key, kid, jwt.MapClaims{
+		"iss": issuer,
+		"sub": "alice",
+		"exp": time.Now().Add(time.Hour).Unix(),
+	})
+	id := shared.UserIdentity{SourceType: "oidc", RawToken: raw}
+
+	if _, err := n.Normalize(context.Background(), id); err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+	if _, err := n.Normalize(context.Background(), id); err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+
+	if callCount != 2 {
+		t.Errorf("webhook called %d times, want 2 (TTL=0 means no caching)", callCount)
+	}
+}
+
+func TestOIDCNormalizer_WebhookFlow_ValidationFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Return a Principal with an empty user_id — should fail validation.
+		_ = json.NewEncoder(w).Encode(shared.Principal{UserID: ""})
+	}))
+	defer srv.Close()
+
+	n, key, kid, issuer := newWebhookNormalizer(t, srv, nil, nil, 0)
+	raw := signToken(t, key, kid, jwt.MapClaims{
+		"iss": issuer,
+		"sub": "alice",
+		"exp": time.Now().Add(time.Hour).Unix(),
+	})
+
+	_, err := n.Normalize(context.Background(), shared.UserIdentity{SourceType: "oidc", RawToken: raw})
+	if err == nil {
+		t.Fatal("expected validation error for empty user_id, got nil")
+	}
+
+	// Must be a NormalizationValidationError so server.go maps it to 403.
+	var validErr *NormalizationValidationError
+	if !errors.As(err, &validErr) {
+		t.Errorf("expected *NormalizationValidationError, got %T: %v", err, err)
+	}
+	if !strings.Contains(err.Error(), "missing user_id") {
+		t.Errorf("error = %q, want 'missing user_id'", err.Error())
+	}
+}
+
+func TestOIDCNormalizer_WebhookFlow_WebhookError_FailsClosed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	n, key, kid, issuer := newWebhookNormalizer(t, srv, nil, nil, 0)
+	raw := signToken(t, key, kid, jwt.MapClaims{
+		"iss": issuer,
+		"sub": "alice",
+		"exp": time.Now().Add(time.Hour).Unix(),
+	})
+
+	_, err := n.Normalize(context.Background(), shared.UserIdentity{SourceType: "oidc", RawToken: raw})
+	if err == nil {
+		t.Fatal("expected error when webhook returns 500, got nil")
+	}
+}
+
+func TestInitNormalizerWebhook_NoEndpoint_ReturnsOriginal(t *testing.T) {
+	cfg := IdentityConfig{Strategy: "passthrough"}
+	_ = cfg.Validate()
+	base, err := buildIdentityNormalizer(&cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	peers := &PeersConfig{} // no normalization endpoint
+	result, err := initNormalizerWebhook(context.Background(), base, peers, identity.NormalizerConfig{}, cfgloader.StorageConfig{}, "dev")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != base {
+		t.Error("expected same normalizer instance when no endpoint configured")
+	}
+}
+
+func TestInitNormalizerWebhook_ProductionHTTP_ReturnsError(t *testing.T) {
+	cfg := IdentityConfig{Strategy: "passthrough"}
+	_ = cfg.Validate()
+	base, err := buildIdentityNormalizer(&cfg)
+	if err != nil {
+		t.Fatalf("build normalizer: %v", err)
+	}
+	peers := &PeersConfig{}
+	peers.Normalization.Endpoint = "http://mapper.internal/map"
+	_, err = initNormalizerWebhook(context.Background(), base, peers, identity.NormalizerConfig{}, cfgloader.StorageConfig{}, "production")
+	if err == nil {
+		t.Fatal("expected error for http:// endpoint in production mode, got nil")
 	}
 }
 

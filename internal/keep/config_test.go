@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
+	"github.com/paclabsnet/PortcullisMCP/internal/shared/tlsutil"
 )
 
 // validBaseConfig returns a minimal Config that passes Validate().
@@ -224,6 +225,59 @@ func TestConfigValidate(t *testing.T) {
 			errContains: "escalation.config.url is required",
 		},
 
+		// --- peers.normalization ---
+		{
+			name: "normalization endpoint http rejected in production mode",
+			mutate: func(c *Config) {
+				c.Mode = "production"
+				c.Identity.Strategy = "oidc-verify"
+				c.Identity.Config = map[string]any{
+					"issuer":   "https://issuer.example.com",
+					"jwks_url": "https://issuer.example.com/keys",
+				}
+				c.Server.Endpoints["main"] = cfgloader.EndpointConfig{
+					Listen: "localhost:8080",
+					Auth:   cfgloader.AuthSettings{Type: "bearer"},
+					TLS:    tlsutil.TLSConfig{Cert: "cert.pem", Key: "key.pem"},
+				}
+				c.Peers.Normalization.Endpoint = "http://mapper.internal/map"
+			},
+			wantErr:     true,
+			errContains: "peers.normalization.endpoint must use https://",
+		},
+		{
+			name: "normalization endpoint https accepted in production mode",
+			mutate: func(c *Config) {
+				c.Mode = "production"
+				c.Identity.Strategy = "oidc-verify"
+				c.Identity.Config = map[string]any{
+					"issuer":   "https://issuer.example.com",
+					"jwks_url": "https://issuer.example.com/keys",
+				}
+				c.Server.Endpoints["main"] = cfgloader.EndpointConfig{
+					Listen: "localhost:8080",
+					Auth:   cfgloader.AuthSettings{Type: "bearer"},
+					TLS:    tlsutil.TLSConfig{Cert: "cert.pem", Key: "key.pem"},
+				}
+				c.Peers.Normalization.Endpoint = "https://mapper.internal/map"
+			},
+			wantErr: false,
+		},
+		{
+			name: "normalization cache and validation fields are decoded from identity.config",
+			mutate: func(c *Config) {
+				c.Identity.Strategy = "passthrough"
+				c.Identity.Config = map[string]any{
+					"cache_ttl":            600,
+					"cache_max_entries":    5000,
+					"max_userid_length":    256,
+					"max_group_name_length": 128,
+					"max_groups_count":     100,
+				}
+			},
+			wantErr: false,
+		},
+
 		// --- production mode safety ---
 		{
 			name: "production mode rejects passthrough identity",
@@ -360,6 +414,40 @@ func TestConfigValidate_PostureWarnings(t *testing.T) {
 		}
 		if _, ok := findWarning(report, "identity.strategy"); ok {
 			t.Error("hmac-verify should not trigger passthrough warning")
+		}
+	})
+
+	t.Run("passthrough with normalization endpoint emits inactive-webhook warning", func(t *testing.T) {
+		cfg := validBaseConfig()
+		cfg.Identity.Strategy = "passthrough"
+		cfg.Peers.Normalization.Endpoint = "http://mapper.internal/map"
+		report, err := cfg.Validate(nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		f, ok := findWarning(report, "peers.normalization.endpoint")
+		if !ok {
+			t.Fatal("expected WARN posture finding for peers.normalization.endpoint, got none")
+		}
+		if !strings.Contains(f.Recommendation, "no effect") {
+			t.Errorf("warning should mention 'no effect', got: %q", f.Recommendation)
+		}
+	})
+
+	t.Run("oidc-verify with normalization endpoint does not emit inactive-webhook warning", func(t *testing.T) {
+		cfg := validBaseConfig()
+		cfg.Identity.Strategy = "oidc-verify"
+		cfg.Identity.Config = map[string]any{
+			"issuer":   "https://issuer.example.com",
+			"jwks_url": "https://issuer.example.com/keys",
+		}
+		cfg.Peers.Normalization.Endpoint = "http://mapper.internal/map"
+		report, err := cfg.Validate(nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if _, ok := findWarning(report, "peers.normalization.endpoint"); ok {
+			t.Error("oidc-verify with normalization endpoint should not trigger inactive-webhook warning")
 		}
 	})
 }
