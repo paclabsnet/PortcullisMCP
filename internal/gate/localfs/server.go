@@ -39,6 +39,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
+	"github.com/paclabsnet/PortcullisMCP/internal/version"
 )
 
 // NewServer creates an MCP server that exposes filesystem tools for any path
@@ -63,7 +64,7 @@ func NewServer(sandboxDirs []string) (*mcp.Server, error) {
 
 	srv := mcp.NewServer(&mcp.Implementation{
 		Name:    "portcullis-localfs",
-		Version: "0.1.0",
+		Version: version.Version,
 	}, nil)
 
 	mcp.AddTool(srv, &mcp.Tool{
@@ -167,7 +168,7 @@ func Connect(ctx context.Context, sandboxDirs []string) (*mcp.ClientSession, err
 
 	client := mcp.NewClient(&mcp.Implementation{
 		Name:    shared.ServiceGate,
-		Version: "0.1.0",
+		Version: version.Version,
 	}, nil)
 
 	session, err := client.Connect(ctx, t2, nil)

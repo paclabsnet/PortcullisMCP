@@ -14,7 +14,7 @@ GATE_BIN  := bin/portcullis-gate$(BIN_EXT)
 KEEP_BIN  := bin/portcullis-keep$(BIN_EXT)
 GUARD_BIN := bin/portcullis-guard$(BIN_EXT)
 
-VERSION     := $(shell git describe --tags --always --dirty 2>/dev/null || echo "0.1.0-dev")
+VERSION     := $(shell git describe --tags --always --dirty 2>/dev/null || echo "0.4.1-dev")
 VERSION_PKG := github.com/paclabsnet/PortcullisMCP/internal/version
 LDFLAGS     := -ldflags "-X $(VERSION_PKG).Version=$(VERSION)"
 

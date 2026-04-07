@@ -20,6 +20,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
+	"github.com/paclabsnet/PortcullisMCP/internal/version"
 )
 
 // RunDiagnosticMode starts a minimal MCP server that registers a single
@@ -36,7 +37,7 @@ func RunDiagnosticMode(ctx context.Context, reason string) error {
 
 	srv := mcp.NewServer(&mcp.Implementation{
 		Name:    shared.ServiceGate,
-		Version: "0.1.0",
+		Version: version.Version,
 	}, nil)
 
 	mcp.AddTool(srv,

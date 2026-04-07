@@ -31,6 +31,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
+	"github.com/paclabsnet/PortcullisMCP/internal/version"
 )
 
 // MCPBackend routes tool calls to a registered MCP backend server.
@@ -309,7 +310,7 @@ func (r *Router) sessionFor(ctx context.Context, serverName string) (*mcp.Client
 
 	conn.client = mcp.NewClient(&mcp.Implementation{
 		Name:    shared.ServiceKeep,
-		Version: "0.1.0",
+		Version: version.Version,
 	}, nil)
 
 	session, err := conn.client.Connect(ctx, transport, nil)
