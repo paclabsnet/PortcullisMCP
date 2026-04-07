@@ -35,13 +35,16 @@ peers:
         bearer_token: "envvar://GUARD_BEARER_TOKEN"
 
 responsibility:
-  workspace:
-    directory: "~/sandbox"
-  forbidden:
-    directories:
-      - "~/.ssh"
-      - "~/.portcullis"
-      - "/etc"
+  tools:
+    portcullis-localfs:
+      enabled: true
+      workspace:
+        directory: "~/sandbox"
+      forbidden:
+        directories:
+          - "~/.ssh"
+          - "~/.portcullis"
+          - "/etc"
   escalation:
     strategy: "proactive"
     poll_interval: 60

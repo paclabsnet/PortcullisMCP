@@ -49,14 +49,19 @@ peers:
       token_api: "http://localhost:8445"
 
 responsibility:
-  workspace:
-    directory: "~" # files under home dir are fast-pathed (no Keep round-trip)
-  forbidden:
-    directories:
-      - "~/.ssh"
-      - "~/.portcullis"
+  tools:
+    portcullis-localfs:
+      enabled: true
+      workspace:
+        directory: "~/sandbox"
+      forbidden:
+        directories:
+          - "~/.ssh"
+          - "~/.portcullis"
+          - "/etc"
+      
   escalation:
-    strategy: "user-driven"
+    strategy: "proactive"
     token_store: "~/.portcullis/tokens.json"
 
 # decision_logs:

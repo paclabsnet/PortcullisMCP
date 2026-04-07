@@ -6,7 +6,16 @@
 # By default Gate connects to Keep over plain HTTP with a shared bearer token.
 # To use mTLS instead, comment out the bearer block and uncomment the mtls block.
 
+# dev mode relaxes security constraints, vs mode: production , which will not function
+# without various security capabilities enabled
+#
 mode: dev
+
+#
+#  single tenancy means a single user.  You can have a Portcullis-Gate supporting
+#  a single user, but supporting multiple agents, but setting up the mcp endpoint
+#
+tenancy: single
 
 server:
   endpoints:
@@ -14,6 +23,18 @@ server:
       listen: "localhost:7777"
       auth:
         type: "none"
+
+
+#
+# You can have both a management_ui (for the human) and the mcp endpoint (for the Agents)
+#
+#server:
+#  endpoints:
+#    mcp:
+#      listen: "0.0.0.0:9090"
+
+
+
 
 identity:
   # Strategy: "oidc-file", "oidc-login", or "os"
@@ -59,22 +80,34 @@ peers:
         bearer_token: "dev-guard-token"
 
 responsibility:
-  workspace:
-    directories:
-      - "~/sandbox"
-      - "C:/projects"
-      - "C:/tmp"
-      - "/tmp"
-  forbidden:
-    directories:
-      - "~/.ssh"
-      - "~/.portcullis"
-      - "/etc"
+  tools:
+    portcullis-localfs:
+      enabled: true
+      workspace:
+        # this list of allowed directories is up to you and your organization's policies
+        directories:
+          - "~/sandbox"
+          - "C:/projects"
+          - "C:/tmp"
+          - "/tmp"
+      forbidden:
+        # these are the directories that the Agent should never be allowed to visit, even if
+        # the parent is allowed.  This also should reflect your organization's policies, but
+        # including ~/.ssh and ~/.portcullis is definitely recommended
+        directories:
+          - "~/.ssh"
+          - "~/.portcullis"
+          - "/etc"
   escalation:
     strategy: "proactive"
     poll_interval: 10
     token_store: "~/.portcullis/tokens.json"
 
+
+  #
+  # These messages are optional, if you don't include one, a default one is
+  # used.
+  #
   agent_interaction:
     instructions:
       require_approval: |

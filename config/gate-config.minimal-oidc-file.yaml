@@ -32,6 +32,10 @@
 
 mode: dev
 
+# this is the default, so you don't have to specify it
+tenancy: single
+
+
 server:
   endpoints:
     management_ui:
@@ -58,14 +62,19 @@ peers:
       token_api: "http://localhost:8445"
 
 responsibility:
-  workspace:
-    directory: "~"
-  forbidden:
-    directories:
-      - "~/.ssh"
-      - "~/.portcullis"
+  tools:
+    portcullis-localfs:
+      enabled: true
+      workspace:
+        directory: "~"
+      forbidden:
+        directories:
+          - "~/.ssh"
+          - "~/.portcullis"
+          - "/etc"
+
   escalation:
-    strategy: "user-driven"
+    strategy: "proactive"
     token_store: "~/.portcullis/tokens.json"
   # decision_logs:
   #   flush_interval: 30

@@ -12,6 +12,11 @@ Providing a way for a user of an AI-enabled console to escalate privileges for a
 When Gate receives an `escalate` response and passes that on to the Agent, there's no guarantee that the Agent will provide the link to the user.  We can include the link in the Gate management UI.  If the user creates the appropriate escalation-token, that's evidence that we can remove the link from the management UI.
 
 
+### Task: production YAML should not support unknown keys in the responsibility section
+
+If the portcullis-localfs tool configuration is incorrect, it could allow the agent access to sensitive
+areas of the user's filesystem.  Ensuring that there are no unknown keys in the config YAML will 
+help avoid that issue.
 
 
 ### Task: Support vault:// secret resolution for map[string]string config fields
@@ -49,6 +54,7 @@ keep the scope of the first release a little more manageable
 - priority: low
 - comment: this is potentially expensive to implement, and it make sense to wait until we actually see someone using
   this solution
+- comment: also, these names aren't standard, so we have to write adapters in any case
 
 
 
@@ -75,6 +81,8 @@ for different service / tool combos
 - [x] Token file — Gate reads `identity.oidc.token_file`; fails hard (no OS fallback)
   when source is "oidc" and token is missing or invalid; `~` is now expanded
   correctly on read
+- [x] HMAC JWT from Agent header - if the Agent is set up with user identity at startup time, it can send that identity to Gate (via the http protocol) 
+      as a header. This is primarily useful for the multi-tenant configuration
 - [ ] Keychain storage — optional future  source of identity
 - [ ] Certificate - optional future source of identity
 - [ ] Device authorization grant (RFC 8628) — probably not necessary
@@ -83,13 +91,6 @@ for different service / tool combos
   prefer to wait for feedback before trying to implement specific additional identity sources
 
 
-
-### Task: add streamable-http access for Portcullis-Gate, so it can support multiple agents in parallel
-i.e. instead of running as a stdio MCP, it can run as an autonomous local process.
-- IMPORTANT! Portcullis-Gate would need to be concurrency-safe
-- priority: medium
-- comment: it makes sense to wait until we see organizations encountering this issue 
-  and preferring a standalone streaming-http solution over a set of stdio solutions listening on different ports
 
 
 ### Task: Optionally create a Portcullis-Gate API to collect the list of DENY responses, along with trace/session information
@@ -165,13 +166,6 @@ more informative and less consistent.
 
 
 
-
-### Task: Add a security posture assessment at startup
-log the full resolved security posture at startup regardless of mode — every security-relevant property, its value, and whether it meets production standards. Vault does this well. That log becomes an artifact that feeds directly into audit evidence without requiring auditors to understand your config schema.
-- priority: medium-low
-
-
-
 ### Task: Migrate all the security complaint supression (in dev mode)
 The default behavior in dev mode is to generate a warning message when there
 is a security violation.  Then we've added a few 'supression' flags to keep
@@ -207,132 +201,4 @@ equivalent Guard endpoint to re-resolve all secrets (including `vault://` URIs)
 without a process restart, enabling zero-downtime secret rotation
 - priority: medium-low
 
-
-
-
------------------------------------------------------
-# Completed Tasks
-
-
-### Task:  Add a logging-level command-line flag to Keep, Gate and Guard (DONE)
-So we can turn on debugging and info level logs as appropriate.  Also add log-level to
-the YAML configuration.  Command line flag overrides YAML.
-- comment: if the mode is production, and the command-line mode is set, emit a warning message that the command line setting (X) has overridden the setting in
-the config (Y)
-- priority: medium-low
-
-
-
-
-### Task: Add an 'any' arg_restriction to the Rego reference implementation  (DONE)
-Functionally `{"type":"any", "key_path":"customer_id"}` is equivalent to
-`{"type":"prefix","key_path":"customer_id","data":""}` but the `any` tag
-is a little more clear that this will match any argument supplied.  Also,
-the `any` type works better for non-string arguments
-- priority: medium-low
-- comment: in practice, this is basically 'enable' for the MCP tool . Akin to what `permit.io` is offering
-
-
-
-
-### Task: Add preferred_username and acr claims to Principal (DONE)
-
-Two common OIDC claims are not currently extracted by the `oidc-verify` normalizer:
-
-- `preferred_username` — In Azure AD and many enterprise IdPs, `sub` is a pairwise
-  opaque per-application identifier, not the UPN. The human-readable, policy-writable
-  login name is `preferred_username`. OPA rules written against `alice@corp.com` need
-  this field, not `sub`.
-
-- `acr` (Authentication Context Class Reference) — A string describing the
-  authentication strength achieved, e.g. `"urn:mace:incommon:iap:silver"` or `"mfa"`.
-  Complements the existing `amr` (methods used) by giving policies a single level
-  signal: "deny privileged tools unless acr indicates MFA".
-
-Changes required: add `PreferredUsername string` and `ACR string` fields to both
-`shared.UserIdentity` and `shared.Principal`; extract them in
-`keep/identity.go:oidcVerifyingNormalizer.Normalize`; pass them through in
-`passthroughNormalizer.Normalize`; update the Rego reference implementation to
-expose both fields to policies.
-
-- priority: medium
-
-
-
-### Task: Allow multiple sandbox directories in Gate config (DONE)
-
-Currently `sandbox.directory` accepts a single path. Users with multiple unrelated
-working trees (e.g. `~/projects/client-a`, `~/projects/client-b`, `/var/data/exports`)
-have no clean way to fast-path all of them without opening up a broad common ancestor.
-
-Change `sandbox.directory` (string) to `sandbox.directories` (list of strings), keeping
-`sandbox.directory` as a backward-compatible alias for a single entry. All listed
-directories are equally trusted for fast-path; protected paths continue to take
-precedence over all of them. No per-directory policy — keep it simple.
-
-Affected code: `gate/config.go`, `gate/fastpath.go`, `gate/localfs/server.go`
-(`NewServer` takes `[]string`), and the `list_allowed_directories` tool response.
-
-- priority: medium
-
-
-
-### Task: Add distributed caching to the Portcullis-Guard (DONE)
-- [x] Redis token store — pending escalation requests and unclaimed tokens can be stored in Redis
-  (`token_store.backend: "redis"`), enabling shared state across multiple Guard instances and
-  survival across Guard restarts.  Sandbox docker-compose includes a Redis 7 container.
-- priority: high
-
-
-
-### Task: Enrich the capabilities of portcullis-localfs policy (DONE)
-Allow IT to configure the policy to allow for local writes, deletes, et al, to certain directory trees without checking
-agains Portcullis-Keep
-- priority: low
-
-
-### Task: Allow a managed-device signal (device cert, workload identity, or attestation) in addition to user token (DONE)
-Keep should be configured to validate the additional proof-of-identity information.
-Policy should require both: trusted user identity and trusted device posture for privileged tool usage.
-- priority: low
-
-
-
-### Task: Add mTLS support for Gate to Guard (DONE)
-So every path is protected in the same way that the Gate to Keep path is protected. Ideally we re-use the certs we created for Gate, create new certs for Guard and set up
-the config for Guard in a way that is consistent with the mTLS config for Keep. Then 
-write some tests to make sure it works.
-
-- priority: medium
-
-
-
-### Task: mTLS test coverage for Gate-Keep transport (DONE)
-
-Add test coverage for the mTLS authentication path between Gate and Keep.
-
-**Docker sandbox certs** — generate a self-signed CA, a Keep server cert, and a Gate client cert
-(all with 10-year expiry) and commit them under `docker/tls/` as test fixtures. Update
-`docker/keep-demo.yaml` and `docker/gate-config.yaml` (or equivalent) to mount and reference
-these certs so the full Docker Compose demo stack exercises real mTLS end-to-end.
-
-**Go unit tests** — add an in-memory test helper (using `crypto/x509` + `crypto/tls`) that
-generates a CA + server cert + client cert at test time. Use it to cover:
-- Keep server: rejects connections with no client cert
-- Keep server: rejects connections with a client cert signed by an untrusted CA
-- Keep server: accepts connections with a valid client cert signed by the configured `client_ca`
-- Gate client: `server_ca` is used to verify Keep's certificate
-- Gate client: connection fails when Keep presents a cert signed by an untrusted CA
-
-These two approaches complement each other: the Docker certs prove the real file-based config
-works end-to-end; the in-memory tests cover edge cases quickly without file dependencies.
-
-- priority: medium
-- comment: the Gate-side mTLS client setup already has basic validation tests in `forwarder_test.go`;
-  the Keep-side server setup and end-to-end handshake are the gaps
-
-
-
-
-------------------------------------------------
 

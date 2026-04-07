@@ -7,6 +7,17 @@
 # See tokens/README.md for the demo tokens and what each one can do.
 
 mode: dev
+
+# the key differences with multi-tenancy are:
+# 1) Portcullis runs standalone, and the Agents connect over the local network
+# 2) `escalate` responses from Keep are treated as Deny 
+# 3) multiple Agents can interact with Portcullis in parallel, each one supporting a 
+#    different human (the humans are the multiple tenants)
+# 
+# The primary use case is when you're operating a fleet of AI Agents, and you want to give them some
+# access to APIs or other tools, but you also want to make sure everything is captured, logged and
+# authorized properly
+#
 tenancy: multi
 
 server:
@@ -19,6 +30,12 @@ server:
           header: "Authorization"
   session_ttl: 3600
 
+#
+# No identity section provided, the identity credentials are provided by the Agent
+# with a header, and will be validated by Keep
+#
+
+
 peers:
   keep:
     endpoint: "http://keep:8080"
@@ -27,6 +44,9 @@ peers:
       credentials:
         bearer_token: "dev-secret-token"
 
+#
+# it doesnt make sense to allow a local filesystem tool in a multi-tenant environment
+#
 responsibility:
   tools:
     portcullis-localfs:
@@ -38,6 +58,12 @@ responsibility:
 operations:
   storage:
     backend: "memory"
+#    config:
+#      addr: "redis:6379"
+#      password: "portcullis-dev-secret"
+#      key_prefix: "portcullis:gate:"
+
+
   telemetry:
     exporter: "noop"
   logging:

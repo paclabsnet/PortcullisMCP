@@ -12,9 +12,8 @@ server:
         key:  "/etc/portcullis/keep.key"
         client_ca: "/etc/portcullis/client-ca.crt"   # for mTLS gate auth
       auth:
-        type: "bearer"
-        credentials:
-          bearer_token: ""  # optional shared secret
+        type: "mtls"
+
 
 identity:
   # Normalizer is required: "passthrough" (dev only) or "oidc-verify" (production)
@@ -64,8 +63,13 @@ responsibility:
       endpoints:
         approval_ui: "https://guard.internal.example.com"
 
-  admin:
-    token: "envvar://KEEP_ADMIN_TOKEN"
+#
+# In the future, we may want a way to reload the configuration at runtime, but
+# it is complex to get right, and easy enough to avoid with a rolling restart in 
+# a production environment
+#
+#  admin:
+#    token: "envvar://KEEP_ADMIN_TOKEN"
 
 operations:
   storage:

@@ -12,10 +12,17 @@ server:
       auth:
         type: "bearer"
         credentials:
-          bearer_token: "dev-secret-token"
+          bearer_token: "dev-secret-token"   # this could also reference a vault:// or an envvar://
 
+
+#
+#  hmac-verify :  use this when the Agent is given a JWT at startup representing the identity of the
+#                 user. The agent will send the JWT as a header, typically a bearer header, but it could
+#                 be a custom header, and that's supported as well.
+#
+#
 identity:
-  strategy: "oidc-verify"
+  strategy: "hmac-verify"
   config:
     issuer: "https://mock-idp.dev"
     jwks_url: "https://mock-idp.dev/jwt/.well-known/jwks.json"
@@ -43,16 +50,25 @@ responsibility:
     signing_key: "dev-keep-signing-secret"
     ttl: 86400
 
+
+# 
+# if the JWT identities from the Agents are in a more or less normal form, Keep
+# can automatically translate them from claims into a Principal that can be used
+# for authorization.
+#
+# However, if the claims are unusual, fear not - you can set up a webhook of your
+# own that can perform the translation.  The only drawback is that this translation
+# is relatively slow, so we offer a Principal cache to limit that translation overhead
+# 
+# In production, you'll want to use redis
+#
 operations:
   storage:
     backend: "memory"
-    config:
-      decision_log:
-        enabled: true
-        console: true
-        buffer_size: 100
-        flush_interval: 5
-        max_batch_size: 50
+#    config:
+#      addr: "redis:6379"
+#      password: "portcullis-dev-secret"
+#      key_prefix: "portcullis:keep:"
 
   telemetry:
     exporter: "noop"

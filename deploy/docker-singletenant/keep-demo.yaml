@@ -17,7 +17,7 @@ server:
       #   client_ca: "/tls/ca.crt"
 
 identity:
-  # Strategy: "oidc-file", "oidc-login", or "os"
+  # Strategy: "oidc-file", "oidc-login", "hmac-verify", or "os"
   strategy: "oidc-verify"
   config:
     issuer: "http://localhost:5556/dex"
@@ -26,6 +26,7 @@ identity:
     audiences:
       - "portcullis-keep"
       - "portcullis-gate"
+      - "portcullis-mcp"
     max_token_age_secs: 3600
 
 peers:
@@ -64,13 +65,6 @@ responsibility:
 operations:
   storage:
     backend: "memory"
-    config:
-      decision_log:
-        enabled: true
-        console: true
-        buffer_size: 100
-        flush_interval: 5
-        max_batch_size: 50
 
   telemetry:
     exporter: "noop"

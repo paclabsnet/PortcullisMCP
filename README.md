@@ -193,12 +193,14 @@ Then configure your MCP client to launch Gate. Example for Claude Desktop (`clau
 }
 ```
 
-Copy `config/gate-config.minimal.yaml` to `~/.portcullis/gate.yaml` and adjust paths. Gate starts automatically when the
-MCP client launches.
+Copy `config/gate-config.minimal-oidc-login.yaml` to `~/.portcullis/gate.yaml` and adjust paths.
+The AI Agent automatically starts Portcullis-Gate if properly configured.  
 
 Verify Gate is running via the management API at `http://localhost:7777`.
 
-### Full Demo Stack (Docker)
+You can also always use the `portcullis_status` tool inside your Agent to find out the status of the Portcullis system
+
+### Full Single-Tenant Demo Stack (Docker)
 
 This path runs the complete stack: OPA with a sample policy bundle, Keep, Guard, and two example MCP backends (a mock
 enterprise API and a web fetch server).

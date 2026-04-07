@@ -30,6 +30,12 @@ server:
       auth:
         type: "none"
 
+
+#
+#  when the user first starts interacting with the Agent, portcullis will tell the agent
+#  to call portcullis_login, which will provide a URL for the user to validate themselves
+#  against the IdP
+#
 identity:
   strategy: "oidc-login"
   config:
@@ -54,8 +60,16 @@ peers:
       token_api: "http://localhost:8445"
 
 responsibility:
-  workspace:
-    directory: "~" # files under home dir are fast-pathed (no Keep round-trip)
+  tools:
+    portcullis-localfs:
+      enabled: true
+      workspace:
+        directory: "~/sandbox"
+      forbidden:
+        directories:
+          - "~/.ssh"
+          - "~/.portcullis"
+          - "/etc"
   escalation:
     strategy: "proactive"
     token_store: "~/.portcullis/tokens.json"
