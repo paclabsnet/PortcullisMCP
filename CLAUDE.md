@@ -32,4 +32,4 @@ PortcullisMCP. For the system architecture and component details, see [ARCHITECT
 - **Verify:** Always run `go test` after making changes to ensure no regressions.
 - **Security:** Never hardcode secrets. If a test needs a secret, use a mock or a placeholder.
 - **Documentation:** If you add a new interface or significant component, update `ARCHITECTURE.md` accordingly.
-- **PR Readiness:** When asked to prepare a PR, ensure `TODO.md` is updated and all local tests pass.
+- **PR Readiness:** When asked to prepare a PR, ensure all local tests pass.
