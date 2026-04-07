@@ -5,6 +5,10 @@ pre-generated 10-year JWTs signed by mock-idp.dev (RS256). If they expire or
 you need to regenerate them, visit https://mock-idp.dev and use the claim sets
 below.
 
+### Starting Multitenant Docker
+in the deploy/docker-multitenant directory:
+`docker compose up --build`
+
 ## Token files
 
 | File | Sub and Email | Groups | Access |
@@ -40,7 +44,7 @@ MCP client config (Claude Desktop / similar):
 ```json
 {
   "mcpServers": {
-    "portcullis-alice": {
+    "portcullis": {
       "url": "http://localhost:9090/mcp",
       "headers": {
         "Authorization": "Bearer <contents of alice.jwt>"

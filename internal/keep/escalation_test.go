@@ -68,14 +68,14 @@ func TestEscalationSigner_Sign(t *testing.T) {
 	}
 
 	// Parse and verify the signed token.
-	token, err := jwt.ParseWithClaims(tokenStr, &escalationRequestClaims{}, func(t *jwt.Token) (any, error) {
+	token, err := jwt.ParseWithClaims(tokenStr, &shared.EscalationRequestClaims{}, func(t *jwt.Token) (any, error) {
 		return []byte("test-signing-key"), nil
 	})
 	if err != nil {
 		t.Fatalf("failed to parse signed token: %v", err)
 	}
 
-	claims, ok := token.Claims.(*escalationRequestClaims)
+	claims, ok := token.Claims.(*shared.EscalationRequestClaims)
 	if !ok || !token.Valid {
 		t.Fatal("expected valid token claims")
 	}
@@ -85,8 +85,8 @@ func TestEscalationSigner_Sign(t *testing.T) {
 	if claims.UserID != "user@example.com" {
 		t.Errorf("UserID = %q, want user@example.com", claims.UserID)
 	}
-	if claims.UserDisplayName != "Test User" {
-		t.Errorf("UserDisplayName = %q, want Test User", claims.UserDisplayName)
+	if claims.DisplayName != "Test User" {
+		t.Errorf("DisplayName = %q, want Test User", claims.DisplayName)
 	}
 	if claims.Server != "github" {
 		t.Errorf("Server = %q, want github", claims.Server)
@@ -103,8 +103,8 @@ func TestEscalationSigner_Sign(t *testing.T) {
 	if claims.ExpiresAt == nil || claims.ExpiresAt.Before(time.Now()) {
 		t.Error("expected future expiry in signed token")
 	}
-	if len(claims.EscalationScope) == 0 || claims.EscalationScope[0]["resource"] != "repo:example" {
-		t.Errorf("EscalationScope[0].resource = %v, want repo:example", claims.EscalationScope)
+	if len(claims.Scope) == 0 || claims.Scope[0]["resource"] != "repo:example" {
+		t.Errorf("Scope[0].resource = %v, want repo:example", claims.Scope)
 	}
 }
 
@@ -122,13 +122,13 @@ func TestEscalationSigner_Sign_DefaultTTL(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	token, err := jwt.ParseWithClaims(tokenStr, &escalationRequestClaims{}, func(t *jwt.Token) (any, error) {
+	token, err := jwt.ParseWithClaims(tokenStr, &shared.EscalationRequestClaims{}, func(t *jwt.Token) (any, error) {
 		return []byte("k"), nil
 	})
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
-	claims := token.Claims.(*escalationRequestClaims)
+	claims := token.Claims.(*shared.EscalationRequestClaims)
 
 	expected := time.Now().Add(24 * time.Hour)
 	diff := claims.ExpiresAt.Time.Sub(expected)
@@ -149,10 +149,10 @@ func TestEscalationSigner_Sign_CustomTTL(t *testing.T) {
 	p := shared.Principal{UserID: "u@example.com"}
 
 	tokenStr, _, _ := signer.Sign(NewAuthorizedRequest(req, p), "", nil)
-	token, _ := jwt.ParseWithClaims(tokenStr, &escalationRequestClaims{}, func(t *jwt.Token) (any, error) {
+	token, _ := jwt.ParseWithClaims(tokenStr, &shared.EscalationRequestClaims{}, func(t *jwt.Token) (any, error) {
 		return []byte("k"), nil
 	})
-	claims := token.Claims.(*escalationRequestClaims)
+	claims := token.Claims.(*shared.EscalationRequestClaims)
 
 	expected := time.Now().Add(2 * time.Hour)
 	diff := claims.ExpiresAt.Time.Sub(expected)

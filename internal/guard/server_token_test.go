@@ -23,6 +23,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 )
 
 // ---- handleTokenUnclaimedList -----------------------------------------------
@@ -124,7 +126,7 @@ func TestHandleTokenDeposit_InvalidJWT(t *testing.T) {
 
 func TestHandleTokenDeposit_ValidJWT_CreatesUnclaimedToken(t *testing.T) {
 	s := makeServer(t)
-	pendingJWT := signKeepJWTWithID(t, "deposit-jti-123", escalationRequestClaims{
+	pendingJWT := signKeepJWTWithID(t, "deposit-jti-123", shared.EscalationRequestClaims{
 		UserID: "user@example.com",
 		Server: "test-server",
 		Tool:   "test-tool",
@@ -165,7 +167,7 @@ func TestHandleTokenDeposit_ValidJWT_CreatesUnclaimedToken(t *testing.T) {
 
 func TestHandleTokenDeposit_UserIDMismatch(t *testing.T) {
 	s := makeServer(t)
-	pendingJWT := signKeepJWT(t, escalationRequestClaims{
+	pendingJWT := signKeepJWT(t, shared.EscalationRequestClaims{
 		UserID: "alice@example.com",
 		Server: "test-server",
 		Tool:   "test-tool",

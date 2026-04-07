@@ -31,8 +31,9 @@ server:
   session_ttl: 3600
 
 #
-# No identity section provided, the identity credentials are provided by the Agent
-# with a header, and will be validated by Keep
+# In multi-tenant:
+#   No identity section provided, the identity credentials are provided by the Agent
+#   with a header, and will be validated by Keep
 #
 
 

@@ -318,6 +318,27 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 				}, nil, nil
 			},
 		)
+
+		mcp.AddTool(g.server,
+			&mcp.Tool{
+				Name:        "portcullis_refresh",
+				Description: "Refreshes the list of available tools from Keep and returns the updated tool list. Use this after backend services are added, removed, or restarted.",
+			},
+			func(ctx context.Context, _ *mcp.CallToolRequest, _ any) (*mcp.CallToolResult, any, error) {
+				names, err := g.refreshKeepTools(ctx)
+				if err != nil {
+					return &mcp.CallToolResult{
+						IsError: true,
+						Content: []mcp.Content{&mcp.TextContent{Text: "Failed to refresh tools from Keep: " + err.Error()}},
+					}, nil, nil
+				}
+				msg := fmt.Sprintf("Tool list refreshed successfully. %d tools available from Keep:\n- %s",
+					len(names), strings.Join(names, "\n- "))
+				return &mcp.CallToolResult{
+					Content: []mcp.Content{&mcp.TextContent{Text: msg}},
+				}, nil, nil
+			},
+		)
 	}
 
 	// Double-guard: skip registration even if localFSSession is somehow non-nil
@@ -339,21 +360,24 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 	return g, nil
 }
 
-func (g *Gate) refreshKeepTools(ctx context.Context) {
+func (g *Gate) refreshKeepTools(ctx context.Context) ([]string, error) {
 	keepTools, err := g.forwarder.ListTools(ctx, g.identity.Get(ctx), g.escalations.All())
 	if err != nil {
 		slog.Warn("fetch tool list from keep failed", "error", err)
 		if g.cfg.Identity.Strategy != "oidc-login" {
 			g.stateMachine.SetSystemError(SubstateInvalid, "Keep is unreachable — tool list may be incomplete", err.Error())
 		}
-		return
+		return nil, err
 	}
 
+	names := make([]string, 0, len(keepTools))
 	for _, at := range keepTools {
 		g.toolServerMap[at.Tool.Name] = at.ServerName
 		g.registerTool(at.Tool)
+		names = append(names, at.Tool.Name)
 	}
 	slog.Info("registered keep tools", "count", len(keepTools))
+	return names, nil
 }
 
 func (g *Gate) handleLoginTool(ctx context.Context, force bool) string {

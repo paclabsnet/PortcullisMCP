@@ -16,13 +16,14 @@ server:
 
 
 #
-#  hmac-verify :  use this when the Agent is given a JWT at startup representing the identity of the
-#                 user. The agent will send the JWT as a header, typically a bearer header, but it could
-#                 be a custom header, and that's supported as well.
+#  oidc-verify :  use this when the Agent is given a JWT at startup representing the identity of the
+#                 user. The agent will send the JWT as a bearer token, and Keep will verify it against
+#                 the IdP's JWKS endpoint (RS256 / asymmetric keys).
 #
+#  hmac-verify:  Use this when the Agent is given a JWT at startup that is signed with a secret key
 #
 identity:
-  strategy: "hmac-verify"
+  strategy: "oidc-verify"
   config:
     issuer: "https://mock-idp.dev"
     jwks_url: "https://mock-idp.dev/jwt/.well-known/jwks.json"

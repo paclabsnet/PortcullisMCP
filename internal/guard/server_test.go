@@ -61,7 +61,7 @@ func makeServer(t *testing.T) *Server {
 }
 
 // signKeepJWT signs an escalation request JWT exactly as Keep would.
-func signKeepJWT(t *testing.T, claims escalationRequestClaims, expiry time.Time) string {
+func signKeepJWT(t *testing.T, claims shared.EscalationRequestClaims, expiry time.Time) string {
 	t.Helper()
 	if claims.RegisteredClaims.Issuer == "" {
 		claims.RegisteredClaims.Issuer = shared.ServiceKeep
@@ -76,7 +76,7 @@ func signKeepJWT(t *testing.T, claims escalationRequestClaims, expiry time.Time)
 	return signed
 }
 
-func signKeepJWTWithID(t *testing.T, id string, claims escalationRequestClaims, expiry time.Time) string {
+func signKeepJWTWithID(t *testing.T, id string, claims shared.EscalationRequestClaims, expiry time.Time) string {
 	t.Helper()
 	claims.RegisteredClaims.ID = id
 	return signKeepJWT(t, claims, expiry)
@@ -100,7 +100,7 @@ func TestNewServer_MissingKeys(t *testing.T) {
 
 func TestVerifyRequest_Valid(t *testing.T) {
 	s := makeServer(t)
-	tokenStr := signKeepJWT(t, escalationRequestClaims{
+	tokenStr := signKeepJWT(t, shared.EscalationRequestClaims{
 		UserID: "alice@corp.com",
 		Server: "github",
 		Tool:   "push",
@@ -120,12 +120,12 @@ func TestIssueEscalationToken_Claims(t *testing.T) {
 	s := makeServer(t)
 
 	scope := []map[string]any{{"repo": "example/repo"}}
-	requestClaims := &escalationRequestClaims{
+	requestClaims := &shared.EscalationRequestClaims{
 		UserID:          "alice@corp.com",
-		UserDisplayName: "Alice",
+		DisplayName: "Alice",
 		Server:          "github",
 		Tool:            "create_issue",
-		EscalationScope: scope,
+		Scope:           scope,
 	}
 
 	tokenStr, _, err := s.issueEscalationToken(requestClaims, "test-jti-123", scope)
@@ -162,7 +162,7 @@ func TestHandleApprovePage_MissingToken(t *testing.T) {
 func TestHandleApproveAction_ValidApproval(t *testing.T) {
 	s := makeServer(t)
 
-	tokenStr := signKeepJWT(t, escalationRequestClaims{
+	tokenStr := signKeepJWT(t, shared.EscalationRequestClaims{
 		UserID: "alice@corp.com",
 		Server: "github",
 		Tool:   "push",
@@ -182,7 +182,7 @@ func TestHandleApproveAction_ValidApproval(t *testing.T) {
 func TestHandlePendingStore_Valid(t *testing.T) {
 	s := makeServer(t)
 	jti := "test-pending-jti"
-	jwtStr := signKeepJWTWithID(t, jti, escalationRequestClaims{
+	jwtStr := signKeepJWTWithID(t, jti, shared.EscalationRequestClaims{
 		UserID: "alice@corp.com",
 	}, time.Now().Add(time.Hour))
 

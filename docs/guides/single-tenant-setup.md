@@ -27,4 +27,28 @@ Here's how I exercise the system using this model:
 
 3. Start up your Agent.  It should launch the Portcullis MCP automatically
 
-4. You can ask your Agent what tools are available.  Portcullis includes 
+4. You can ask your Agent what tools are available.  Portcullis automatically includes 
+   - `portcullis_login` - for logging into an oidc provider. This only applies if Gate is configured for login
+   - `portcullis_status` - this will return a status report about the portcullis system, with hints for how to troubleshoot if something has gone wrong
+   - `portcullis_refresh` - sometimes, the list of tools will be incomplete at startup, this is a way to refresh the list
+
+Once you're logged in (or immediately if login isn't required), Portcullis-Gate will fetch the list of tools supported by Keep. That is your list of tools
+
+
+5. Do stuff
+
+Assuming you have logged in, or bypassed login, you should now be able to interact with Portcullis and the MCPs behind it.
+
+One simple example:
+
+`> get customer 312`  *sometimes "use portcullis to get customer 312*
+
+`> query orders for customer 312`
+
+`> set the status of order ABC-123 to 'SHIPPED'`
+
+That last one should trigger an escalation, where you'll be invited to click a link which opens up Portcullis-Guard.  Guard will then allow you to approve the escalated authority. If you do so, you can repeat the previous command and it should immediately work.
+
+
+
+

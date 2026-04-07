@@ -24,18 +24,6 @@ import (
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 )
 
-// escalationRequestClaims are the JWT claims Keep embeds in escalation request tokens.
-// Guard and enterprise workflow plugins decode these to render approval pages.
-type escalationRequestClaims struct {
-	jwt.RegisteredClaims
-	UserID          string         `json:"uid"`
-	UserDisplayName string         `json:"uname,omitempty"`
-	Server          string         `json:"srv"`
-	Tool            string         `json:"tool"`
-	Reason          string         `json:"reason"`
-	EscalationScope []map[string]any `json:"scope,omitempty"`
-}
-
 // EscalationSigner creates Keep-signed escalation request JWTs.
 // Workflow plugins embed these JWTs in approval URLs or workflow tickets.
 // If no signing key is configured, Sign returns an empty string (no JWT).
@@ -70,19 +58,19 @@ func (s *EscalationSigner) Sign(req AuthorizedRequest, reason string, scope []ma
 	defer s.mu.Unlock()
 	now := time.Now()
 	jti = uuid.NewString()
-	claims := escalationRequestClaims{
+	claims := shared.EscalationRequestClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			ID:        jti,
 			Issuer:    shared.ServiceKeep,
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(now.Add(s.ttl)),
 		},
-		UserID:          req.Principal.UserID,
-		UserDisplayName: req.Principal.DisplayName,
-		Server:          req.ServerName,
-		Tool:            req.ToolName,
-		Reason:          reason,
-		EscalationScope: scope,
+		UserID:      req.Principal.UserID,
+		DisplayName: req.Principal.DisplayName,
+		Server:      req.ServerName,
+		Tool:        req.ToolName,
+		Reason:      reason,
+		Scope:       scope,
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	signed, signErr := token.SignedString(s.key)

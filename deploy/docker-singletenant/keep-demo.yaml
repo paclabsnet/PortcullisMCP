@@ -29,11 +29,11 @@ identity:
       - "portcullis-mcp"
     max_token_age_secs: 3600
 
-peers:
-  guard:
-    endpoints:
-      approval_ui: "http://localhost:8444"
-      token_api: "http://guard:8445"
+# peers:
+#  guard:
+#    endpoints:
+#      approval_ui: "http://localhost:8444"
+#      token_api: "http://guard:8445"
 
 responsibility:
   policy:
@@ -56,11 +56,11 @@ responsibility:
     signing_key: "dev-keep-signing-secret"
     ttl: 86400
 
-  workflow:
-    strategy: "url"
-    config:
-      endpoints:
-        approval_ui: "http://localhost:8444"
+#  workflow:
+#    strategy: "url"
+#    config:
+#      endpoints:
+#        approval_ui: "http://localhost:8444"
 
 operations:
   storage:

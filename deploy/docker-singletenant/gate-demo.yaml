@@ -26,12 +26,56 @@ server:
 
 
 #
-# You can have both a management_ui (for the human) and the mcp endpoint (for the Agents)
+# You can have both a management_ui (for the human) and the mcp endpoint (for the Agents).
+# Uncomment the block below to enable the HTTP MCP endpoint alongside the management UI.
+#
+# When using HTTP transport, configure your MCP client to connect to Gate's URL instead
+# of launching it via stdio. No Authorization header is needed in single-tenant mode —
+# identity is established via oidc-login (or os) at the Gate level.
+#
+# DOES NOT WORK: Claude Desktop (claude_desktop_config.json):
+#
+#    "portcullis": {
+#      "command": "npx",
+#      "args": [
+#        "-y",
+#        "mcp-remote",
+#        "http://localhost:9090/mcp"
+#      ]
+#    }
+#
+#   I tried the above, and claude wasn't able to log in.
+#
+#
+# Claude Code (.mcp.json in project root, or ~/.claude.json).   HAVE NOT TRIED THIS
+#
+#   {
+#     "mcpServers": {
+#       "portcullis": {
+#         "type": "http",
+#         "url": "http://localhost:9090/mcp"
+#       }
+#     }
+#   }
 #
 #server:
 #  endpoints:
 #    mcp:
 #      listen: "0.0.0.0:9090"
+
+
+#
+# for claude desktop to use the stdio option:
+#
+#  "mcpServers": {
+#      "portcullis": {
+#         "command": "portcullis-gate",
+#         "args": ["-config", "C:/users/johnb/.portcullis/gate.yaml"]
+#      }
+#
+#  },
+#
+#  WORKS GREAT
 
 
 

@@ -17,6 +17,7 @@ package shared
 import (
 	"errors"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -87,6 +88,20 @@ type Principal struct {
 	ACR               string   `json:"acr,omitempty"`                // OIDC ACR claim, e.g. "mfa"
 	TokenExpiry       int64    `json:"token_expiry,omitempty"`
 	SourceType        string   `json:"source_type"`
+}
+
+// EscalationRequestClaims are the JWT claims Keep embeds in escalation request tokens.
+// Guard and enterprise workflow plugins decode these to render approval pages and
+// issue escalation tokens. Both Keep (signer) and Guard (verifier) use this type
+// to ensure the JSON field names are always in agreement.
+type EscalationRequestClaims struct {
+	jwt.RegisteredClaims
+	UserID          string           `json:"user_id"`
+	DisplayName     string           `json:"display_name,omitempty"`
+	Server          string           `json:"server"`
+	Tool            string           `json:"tool"`
+	Reason          string           `json:"reason"`
+	Scope           []map[string]any `json:"scope,omitempty"`
 }
 
 // EscalationToken is a pre-authorization JWT the user received out-of-band.

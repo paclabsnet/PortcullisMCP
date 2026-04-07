@@ -295,8 +295,8 @@ func (s *Server) machineAuthMiddleware(next http.HandlerFunc) http.Handler {
 }
 
 // verifyRequest parses and verifies a Keep-signed escalation request JWT.
-func (s *Server) verifyRequest(tokenStr string) (*escalationRequestClaims, error) {
-	token, err := jwt.ParseWithClaims(tokenStr, &escalationRequestClaims{}, func(t *jwt.Token) (any, error) {
+func (s *Server) verifyRequest(tokenStr string) (*shared.EscalationRequestClaims, error) {
+	token, err := jwt.ParseWithClaims(tokenStr, &shared.EscalationRequestClaims{}, func(t *jwt.Token) (any, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 		}
@@ -305,7 +305,7 @@ func (s *Server) verifyRequest(tokenStr string) (*escalationRequestClaims, error
 	if err != nil {
 		return nil, fmt.Errorf("invalid token: %w", err)
 	}
-	claims, ok := token.Claims.(*escalationRequestClaims)
+	claims, ok := token.Claims.(*shared.EscalationRequestClaims)
 	if !ok || !token.Valid {
 		return nil, fmt.Errorf("invalid token claims")
 	}
@@ -313,7 +313,7 @@ func (s *Server) verifyRequest(tokenStr string) (*escalationRequestClaims, error
 }
 
 // issueEscalationToken signs a new escalation token granting scope.
-func (s *Server) issueEscalationToken(claims *escalationRequestClaims, requestJTI string, scope []map[string]any) (string, time.Time, error) {
+func (s *Server) issueEscalationToken(claims *shared.EscalationRequestClaims, requestJTI string, scope []map[string]any) (string, time.Time, error) {
 	now := time.Now()
 	expiry := now.Add(s.ttl)
 
@@ -322,7 +322,7 @@ func (s *Server) issueEscalationToken(claims *escalationRequestClaims, requestJT
 		jti = uuid.NewString()
 	}
 
-	actor := claims.UserDisplayName
+	actor := claims.DisplayName
 	if actor == "" {
 		actor = claims.UserID
 	}
@@ -374,10 +374,10 @@ func (s *Server) handleApprovePage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	scopeJSON, _ := json.MarshalIndent(claims.EscalationScope, "", "  ")
+	scopeJSON, _ := json.MarshalIndent(claims.Scope, "", "  ")
 	data := approvalPageData{
 		UserID:          claims.UserID,
-		UserDisplayName: claims.UserDisplayName,
+		UserDisplayName: claims.DisplayName,
 		Server:          claims.Server,
 		Tool:            claims.Tool,
 		Reason:          claims.Reason,
@@ -410,7 +410,7 @@ func (s *Server) handleApproveAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	scope := claims.EscalationScope
+	scope := claims.Scope
 	if overrideStr := r.FormValue("scope_override"); overrideStr != "" {
 		if err := shared.CheckLen(overrideStr, "scope_override", s.cfg.Limits.MaxScopeOverrideBytes); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -563,7 +563,7 @@ func (s *Server) handleTokenDeposit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	escalationToken, expiry, err := s.issueEscalationToken(claims, claims.ID, claims.EscalationScope)
+	escalationToken, expiry, err := s.issueEscalationToken(claims, claims.ID, claims.Scope)
 	if err != nil {
 		http.Error(w, "failed to generate escalation token", http.StatusInternalServerError)
 		return

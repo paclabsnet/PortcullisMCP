@@ -189,17 +189,6 @@ type RedisConfig struct {
 	KeyPrefix     string `yaml:"key_prefix" mapstructure:"key_prefix"`
 }
 
-// Internal JWT claim types used by Guard.
-type escalationRequestClaims struct {
-	jwt.RegisteredClaims
-	UserID          string           `json:"user_id"`
-	UserDisplayName string           `json:"user_display_name"`
-	Server          string           `json:"server"`
-	Tool            string           `json:"tool"`
-	Reason          string           `json:"reason"`
-	EscalationScope []map[string]any `json:"escalation_scope"`
-}
-
 type portcullisClaims struct {
 	Reason          string           `json:"reason"`
 	ArgRestrictions []map[string]any `json:"arg_restrictions"`

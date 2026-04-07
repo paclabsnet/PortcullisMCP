@@ -73,3 +73,10 @@ The Multi-tenant Gate is a lightweight pass-through. It performs identity extrac
 
 ### "Can I mix modes?"
 No. Each Portcullis-Gate instance is configured as either `tenancy: single` or `tenancy: multi`. A single instance cannot serve both desktop `stdio` agents and remote `HTTP` agents simultaneously. This ensures that security boundaries and resource limits are clearly defined for each deployment.
+
+
+### How do I start the multitenant Docker sandbox
+
+1. move to the deploy/docker-multitenant directory
+2. `docker compose up --build`
+
