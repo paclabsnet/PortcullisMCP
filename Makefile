@@ -14,7 +14,10 @@ GATE_BIN  := bin/portcullis-gate$(BIN_EXT)
 KEEP_BIN  := bin/portcullis-keep$(BIN_EXT)
 GUARD_BIN := bin/portcullis-guard$(BIN_EXT)
 
-VERSION     := $(shell git describe --tags --always --dirty 2>/dev/null || echo "0.4.1-dev")
+PLATFORMS := windows/amd64 windows/arm64 darwin/amd64 darwin/arm64 linux/amd64 linux/arm64
+COMPONENTS := gate keep guard
+
+VERSION     := $(shell git describe --tags --exact-match 2>/dev/null || echo "0.4.1-dev")
 VERSION_PKG := github.com/paclabsnet/PortcullisMCP/internal/version
 LDFLAGS     := -ldflags "-X $(VERSION_PKG).Version=$(VERSION)"
 
@@ -22,7 +25,7 @@ LDFLAGS     := -ldflags "-X $(VERSION_PKG).Version=$(VERSION)"
 deploy/docker-singletenant/.env:
 	@echo "VERSION=$(VERSION)" > deploy/docker-singletenant/.env
 
-# Build all binaries into bin/
+# Build all binaries for the current platform
 build: deploy/docker-singletenant/.env
 	@echo "Building portcullis-gate..."
 	@go build $(LDFLAGS) -o $(GATE_BIN) ./cmd/portcullis-gate
@@ -31,6 +34,37 @@ build: deploy/docker-singletenant/.env
 	@echo "Building portcullis-guard..."
 	@go build $(LDFLAGS) -o $(GUARD_BIN) ./cmd/portcullis-guard
 	@echo "Build complete ($(VERSION)). Binaries in bin/"
+
+# Template for generating cross-compilation targets
+# $(1): OS, $(2): ARCH, $(3): COMPONENT
+define BUILD_TEMPLATE
+bin/dist/portcullis-$(3)-$(1)-$(2)$(if $(filter windows,$(1)),.exe,):
+	@mkdir -p bin/dist
+	@echo "Building $(3) for $(1)/$(2)..."
+	@GOOS=$(1) GOARCH=$(2) go build $$(LDFLAGS) -o $$@ ./cmd/portcullis-$(3)
+endef
+
+# Generate all targets
+$(foreach os,windows darwin linux, \
+	$(foreach arch,amd64 arm64, \
+		$(foreach comp,$(COMPONENTS), \
+			$(eval $(call BUILD_TEMPLATE,$(os),$(arch),$(comp))) \
+		) \
+	) \
+)
+
+# New build-all depends on all generated binaries
+ALL_BINARIES := $(foreach os,windows darwin linux, \
+	$(foreach arch,amd64 arm64, \
+		$(foreach comp,$(COMPONENTS), \
+			bin/dist/portcullis-$(comp)-$(os)-$(arch)$(if $(filter windows,$(os)),.exe,) \
+		) \
+	) \
+)
+
+# Cross-compile for all major platforms
+build-all: deploy/docker-singletenant/.env $(ALL_BINARIES)
+	@echo "Multi-platform build complete. Binaries in bin/dist/"
 
 # Install portcullis-gate to GOPATH/bin so it can be referenced in MCP client config
 install: build
