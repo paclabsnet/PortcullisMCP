@@ -6,7 +6,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-ARG VERSION=0.4.1-dev
+ARG VERSION=0.4.2-dev
 RUN CGO_ENABLED=0 go build -ldflags "-X github.com/paclabsnet/PortcullisMCP/internal/version.Version=${VERSION}" -o /out/portcullis-gate   ./cmd/portcullis-gate
 RUN CGO_ENABLED=0 go build -ldflags "-X github.com/paclabsnet/PortcullisMCP/internal/version.Version=${VERSION}" -o /out/portcullis-keep   ./cmd/portcullis-keep
 RUN CGO_ENABLED=0 go build -ldflags "-X github.com/paclabsnet/PortcullisMCP/internal/version.Version=${VERSION}" -o /out/portcullis-guard  ./cmd/portcullis-guard
