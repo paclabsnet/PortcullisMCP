@@ -27,7 +27,7 @@ services:
       dockerfile: deploy/docker-singletenant/Dockerfile
       target: keep
       args:
-        VERSION: ${VERSION:-0.4.1-dev}
+        VERSION: ${VERSION:-0.4.1}
     container_name: portcullis-keep
     ports:
       - "8080:8080"
@@ -58,7 +58,7 @@ services:
       dockerfile: deploy/docker-singletenant/Dockerfile
       target: guard
       args:
-        VERSION: ${VERSION:-0.4.1-dev}
+        VERSION: ${VERSION:-0.4.1}
     container_name: portcullis-guard
     ports:
       - "8444:8444"  # UI listener (human approval page)

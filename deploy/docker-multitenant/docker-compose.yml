@@ -23,7 +23,7 @@ services:
       dockerfile: deploy/docker-multitenant/Dockerfile
       target: keep
       args:
-        VERSION: ${VERSION:-0.4.1-dev}
+        VERSION: ${VERSION:-0.4.1}
     container_name: portcullis-mt-keep
     volumes:
       - ./keep-demo.yaml:/etc/portcullis/keep.yaml:ro
@@ -41,7 +41,7 @@ services:
       dockerfile: deploy/docker-multitenant/Dockerfile
       target: gate
       args:
-        VERSION: ${VERSION:-0.4.1-dev}
+        VERSION: ${VERSION:-0.4.1}
     container_name: portcullis-mt-gate
     ports:
       - "9090:9090"
