@@ -59,12 +59,7 @@ for you, it should be straightforward to adapt.
 If you do want to use OPA, these tests use the open source tool 'raygun' https://github.com/paclabsnet/raygun
 to validate the behavior of the policy logic
 
-There are two different implementations of the policy, for the benefit of the reader.
-
-One uses custom rego rules
-
-The other uses a table-driven data element, which does a fair amount of the grunt
-work for you, but will probably not scale to the most complex scenarios.
+For the benefit of the reader, we offer a table-driven data element, which does a fair amount of the grunt work for you, but will probably not scale to the most complex scenarios.
 
 **Tabular -> Custom**
 The current setup of the rules is to use the tabular rules first, and if there's no
@@ -76,6 +71,40 @@ You do *not* have to use the approach I've written to implement policy. You are 
 to implement policy any way you want.   The approach I offer makes it straightforward
 to offer the escalation and workflow options, but if you don't need those, you can
 enable and disable specific MCPs and tools with minimal policy logic.
+
+### How it Works
+Basically, the first "clever" bit is in the `arg_restrictions` JSON objects, which describe tests in JSON. We apply these tests to incoming MCP requests, and if a test matches the input, then the rule (allow/deny/escalate) applies.   Since it's conceivable that more than one test (and more than one rule) can be true,
+we use a simple guide of:   any deny == deny. If no deny, any allow == allow.  If no deny or allow, any escalate == escalate.  And finally, to fail closed, if there are no rules that apply, it's a deny.
+
+#### How escalation works
+But then there's the JWTs that can be attached to the input.  If you decode the JWTs, you'll find... more `arg_restrictions` .  And in the tabular logic, if a test from `escalate` ruleset matches, there's a second test, where we check to see if there's a test in the JWT that *also* matches.  If there is, then instead of an `escalate`, we treat it as an `allow`.  
+
+Why?  Because the presence of the test in the signed JWT is evidence that a human approved the test. which is the whole point of this exercise.  
+
+"But can the AI reuse that same token to cause mischief". **only if the human is deliberately expansive**. 
+
+Consider a scenario:
+
+**Updates to a customer's name require escalation**
+
+The AI attempts to rename Customer 123 to 'Joe Williams'. This hits a test in the `escalate` ruleset for the `update_customer` MCP tool. But the rule isn't (typically) specifically about Customer 123!  It's about *any* customer. Customer 123 is part of the set of 'any', so the system returns `escalate`. 
+
+Now a human sees this escalation request, and approves it. But what has the human approved? a test that is specifically about using the `update_customer` tool on `customer_id: 123` .  If the AI tried to use this token to rename customer 222, it wouldn't work! Because the test in the JWT is specifically about customer_id 123.  
+
+Could the AI rename customer 123 a second time?  Yes.  Unless the JWT is revoked, or expires.   But the AI can't rename any other customer. 
+
+**You said something about 'expansive'**
+
+The human doesn't have to limit the test to customer_id: 123.  They can (and sometimes should) make the approval test broader.  Conceivably even broadening the scope to *any* customer.  That's probably a good idea sometimes (for example, changing the status of a bunch of orders from 'awaiting pickup' to 'shipped' , without a specific escalation for each order).
+
+So the human has the choice - limit the blast radius, or make it wider.  Their choice.
+
+#### Special Case: the 'any' test
+
+The one counterintutive test is the 'any' test.  If you set the escalate ruleset to include escalate for *any* customer_id, well, then, if the human approves it, they're approving a test that will mirror that *any*. Which means that any customer id will be accepted.
+
+There's an argument that at Portcullis-Guard, we should replace *any* with a more restrictive test instead. That is a discussion worth having.  
+
 
 ## Testing
 
@@ -90,9 +119,8 @@ more modularly, call out to custom policy in a different package) .
 
 ## Creating your own escalation tokens
 
-For simplicity, and to demonstrate the concept, I just implemented shared-secret JWTs. There's
-no reason that the JWTs couldn't use PK signatures, it's just a hassle for me to get that set up
-for a PoC.
+For simplicity, and to demonstrate the concept, my examples use shared-secret JWTs. There's
+no reason that the JWTs couldn't use PK signatures. If you look at mock-idp.dev, you'll be able to create JWTs signed by mock-idp.dev's private keys. We already use this mechanism for some of the oidc-tokens, but with some modest code updates, we can make Guard sign the e-tokens with a private key.  
 
 
 

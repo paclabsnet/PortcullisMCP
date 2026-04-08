@@ -700,3 +700,29 @@ We've prepared a specific document to help here:
 [Single vs Multi-Tenant Portcullis-Gate](docs\single-vs-multi-tenant-portcullis-gate.md)
 
 
+
+
+
+# Final Notes
+
+## Acknowledgements
+
+1. This never would have come together without Open Policy Agent and Rego. So I owe quite a bit of thanks to those folks for their hard work.
+2. I owe a little bit of thanks to XACML, which gave me the inspiration to think of tests as simple blocks of JSON.
+3. I owe a little bit of thanks to IronCurtain, which inspired me to think about how to scale that concept to an enterprise level.
+4. I owe thanks to Mark Rogge of EnforceAuth, who produced a diagram that included the concept of an MCP proxy, which was the first time I started thinking about that concept, and which is obviously critical to the implementation
+5. Thanks to my friends, family (especially Patrick, Dylan and Sunny) and business partner (Ed), who have all been patient with me as I've worked on this.
+
+
+## Testing
+
+1. I have tested a bunch of different configurations and failure scenarios, but I haven't tested all of them. 
+2. I have not tested any HA scenarios. I don't know why this solution wouldn't work in a clustered environment, and those are a PITA to get set up.
+3. I have not yet tested the `hmac-verify` path for identity
+
+I'm sure there will be bugs and weaknesses that need to be found and fixed. That's why this is in version 0.4.1 instead of 1.0  .  We'll get there, but I'd like to let it simmer for a bit.
+
+
+## AI Coding Agents
+
+The core concepts in this design are mine, as well as all of the Rego and the Raygun tests.  I have written a *lot* of code in my life, and if I've learned anything, I've learned that enterprise security code is some of the most tedious and thankless code that ever was produced.  So I was very pleased to find that a combination of Claude, Copilot and Gemini were able to take over a lot of the drudgery of getting the logging just right, and the error handling, and the cryptographic processing, and the threat analysis, and the config file validation, the marshalling, input sanitization, etc, etc.  I no longer have the patience to implement all of that by hand. 
