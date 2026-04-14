@@ -32,6 +32,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
+	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
 	"github.com/paclabsnet/PortcullisMCP/internal/version"
 )
 
@@ -43,10 +44,13 @@ type MCPBackend interface {
 
 // Router maintains MCP client sessions to all registered backend servers.
 type Router struct {
-	mu        sync.Mutex
-	backends  map[string]*backendConn
-	cacheMu   sync.RWMutex
-	toolCache []shared.AnnotatedTool
+	mu            sync.Mutex
+	backends      map[string]*backendConn
+	cacheMu       sync.RWMutex
+	toolCache     []shared.AnnotatedTool
+	exchangeMu    sync.RWMutex
+	exchangers    map[string]IdentityExchanger
+	storageConfig cfgloader.StorageConfig
 }
 
 type backendConn struct {
@@ -58,13 +62,28 @@ type backendConn struct {
 }
 
 // NewRouter creates a Router from the backend configs but does not yet connect.
-// Connections are established lazily on first use.
-func NewRouter(backends []BackendConfig) *Router {
+// Connections are established lazily on first use. Exchange clients are built
+// during the first Reload call (which Server.Run issues before accepting connections).
+// An optional StorageConfig may be provided to enable Redis-backed token caching for
+// identity exchange; if omitted an in-memory cache is used.
+func NewRouter(backends []BackendConfig, storage ...cfgloader.StorageConfig) *Router {
 	r := &Router{
-		backends: make(map[string]*backendConn, len(backends)),
+		backends:   make(map[string]*backendConn, len(backends)),
+		exchangers: make(map[string]IdentityExchanger, len(backends)),
+	}
+	if len(storage) > 0 {
+		r.storageConfig = storage[0]
 	}
 	for _, cfg := range backends {
 		r.backends[cfg.Name] = &backendConn{cfg: cfg}
+		// Seed exchangers conservatively: backends with an exchange URL start as
+		// failDegraded (safe) until the first Reload builds the real client; backends
+		// without an exchange URL start as noop.
+		if cfg.UserIdentity.Exchange.URL != "" {
+			r.exchangers[cfg.Name] = failDegradedExchanger{backendName: cfg.Name}
+		} else {
+			r.exchangers[cfg.Name] = noopIdentityExchanger{}
+		}
 	}
 	return r
 }
@@ -82,16 +101,26 @@ func (r *Router) CallTool(ctx context.Context, serverName, toolName string, args
 
 	backendToolName := r.resolveToolName(serverName, toolName)
 
+	// Apply identity exchange if configured for this backend. This replaces the
+	// raw token in the context with the backend-specific exchanged value, or
+	// clears it on failure so that neither header nor path injection occurs.
+	ctx = r.applyIdentityExchange(ctx, serverName)
+
 	// Apply identity path injection before dispatch. A shallow copy of args is
 	// created so the original map (referenced by the async decision log) is
-	// never mutated.
+	// never mutated. JSON object/array identities are injected as structured
+	// values; plain string identities are injected as strings.
 	if identityPath := r.identityPathFor(serverName); identityPath != "" {
-		if rawToken := rawTokenFromContext(ctx); rawToken != "" {
+		if identity := exchangedIdentityFromContext(ctx); identity != nil {
 			argsCopy := make(map[string]any, len(args))
 			for k, v := range args {
 				argsCopy[k] = v
 			}
-			injectAtPath(argsCopy, identityPath, rawToken)
+			if identity.Structured != nil {
+				injectAtPath(argsCopy, identityPath, identity.Structured)
+			} else {
+				injectAtPath(argsCopy, identityPath, identity.Str)
+			}
 			args = argsCopy
 		}
 	}
@@ -121,9 +150,35 @@ func (r *Router) identityPathFor(serverName string) string {
 		return ""
 	}
 	conn.cfgMu.RLock()
-	path := conn.cfg.IdentityPath
+	path := conn.cfg.UserIdentity.Placement.JSONPath
 	conn.cfgMu.RUnlock()
 	return path
+}
+
+// applyIdentityExchange passes the raw token through the backend's IdentityExchanger
+// and returns a context carrying the ExchangedIdentity to inject. Every backend
+// has an exchanger: noopIdentityExchanger (wraps raw token) or IdentityExchangeClient.
+// If the exchanger returns false, a nil ExchangedIdentity is stored so that neither
+// header nor path injection occurs — the original token is never forwarded as a fallback.
+func (r *Router) applyIdentityExchange(ctx context.Context, serverName string) context.Context {
+	rawToken := rawTokenFromContext(ctx)
+	if rawToken == "" {
+		return ctx
+	}
+
+	r.exchangeMu.RLock()
+	exchanger, ok := r.exchangers[serverName]
+	r.exchangeMu.RUnlock()
+	if !ok {
+		// Exchanger not yet seeded (should not occur after the first Reload).
+		return ctx
+	}
+
+	identity, ok := exchanger.Exchange(ctx, rawToken)
+	if !ok {
+		return withExchangedIdentity(ctx, nil) // fail-degraded: omit injection
+	}
+	return withExchangedIdentity(ctx, identity)
 }
 
 // resolveToolName returns the real backend tool name for the given alias, or
@@ -223,16 +278,41 @@ func (r *Router) Reload(ctx context.Context, backends []BackendConfig) error {
 		}
 	}
 
-	// Snapshot names and ToolMaps before releasing the lock so the survey loop
-	// below does not need to re-acquire mu.
-	type backendMeta struct{ toolMap map[string]string }
-	meta := make(map[string]backendMeta, len(r.backends))
+	// Snapshot names and configs before releasing the lock so the survey and
+	// exchange-client build loops below do not need to re-acquire mu.
+	type backendSnapshot struct {
+		toolMap map[string]string
+		cfg     BackendConfig
+	}
+	snapshots := make(map[string]backendSnapshot, len(r.backends))
 	names := make([]string, 0, len(r.backends))
 	for name, conn := range r.backends {
-		meta[name] = backendMeta{toolMap: conn.cfg.ToolMap}
+		snapshots[name] = backendSnapshot{toolMap: conn.cfg.ToolMap, cfg: conn.cfg}
 		names = append(names, name)
 	}
 	r.mu.Unlock()
+
+	// Build an IdentityExchanger for every backend. Done outside mu since it may
+	// involve DNS lookups or Redis Ping calls.
+	// Every backend gets exactly one exchanger: noopIdentityExchanger for backends
+	// without an exchange URL, IdentityExchangeClient for those that have one, or
+	// failDegradedExchanger if client construction fails.
+	newExchangers := make(map[string]IdentityExchanger, len(names))
+	for _, name := range names {
+		snap := snapshots[name]
+		if snap.cfg.UserIdentity.Exchange.URL == "" {
+			newExchangers[name] = noopIdentityExchanger{}
+			continue
+		}
+		client, err := newIdentityExchangeClient(ctx, snap.cfg, r.storageConfig)
+		if err != nil {
+			return fmt.Errorf("backend %q: identity exchange client unavailable: %w", name, err)
+		}
+		newExchangers[name] = client
+	}
+	r.exchangeMu.Lock()
+	r.exchangers = newExchangers
+	r.exchangeMu.Unlock()
 
 	// Survey all backends (without holding mu to avoid deadlock with sessionFor).
 	var surveys []backendSurvey
@@ -242,7 +322,7 @@ func (r *Router) Reload(ctx context.Context, backends []BackendConfig) error {
 			slog.Warn("reload: list tools failed for backend", "backend", name, "error", err)
 			continue
 		}
-		surveys = append(surveys, backendSurvey{name: name, toolMap: meta[name].toolMap, tools: tools})
+		surveys = append(surveys, backendSurvey{name: name, toolMap: snapshots[name].toolMap, tools: tools})
 	}
 
 	all, err := buildToolCache(surveys)
@@ -422,20 +502,22 @@ type headerInjectingRoundTripper struct {
 
 // RoundTrip injects allowed client headers into the outgoing request and
 // delegates to the inner transport. The original request is never mutated.
-// If IdentityHeader is configured, the raw identity token is injected as that
-// header, overwriting any forwarded client header of the same name.
+// If IdentityHeader is configured and the exchanged identity is a plain string,
+// it is injected as that header, overwriting any forwarded client header of the
+// same name. JSON object/array identities are never used as header values; a
+// warning is logged and header injection is skipped for those.
 func (t *headerInjectingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	clientHeaders := clientHeadersFromContext(req.Context())
-	rawToken := rawTokenFromContext(req.Context())
+	identity := exchangedIdentityFromContext(req.Context())
 
 	t.conn.cfgMu.RLock()
 	fwdHeaders := t.conn.cfg.ForwardHeaders
 	dropHeaders := t.conn.cfg.DropHeaders
-	identityHeader := t.conn.cfg.IdentityHeader
+	identityHeader := t.conn.cfg.UserIdentity.Placement.Header
 	t.conn.cfgMu.RUnlock()
 
 	// Skip cloning the request when there is nothing to inject.
-	if len(clientHeaders) == 0 && (identityHeader == "" || rawToken == "") {
+	if len(clientHeaders) == 0 && (identityHeader == "" || identity == nil) {
 		return t.inner.RoundTrip(req)
 	}
 
@@ -471,9 +553,15 @@ func (t *headerInjectingRoundTripper) RoundTrip(req *http.Request) (*http.Respon
 	}
 
 	// Inject identity header last so it overrides any forwarded client header
-	// of the same name. Skip injection when the token is absent (e.g. OS identity).
-	if identityHeader != "" && rawToken != "" {
-		outReq.Header.Set(identityHeader, rawToken)
+	// of the same name. JSON object/array identities cannot be header values —
+	// skip with a warning so the request still proceeds (non-fatal).
+	if identityHeader != "" && identity != nil {
+		if identity.Structured != nil {
+			slog.Warn("keep: identity exchange returned a JSON object/array; cannot inject as HTTP header, skipping header injection",
+				"backend", t.conn.cfg.Name, "header", identityHeader)
+		} else {
+			outReq.Header.Set(identityHeader, identity.Str)
+		}
 	}
 
 	return t.inner.RoundTrip(outReq)

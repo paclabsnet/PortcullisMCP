@@ -46,11 +46,26 @@ responsibility:
       type: "http"
       url: "http://mock-enterprise-api:3000/mcp"
       allow_private_addresses: true
+      # user_identity:
+      #   placement:
+      #     header: "X-User-Identity"
+      #     json_path: "auth.token"
+      #   exchange:
+      #     url: "http://identity-exchange:9000/exchange"
+      #     timeout: 5
+      #     cache:
+      #       ttl: 300
+      #       max_entries: 1000
+      #     auth_headers:
+      #       Authorization: "Bearer envvar://EXCHANGE_API_TOKEN"
 
     - name: "fetch"
       type: "http"
       url: "http://fetch-mcp:8080/mcp"
       allow_private_addresses: true
+      # user_identity:
+      #   placement:
+      #     header: "X-User-Identity"
 
   issuance:
     signing_key: "dev-keep-signing-secret"

@@ -52,7 +52,9 @@ type RedisSessionStore struct {
 
 // NewRedisSessionStore creates a RedisSessionStore from a RedisConfig.
 // All Config fields (password, db, key_prefix) are honoured; addr is required.
-func NewRedisSessionStore(cfg RedisConfig, ttlSeconds int) *RedisSessionStore {
+// A Ping is performed at construction time; if Redis is unreachable the client
+// is closed and an error is returned so the process fails fast at startup.
+func NewRedisSessionStore(ctx context.Context, cfg RedisConfig, ttlSeconds int) (*RedisSessionStore, error) {
 	prefix := cfg.KeyPrefix
 	if prefix == "" {
 		prefix = defaultRedisKeyPrefix
@@ -62,11 +64,15 @@ func NewRedisSessionStore(cfg RedisConfig, ttlSeconds int) *RedisSessionStore {
 		Password: cfg.Password,
 		DB:       cfg.DB,
 	})
+	if err := client.Ping(ctx).Err(); err != nil {
+		_ = client.Close()
+		return nil, fmt.Errorf("gate: redis unavailable at %q: %w", cfg.Addr, err)
+	}
 	return &RedisSessionStore{
 		client:    client,
 		ttl:       time.Duration(ttlSeconds) * time.Second,
 		keyPrefix: prefix,
-	}
+	}, nil
 }
 
 // NewRedisSessionStoreFromClient creates a RedisSessionStore using a pre-built

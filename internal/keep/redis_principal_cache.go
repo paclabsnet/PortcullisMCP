@@ -29,7 +29,7 @@ import (
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 )
 
-const defaultKeepKeyPrefix = "portcullis:keep:"
+const defaultKeepKeyPrefix = "portcullis:keep:principal:"
 
 // RedisPrincipalCache implements PrincipalCacher using Redis.
 // Cache misses and Redis errors on Get return (zero, false); errors on Add are
@@ -49,7 +49,7 @@ func NewRedisPrincipalCache(client *redis.Client, keyPrefix string) *RedisPrinci
 }
 
 func (c *RedisPrincipalCache) key(cacheKey string) string {
-	return c.prefix + "normalized:" + cacheKey
+	return c.prefix + cacheKey
 }
 
 // Get returns the cached Principal for key, or (zero, false) on miss or error.

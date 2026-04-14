@@ -623,7 +623,7 @@ func TestCallTool_BodyInjection_TokenReachesBackend(t *testing.T) {
 		Type:                  "http",
 		URL:                   backendURL,
 		AllowPrivateAddresses: true,
-		IdentityPath:          "auth.token",
+		UserIdentity: BackendUserIdentity{Placement: BackendIdentityPlacement{JSONPath: "auth.token"}},
 	}})
 
 	origArgs := map[string]any{"param": "value"}
@@ -661,7 +661,7 @@ func TestCallTool_BodyInjection_SkipsWhenNoToken(t *testing.T) {
 		Type:                  "http",
 		URL:                   backendURL,
 		AllowPrivateAddresses: true,
-		IdentityPath:          "auth.token",
+		UserIdentity: BackendUserIdentity{Placement: BackendIdentityPlacement{JSONPath: "auth.token"}},
 	}})
 
 	origArgs := map[string]any{"param": "value"}
@@ -694,7 +694,7 @@ func TestCallTool_BodyInjection_NestedMapNotMutated(t *testing.T) {
 		Type:                  "http",
 		URL:                   backendURL,
 		AllowPrivateAddresses: true,
-		IdentityPath:          "auth.token",
+		UserIdentity: BackendUserIdentity{Placement: BackendIdentityPlacement{JSONPath: "auth.token"}},
 	}})
 
 	// The inner map is shared between origArgs and our local reference.
@@ -732,9 +732,8 @@ func TestCallTool_BodyInjection_NestedMapNotMutated(t *testing.T) {
 
 func TestValidateBackendIdentityConfig_Valid(t *testing.T) {
 	cases := []BackendConfig{
-		{IdentityHeader: "X-Identity-Token"},
-		{IdentityPath: "auth.token"},
-		{IdentityHeader: "X-User-JWT", IdentityPath: "identity.jwt"},
+		{UserIdentity: BackendUserIdentity{Placement: BackendIdentityPlacement{Header: "X-Identity-Token"}}},
+		{UserIdentity: BackendUserIdentity{Placement: BackendIdentityPlacement{JSONPath: "auth.token"}}},
 		{}, // neither set — always valid
 	}
 	for _, cfg := range cases {
@@ -744,13 +743,35 @@ func TestValidateBackendIdentityConfig_Valid(t *testing.T) {
 	}
 }
 
+func TestValidateBackendIdentityConfig_BothPlacementFieldsRejected(t *testing.T) {
+	cfg := BackendConfig{UserIdentity: BackendUserIdentity{Placement: BackendIdentityPlacement{
+		Header:   "X-Identity-Token",
+		JSONPath: "auth.token",
+	}}}
+	if err := validateBackendIdentityConfig(cfg); err == nil {
+		t.Error("expected error when both header and json_path are set, got nil")
+	}
+}
+
+func TestValidateBackendIdentityConfig_ExchangeURLWithoutPlacementRejected(t *testing.T) {
+	cfg := BackendConfig{
+		AllowPrivateAddresses: true,
+		UserIdentity: BackendUserIdentity{
+			Exchange: BackendIdentityExchange{URL: "http://exchange.internal/exchange"},
+		},
+	}
+	if err := validateBackendIdentityConfig(cfg); err == nil {
+		t.Error("expected error when exchange.url is set but no placement is configured, got nil")
+	}
+}
+
 func TestValidateBackendIdentityConfig_ForbiddenHeader(t *testing.T) {
 	forbidden := []string{
 		"Host", "Content-Length", "Transfer-Encoding", "Connection",
 		"X-Portcullis-Trace",
 	}
 	for _, h := range forbidden {
-		cfg := BackendConfig{IdentityHeader: h}
+		cfg := BackendConfig{UserIdentity: BackendUserIdentity{Placement: BackendIdentityPlacement{Header: h}}}
 		if err := validateBackendIdentityConfig(cfg); err == nil {
 			t.Errorf("expected error for forbidden identity_header %q, got nil", h)
 		}
@@ -777,9 +798,9 @@ func TestValidateBackendIdentityConfig_InvalidPath(t *testing.T) {
 		"a.b.c!",     // exclamation
 	}
 	for _, p := range badPaths {
-		cfg := BackendConfig{IdentityPath: p}
+		cfg := BackendConfig{UserIdentity: BackendUserIdentity{Placement: BackendIdentityPlacement{JSONPath: p}}}
 		if err := validateBackendIdentityConfig(cfg); err == nil {
-			t.Errorf("expected error for malformed identity_path %q, got nil", p)
+			t.Errorf("expected error for malformed json_path %q, got nil", p)
 		}
 	}
 }
@@ -794,7 +815,7 @@ func TestValidateBackendIdentityConfig_ValidPaths(t *testing.T) {
 		"Auth-Token-123",
 	}
 	for _, p := range good {
-		cfg := BackendConfig{IdentityPath: p}
+		cfg := BackendConfig{UserIdentity: BackendUserIdentity{Placement: BackendIdentityPlacement{JSONPath: p}}}
 		if err := validateBackendIdentityConfig(cfg); err != nil {
 			t.Errorf("validateBackendIdentityConfig with path %q = %v, want nil", p, err)
 		}

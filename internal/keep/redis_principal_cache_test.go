@@ -125,12 +125,12 @@ func TestRedisPrincipalCache_DefaultKeyPrefix(t *testing.T) {
 	keys := mr.Keys()
 	found := false
 	for _, k := range keys {
-		if k == defaultKeepKeyPrefix+"normalized:mykey" {
+		if k == defaultKeepKeyPrefix+"mykey" {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("expected key %q in Redis, got keys: %v", defaultKeepKeyPrefix+"normalized:mykey", keys)
+		t.Errorf("expected key %q in Redis, got keys: %v", defaultKeepKeyPrefix+"mykey", keys)
 	}
 }
 
@@ -144,7 +144,7 @@ func TestRedisPrincipalCache_CustomKeyPrefix(t *testing.T) {
 	keys := mr.Keys()
 	found := false
 	for _, k := range keys {
-		if k == "custom:prefix:normalized:mykey" {
+		if k == "custom:prefix:mykey" {
 			found = true
 		}
 	}

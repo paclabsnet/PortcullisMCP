@@ -38,6 +38,7 @@ type keepCtxKey string
 
 const clientHeadersKey keepCtxKey = "clientHeaders"
 const rawTokenKey keepCtxKey = "rawToken"
+const exchangedIdentityKey keepCtxKey = "exchangedIdentity"
 
 // withClientHeaders returns a new context carrying the validated client headers.
 func withClientHeaders(ctx context.Context, headers map[string][]string) context.Context {
@@ -60,6 +61,19 @@ func withRawToken(ctx context.Context, token string) context.Context {
 // rawTokenFromContext returns the raw identity token from ctx, or "" if absent.
 func rawTokenFromContext(ctx context.Context) string {
 	v, _ := ctx.Value(rawTokenKey).(string)
+	return v
+}
+
+// withExchangedIdentity returns a context carrying the post-exchange identity
+// to inject. A nil identity signals fail-degraded: injection must be omitted.
+func withExchangedIdentity(ctx context.Context, id *ExchangedIdentity) context.Context {
+	return context.WithValue(ctx, exchangedIdentityKey, id)
+}
+
+// exchangedIdentityFromContext returns the identity to inject, or nil when
+// exchange was either not configured, not yet applied, or failed.
+func exchangedIdentityFromContext(ctx context.Context) *ExchangedIdentity {
+	v, _ := ctx.Value(exchangedIdentityKey).(*ExchangedIdentity)
 	return v
 }
 
@@ -93,7 +107,7 @@ func NewServer(ctx context.Context, cfg Config) (*Server, error) {
 		return nil, fmt.Errorf("unknown pdp strategy %q; supported: opa, noop", cfg.Responsibility.Policy.Strategy)
 	}
 
-	router := NewRouter(cfg.Responsibility.Backends)
+	router := NewRouter(cfg.Responsibility.Backends, cfg.Operations.Storage)
 
 	wf, err := NewWorkflowHandler(cfg.Responsibility.Workflow)
 	if err != nil {
@@ -127,9 +141,11 @@ func NewServer(ctx context.Context, cfg Config) (*Server, error) {
 
 // Run starts the HTTPS server and blocks until ctx is cancelled.
 func (s *Server) Run(ctx context.Context) error {
-	// Populate the tool cache before accepting requests.
+	// Populate the tool cache and initialize backend clients before accepting requests.
+	// This is a hard failure: if a required dependency (e.g. Redis) is unavailable
+	// the service must not start in a degraded state.
 	if err := s.router.Reload(ctx, s.cfg.Responsibility.Backends); err != nil {
-		slog.Warn("initial tool cache population failed", "error", err)
+		return fmt.Errorf("startup: %w", err)
 	}
 
 	mainEndpoint, ok := s.cfg.Server.Endpoints["main"]

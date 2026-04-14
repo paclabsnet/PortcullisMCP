@@ -235,10 +235,10 @@ func TestHeaderInjectingRoundTripper_HotReload(t *testing.T) {
 
 func TestHeaderInjection_AddsIdentityHeader(t *testing.T) {
 	backend, received, mu := roundTripperTestServer(t)
-	conn := &backendConn{cfg: BackendConfig{IdentityHeader: "X-Identity-Token"}}
+	conn := &backendConn{cfg: BackendConfig{UserIdentity: BackendUserIdentity{Placement: BackendIdentityPlacement{Header: "X-Identity-Token"}}}}
 	rt := &headerInjectingRoundTripper{conn: conn, inner: http.DefaultTransport}
 
-	ctx := withRawToken(context.Background(), "my-jwt-token")
+	ctx := withExchangedIdentity(context.Background(), &ExchangedIdentity{Str: "my-jwt-token"})
 	doRoundTrip(t, rt, backend.URL, ctx)
 
 	mu.Lock()
@@ -252,7 +252,7 @@ func TestHeaderInjection_OverridesForwardedHeader(t *testing.T) {
 	backend, received, mu := roundTripperTestServer(t)
 	conn := &backendConn{cfg: BackendConfig{
 		ForwardHeaders: []string{"*"},
-		IdentityHeader: "X-Identity-Token",
+		UserIdentity:   BackendUserIdentity{Placement: BackendIdentityPlacement{Header: "X-Identity-Token"}},
 	}}
 	rt := &headerInjectingRoundTripper{conn: conn, inner: http.DefaultTransport}
 
@@ -260,7 +260,7 @@ func TestHeaderInjection_OverridesForwardedHeader(t *testing.T) {
 	ctx := withClientHeaders(context.Background(), map[string][]string{
 		"X-Identity-Token": {"client-supplied-value"},
 	})
-	ctx = withRawToken(ctx, "authoritative-token")
+	ctx = withExchangedIdentity(ctx, &ExchangedIdentity{Str: "authoritative-token"})
 	doRoundTrip(t, rt, backend.URL, ctx)
 
 	mu.Lock()
@@ -272,10 +272,10 @@ func TestHeaderInjection_OverridesForwardedHeader(t *testing.T) {
 
 func TestHeaderInjection_SkipsWhenNoRawToken(t *testing.T) {
 	backend, received, mu := roundTripperTestServer(t)
-	conn := &backendConn{cfg: BackendConfig{IdentityHeader: "X-Identity-Token"}}
+	conn := &backendConn{cfg: BackendConfig{UserIdentity: BackendUserIdentity{Placement: BackendIdentityPlacement{Header: "X-Identity-Token"}}}}
 	rt := &headerInjectingRoundTripper{conn: conn, inner: http.DefaultTransport}
 
-	// No raw token in context — header must not be injected at all.
+	// No exchanged identity in context — header must not be injected at all.
 	doRoundTrip(t, rt, backend.URL, context.Background())
 
 	mu.Lock()
@@ -302,6 +302,26 @@ func TestHeaderInjection_SkipsWhenHeaderNotConfigured(t *testing.T) {
 				t.Errorf("token leaked into header %q: %q", name, v)
 			}
 		}
+	}
+}
+
+func TestHeaderInjection_SkipsWhenJSONStructured(t *testing.T) {
+	// A JSON object/array exchanged identity must NOT be injected as a header value.
+	backend, received, mu := roundTripperTestServer(t)
+	conn := &backendConn{cfg: BackendConfig{UserIdentity: BackendUserIdentity{Placement: BackendIdentityPlacement{Header: "X-Identity-Token"}}}}
+	rt := &headerInjectingRoundTripper{conn: conn, inner: http.DefaultTransport}
+
+	// Structured identity — simulates an exchange that returned a JSON object.
+	ctx := withExchangedIdentity(context.Background(), &ExchangedIdentity{
+		Str:        `{"uid":"u1"}`,
+		Structured: map[string]any{"uid": "u1"},
+	})
+	doRoundTrip(t, rt, backend.URL, ctx)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if got := (*received).Get("X-Identity-Token"); got != "" {
+		t.Errorf("X-Identity-Token should be absent for JSON structured identity, got %q", got)
 	}
 }
 

@@ -42,10 +42,14 @@ func newTestRedisStoreWithPrefix(t *testing.T, mr *miniredis.Miniredis, prefix s
 	if mr == nil {
 		mr = miniredis.RunT(t)
 	}
-	return NewRedisSessionStore(RedisConfig{
+	store, err := NewRedisSessionStore(context.Background(), RedisConfig{
 		Addr:      mr.Addr(),
 		KeyPrefix: prefix,
 	}, 3600)
+	if err != nil {
+		t.Fatalf("NewRedisSessionStore: %v", err)
+	}
+	return store
 }
 
 func TestRedisSessionStore(t *testing.T) {

@@ -344,16 +344,55 @@ type BackendConfig struct {
 	// DropHeaders lists headers that must never be sent to this backend, regardless
 	// of ForwardHeaders. Evaluated after the Forbidden hard-coded list. Default: []
 	DropHeaders []string `yaml:"drop_headers"`
-	// IdentityHeader, if non-empty, causes Keep to inject the user's raw identity
-	// token into outgoing requests to this backend as an HTTP header of this name.
-	// Applies to http and sse backends only. Takes precedence over any
-	// client-forwarded header of the same name.
-	IdentityHeader string `yaml:"identity_header"`
-	// IdentityPath, if non-empty, causes Keep to inject the user's raw identity
-	// token into the tool call arguments at the given dot-separated path before
-	// forwarding to this backend. Applies to all backend types (stdio, http, sse).
-	// The original arguments map is never mutated.
-	IdentityPath string `yaml:"identity_path"`
+	// UserIdentity configures how Keep injects the caller's identity into requests
+	// forwarded to this backend, and optionally exchanges the raw token for a
+	// backend-specific value via an exchange service.
+	UserIdentity BackendUserIdentity `yaml:"user_identity"`
+}
+
+// BackendUserIdentity groups all per-backend identity injection and exchange settings.
+type BackendUserIdentity struct {
+	// Placement controls where the identity value is injected.
+	Placement BackendIdentityPlacement `yaml:"placement"`
+	// Exchange, if non-zero, enables identity exchange for this backend.
+	Exchange BackendIdentityExchange `yaml:"exchange"`
+}
+
+// BackendIdentityPlacement specifies where the identity value is placed in outgoing requests.
+// Exactly one of Header or JSONPath must be set; setting both is a configuration error.
+type BackendIdentityPlacement struct {
+	// Header, if non-empty, injects the identity value as an HTTP header of this
+	// name. Applies to http and sse backends only.
+	Header string `yaml:"header"`
+	// JSONPath, if non-empty, injects the identity value at this dot-separated
+	// path in the tool call arguments. Applies to all backend types.
+	JSONPath string `yaml:"json_path"`
+}
+
+// BackendIdentityExchange configures the optional identity exchange service for a backend.
+// Keep POSTs {"token":"<raw>"} to URL and injects the returned {"identity":"<value>"}.
+// If exchange fails for any reason, injection is omitted entirely (fail-degraded).
+type BackendIdentityExchange struct {
+	// URL is the HTTP endpoint of the exchange service. Required to enable exchange.
+	URL string `yaml:"url"`
+	// Timeout is the HTTP timeout in seconds for calls to the exchange service.
+	// 0 uses the default (5 seconds).
+	Timeout int `yaml:"timeout"`
+	// Cache controls caching of exchanged identities.
+	Cache BackendIdentityExchangeCache `yaml:"cache"`
+	// AuthHeaders are additional HTTP headers sent to the exchange service (e.g. Authorization).
+	AuthHeaders map[string]string `yaml:"auth_headers"`
+}
+
+// BackendIdentityExchangeCache configures caching of exchanged identity values.
+type BackendIdentityExchangeCache struct {
+	// TTL is the maximum number of seconds to cache an exchanged identity.
+	// The effective TTL is also capped by the source token's exp claim.
+	// 0 disables caching.
+	TTL int `yaml:"ttl"`
+	// MaxEntries is the maximum number of entries in the in-memory cache.
+	// 0 uses the default (1000). Ignored when Redis storage is configured.
+	MaxEntries int `yaml:"max_entries"`
 }
 
 type ServiceNowConfig struct {
@@ -429,20 +468,35 @@ func (l *LimitsConfig) ApplyDefaults() {
 	}
 }
 
-// validateBackendIdentityConfig checks that IdentityHeader and IdentityPath are
-// well-formed and safe when set on a BackendConfig.
+// validateBackendIdentityConfig checks that user_identity placement and exchange
+// settings are well-formed and safe when set on a BackendConfig.
 func validateBackendIdentityConfig(cfg BackendConfig) error {
-	if cfg.IdentityHeader != "" {
-		if strings.TrimSpace(cfg.IdentityHeader) == "" {
-			return fmt.Errorf("identity_header must not be whitespace-only")
+	h := cfg.UserIdentity.Placement.Header
+	p := cfg.UserIdentity.Placement.JSONPath
+
+	if h != "" && p != "" {
+		return fmt.Errorf("user_identity.placement: header and json_path are mutually exclusive — set one or the other, not both")
+	}
+
+	if h != "" {
+		if strings.TrimSpace(h) == "" {
+			return fmt.Errorf("user_identity.placement.header must not be whitespace-only")
 		}
-		if shared.IsForbiddenHeader(cfg.IdentityHeader) {
-			return fmt.Errorf("identity_header %q is a forbidden header and cannot be used for identity injection", cfg.IdentityHeader)
+		if shared.IsForbiddenHeader(h) {
+			return fmt.Errorf("user_identity.placement.header %q is a forbidden header and cannot be used for identity injection", h)
 		}
 	}
-	if cfg.IdentityPath != "" {
-		if err := validateIdentityPath(cfg.IdentityPath); err != nil {
-			return fmt.Errorf("identity_path: %w", err)
+	if p != "" {
+		if err := validateIdentityPath(p); err != nil {
+			return fmt.Errorf("user_identity.placement.json_path: %w", err)
+		}
+	}
+	if u := cfg.UserIdentity.Exchange.URL; u != "" {
+		if h == "" && p == "" {
+			return fmt.Errorf("user_identity.exchange.url is set but neither header nor json_path is configured — at least one placement must be set")
+		}
+		if err := checkBackendURL(u, cfg.AllowPrivateAddresses); err != nil {
+			return fmt.Errorf("user_identity.exchange.url: %w", err)
 		}
 	}
 	return nil

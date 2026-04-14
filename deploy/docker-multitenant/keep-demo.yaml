@@ -42,11 +42,39 @@ responsibility:
       type: "http"
       url: "http://mock-enterprise-api:3000/mcp"
       allow_private_addresses: true
+      # user_identity controls how Keep forwards the caller's identity to this backend.
+      # placement.header injects the identity value as an HTTP header.
+      # placement.json_path injects it at a dot-separated path in the tool call arguments.
+      # exchange POSTs {"token":"<raw>"} to the given URL and uses the returned
+      # {"identity":"<value>"} instead of the raw token. If exchange fails, injection
+      # is omitted entirely (fail-degraded — the raw token is never forwarded on failure).
+      #
+      # user_identity:
+      #   placement:
+      #     header: "X-User-Identity"
+      #     json_path: "auth.token"
+      #   exchange:
+      #     url: "http://identity-exchange:9000/exchange"
+      #     timeout: 5          # seconds; default: 5
+      #     cache:
+      #       ttl: 300          # seconds; 0 = no cache
+      #       max_entries: 1000 # default: 1000
+      #     auth_headers:
+      #       Authorization: "Bearer envvar://EXCHANGE_API_TOKEN"
 
     - name: "fetch"
       type: "http"
       url: "http://fetch-mcp:8080/mcp"
       allow_private_addresses: true
+      # user_identity:
+      #   placement:
+      #     header: "X-User-Identity"
+      #   exchange:
+      #     url: "http://identity-exchange:9000/exchange"
+      #     cache:
+      #       ttl: 300
+      #     auth_headers:
+      #       Authorization: "Bearer envvar://EXCHANGE_API_TOKEN"
 
   issuance:
     signing_key: "dev-keep-signing-secret"
