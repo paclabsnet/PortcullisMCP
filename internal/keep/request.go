@@ -37,6 +37,10 @@ type AuthorizedRequest struct {
 	// policies can make decisions based on client identity headers (e.g.
 	// X-Tenant-Id, Authorization) without requiring a separate token exchange.
 	ClientHeaders map[string][]string
+	// RawToken is the original identity token from the gate request, carried
+	// here for routing convenience. It MUST NOT be logged or stored — it is
+	// accessed through the per-request context during backend dispatch.
+	RawToken string
 }
 
 // NewAuthorizedRequest constructs a trusted internal request from a raw inbound
@@ -51,5 +55,6 @@ func NewAuthorizedRequest(req shared.EnrichedMCPRequest, p shared.Principal) Aut
 		EscalationTokens: req.EscalationTokens,
 		Principal:        p,
 		ClientHeaders:    req.ClientHeaders,
+		RawToken:         req.UserIdentity.RawToken,
 	}
 }

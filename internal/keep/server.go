@@ -37,6 +37,7 @@ import (
 type keepCtxKey string
 
 const clientHeadersKey keepCtxKey = "clientHeaders"
+const rawTokenKey keepCtxKey = "rawToken"
 
 // withClientHeaders returns a new context carrying the validated client headers.
 func withClientHeaders(ctx context.Context, headers map[string][]string) context.Context {
@@ -46,6 +47,19 @@ func withClientHeaders(ctx context.Context, headers map[string][]string) context
 // clientHeadersFromContext returns the client headers stored in ctx, or nil if absent.
 func clientHeadersFromContext(ctx context.Context) map[string][]string {
 	v, _ := ctx.Value(clientHeadersKey).(map[string][]string)
+	return v
+}
+
+// withRawToken returns a new context carrying the user's raw identity token.
+// The token must not be stored on any shared backend connection state — it must
+// always flow through the per-request context to ensure multi-tenant safety.
+func withRawToken(ctx context.Context, token string) context.Context {
+	return context.WithValue(ctx, rawTokenKey, token)
+}
+
+// rawTokenFromContext returns the raw identity token from ctx, or "" if absent.
+func rawTokenFromContext(ctx context.Context) string {
+	v, _ := ctx.Value(rawTokenKey).(string)
 	return v
 }
 
@@ -230,6 +244,10 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	span.SetAttributes(attribute.String("user.id", principal.UserID))
+
+	if rawReq.UserIdentity.RawToken != "" {
+		ctx = withRawToken(ctx, rawReq.UserIdentity.RawToken)
+	}
 
 	req := NewAuthorizedRequest(rawReq, principal)
 

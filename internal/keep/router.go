@@ -23,6 +23,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 
 	"go.opentelemetry.io/otel"
@@ -81,6 +82,20 @@ func (r *Router) CallTool(ctx context.Context, serverName, toolName string, args
 
 	backendToolName := r.resolveToolName(serverName, toolName)
 
+	// Apply identity path injection before dispatch. A shallow copy of args is
+	// created so the original map (referenced by the async decision log) is
+	// never mutated.
+	if identityPath := r.identityPathFor(serverName); identityPath != "" {
+		if rawToken := rawTokenFromContext(ctx); rawToken != "" {
+			argsCopy := make(map[string]any, len(args))
+			for k, v := range args {
+				argsCopy[k] = v
+			}
+			injectAtPath(argsCopy, identityPath, rawToken)
+			args = argsCopy
+		}
+	}
+
 	session, err := r.sessionFor(ctx, serverName)
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
@@ -94,6 +109,21 @@ func (r *Router) CallTool(ctx context.Context, serverName, toolName string, args
 		span.SetStatus(codes.Error, err.Error())
 	}
 	return result, err
+}
+
+// identityPathFor returns the IdentityPath configured for the named backend, or
+// "" if the backend does not exist or has no path configured.
+func (r *Router) identityPathFor(serverName string) string {
+	r.mu.Lock()
+	conn, ok := r.backends[serverName]
+	r.mu.Unlock()
+	if !ok {
+		return ""
+	}
+	conn.cfgMu.RLock()
+	path := conn.cfg.IdentityPath
+	conn.cfgMu.RUnlock()
+	return path
 }
 
 // resolveToolName returns the real backend tool name for the given alias, or
@@ -392,16 +422,22 @@ type headerInjectingRoundTripper struct {
 
 // RoundTrip injects allowed client headers into the outgoing request and
 // delegates to the inner transport. The original request is never mutated.
+// If IdentityHeader is configured, the raw identity token is injected as that
+// header, overwriting any forwarded client header of the same name.
 func (t *headerInjectingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	clientHeaders := clientHeadersFromContext(req.Context())
-	if len(clientHeaders) == 0 {
-		return t.inner.RoundTrip(req)
-	}
+	rawToken := rawTokenFromContext(req.Context())
 
 	t.conn.cfgMu.RLock()
 	fwdHeaders := t.conn.cfg.ForwardHeaders
 	dropHeaders := t.conn.cfg.DropHeaders
+	identityHeader := t.conn.cfg.IdentityHeader
 	t.conn.cfgMu.RUnlock()
+
+	// Skip cloning the request when there is nothing to inject.
+	if len(clientHeaders) == 0 && (identityHeader == "" || rawToken == "") {
+		return t.inner.RoundTrip(req)
+	}
 
 	if len(fwdHeaders) == 0 {
 		fwdHeaders = []string{"*"}
@@ -432,6 +468,12 @@ func (t *headerInjectingRoundTripper) RoundTrip(req *http.Request) (*http.Respon
 				break
 			}
 		}
+	}
+
+	// Inject identity header last so it overrides any forwarded client header
+	// of the same name. Skip injection when the token is absent (e.g. OS identity).
+	if identityHeader != "" && rawToken != "" {
+		outReq.Header.Set(identityHeader, rawToken)
 	}
 
 	return t.inner.RoundTrip(outReq)
@@ -472,6 +514,35 @@ var privateRanges = func() []*net.IPNet {
 	}
 	return ranges
 }()
+
+// injectAtPath sets value at the dot-separated path within m, creating
+// intermediate maps as needed. If a non-map value already exists at an
+// intermediate segment, it is replaced with a new map so injection can proceed.
+// The last segment is always set to value, overwriting any existing entry.
+//
+// Every intermediate map is always freshly allocated, even when an existing
+// map[string]any already occupies that segment. This guarantees that m and its
+// descendants are never shared with the caller's original map, so writes at any
+// depth cannot leak back through a shared pointer.
+func injectAtPath(m map[string]any, path string, value any) {
+	segments := strings.Split(path, ".")
+	cur := m
+	for i, seg := range segments {
+		if i == len(segments)-1 {
+			cur[seg] = value
+			return
+		}
+		// Copy the existing intermediate map (if any) so we never mutate a
+		// map that is also reachable from the caller's original args.
+		existing, _ := cur[seg].(map[string]any)
+		next := make(map[string]any, len(existing))
+		for k, v := range existing {
+			next[k] = v
+		}
+		cur[seg] = next
+		cur = next
+	}
+}
 
 // checkBackendURL validates that a backend URL is an absolute HTTP/HTTPS URL.
 // Unless allowPrivate is true, it also rejects hosts that resolve to RFC 1918,

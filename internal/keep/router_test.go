@@ -18,7 +18,9 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -459,6 +461,343 @@ func TestBuildToolCache_OriginalToolUnmutated(t *testing.T) {
 	}
 	if all[0].Tool.Name != "alias_name" {
 		t.Errorf("cached tool name = %q, want \"alias_name\"", all[0].Tool.Name)
+	}
+}
+
+// --- injectAtPath ---
+
+func TestInjectAtPath_TopLevel(t *testing.T) {
+	m := map[string]any{"existing": "val"}
+	injectAtPath(m, "token", "tok123")
+	if m["token"] != "tok123" {
+		t.Errorf("m[\"token\"] = %v, want %q", m["token"], "tok123")
+	}
+	if m["existing"] != "val" {
+		t.Error("injectAtPath mutated unrelated key")
+	}
+}
+
+func TestInjectAtPath_Nested(t *testing.T) {
+	m := map[string]any{}
+	injectAtPath(m, "a.b.c", "deep-value")
+	ab, ok := m["a"].(map[string]any)
+	if !ok {
+		t.Fatalf("m[\"a\"] is not a map: %T", m["a"])
+	}
+	abc, ok := ab["b"].(map[string]any)
+	if !ok {
+		t.Fatalf("m[\"a\"][\"b\"] is not a map: %T", ab["b"])
+	}
+	if abc["c"] != "deep-value" {
+		t.Errorf("m[\"a\"][\"b\"][\"c\"] = %v, want %q", abc["c"], "deep-value")
+	}
+}
+
+func TestInjectAtPath_OverwritesExistingLeaf(t *testing.T) {
+	m := map[string]any{"key": "old"}
+	injectAtPath(m, "key", "new")
+	if m["key"] != "new" {
+		t.Errorf("m[\"key\"] = %v, want %q", m["key"], "new")
+	}
+}
+
+func TestInjectAtPath_ReplacesNonMapIntermediate(t *testing.T) {
+	// "a" exists as a string but path expects it to be a map.
+	m := map[string]any{"a": "not-a-map"}
+	injectAtPath(m, "a.b", "value")
+	aMap, ok := m["a"].(map[string]any)
+	if !ok {
+		t.Fatalf("m[\"a\"] should have been replaced by a map, got %T", m["a"])
+	}
+	if aMap["b"] != "value" {
+		t.Errorf("m[\"a\"][\"b\"] = %v, want %q", aMap["b"], "value")
+	}
+}
+
+func TestInjectAtPath_PreservesExistingIntermediateMap(t *testing.T) {
+	m := map[string]any{
+		"a": map[string]any{"existing": "keep"},
+	}
+	injectAtPath(m, "a.new", "injected")
+	aMap := m["a"].(map[string]any)
+	if aMap["existing"] != "keep" {
+		t.Error("injectAtPath clobbered existing intermediate map key")
+	}
+	if aMap["new"] != "injected" {
+		t.Errorf("aMap[\"new\"] = %v, want %q", aMap["new"], "injected")
+	}
+}
+
+func TestInjectAtPath_DoesNotMutateOriginalNestedMap(t *testing.T) {
+	// Regression test: a shallow copy of the top-level args is not sufficient
+	// when the injection path traverses a nested map that the copy still shares
+	// with the original. injectAtPath must copy every intermediate map so the
+	// original args are never modified.
+	sharedInner := map[string]any{"existing": "original"}
+	orig := map[string]any{"auth": sharedInner}
+
+	// Simulate what CallTool does: shallow top-level copy then inject.
+	argsCopy := make(map[string]any, len(orig))
+	for k, v := range orig {
+		argsCopy[k] = v
+	}
+	injectAtPath(argsCopy, "auth.token", "injected-jwt")
+
+	// The original shared inner map must be untouched.
+	if _, mutated := sharedInner["token"]; mutated {
+		t.Error("privacy mandate violated: injectAtPath mutated the original nested map")
+	}
+	if sharedInner["existing"] != "original" {
+		t.Error("injectAtPath corrupted an unrelated key in the original nested map")
+	}
+
+	// The copy must have the injected value without affecting the original.
+	authCopy, ok := argsCopy["auth"].(map[string]any)
+	if !ok {
+		t.Fatalf("argsCopy[\"auth\"] is not a map: %T", argsCopy["auth"])
+	}
+	if authCopy["token"] != "injected-jwt" {
+		t.Errorf("argsCopy[\"auth\"][\"token\"] = %v, want %q", authCopy["token"], "injected-jwt")
+	}
+	// The copy's inner map must be a different allocation than the original's.
+	// Compare via reflect to get pointer identity without direct map comparison.
+	if reflect.ValueOf(authCopy).Pointer() == reflect.ValueOf(sharedInner).Pointer() {
+		t.Error("argsCopy[\"auth\"] is the same map pointer as the original — mutation is possible")
+	}
+}
+
+// --- identity body injection in CallTool ---
+
+// newCapturingMCPBackend starts a real MCP-over-HTTP test server with a single
+// "test_tool" tool. The tool handler captures the raw arguments map it receives
+// and returns a trivial success result. The returned getArgs function retrieves
+// the last captured arguments; it returns nil if the tool has not been called.
+//
+// The server uses mcp.NewStreamableHTTPHandler so the full Router→MCP session
+// path is exercised, including the injection logic inside Router.CallTool.
+func newCapturingMCPBackend(t *testing.T) (backendURL string, getArgs func() map[string]any) {
+	t.Helper()
+
+	var mu sync.Mutex
+	var lastArgs map[string]any
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "test-backend", Version: "1.0"}, nil)
+	mcp.AddTool(server, &mcp.Tool{Name: "test_tool"},
+		func(_ context.Context, _ *mcp.CallToolRequest, args map[string]any) (*mcp.CallToolResult, any, error) {
+			mu.Lock()
+			lastArgs = args
+			mu.Unlock()
+			return &mcp.CallToolResult{
+				Content: []mcp.Content{&mcp.TextContent{Text: "ok"}},
+			}, nil, nil
+		},
+	)
+
+	mux := http.NewServeMux()
+	mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(
+		func(_ *http.Request) *mcp.Server { return server }, nil,
+	))
+	srv := httptest.NewServer(mux)
+	t.Cleanup(func() {
+		// Force-close keep-alive connections held by the MCP client before
+		// shutting the server down, otherwise Close blocks indefinitely.
+		srv.CloseClientConnections()
+		srv.Close()
+	})
+
+	return srv.URL + "/mcp", func() map[string]any {
+		mu.Lock()
+		defer mu.Unlock()
+		return lastArgs
+	}
+}
+
+// TestCallTool_BodyInjection_TokenReachesBackend calls Router.CallTool with a
+// raw token in the context and verifies that the token appears at the
+// configured IdentityPath inside the arguments received by the backend.
+func TestCallTool_BodyInjection_TokenReachesBackend(t *testing.T) {
+	backendURL, getArgs := newCapturingMCPBackend(t)
+
+	r := NewRouter([]BackendConfig{{
+		Name:                  "b",
+		Type:                  "http",
+		URL:                   backendURL,
+		AllowPrivateAddresses: true,
+		IdentityPath:          "auth.token",
+	}})
+
+	origArgs := map[string]any{"param": "value"}
+	ctx := withRawToken(context.Background(), "jwt-abc")
+
+	if _, err := r.CallTool(ctx, "b", "test_tool", origArgs); err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+
+	captured := getArgs()
+	if captured == nil {
+		t.Fatal("backend did not receive a tool call")
+	}
+	auth, ok := captured["auth"].(map[string]any)
+	if !ok {
+		t.Fatalf("captured[\"auth\"] is not a map: %T", captured["auth"])
+	}
+	if auth["token"] != "jwt-abc" {
+		t.Errorf("injected token = %v, want %q", auth["token"], "jwt-abc")
+	}
+	// The original args must not be mutated by the injection.
+	if _, mutated := origArgs["auth"]; mutated {
+		t.Error("original args were mutated — privacy mandate violated")
+	}
+}
+
+// TestCallTool_BodyInjection_SkipsWhenNoToken calls Router.CallTool without a
+// raw token in the context and verifies that the backend receives the original
+// arguments unchanged — no injection key is added.
+func TestCallTool_BodyInjection_SkipsWhenNoToken(t *testing.T) {
+	backendURL, getArgs := newCapturingMCPBackend(t)
+
+	r := NewRouter([]BackendConfig{{
+		Name:                  "b",
+		Type:                  "http",
+		URL:                   backendURL,
+		AllowPrivateAddresses: true,
+		IdentityPath:          "auth.token",
+	}})
+
+	origArgs := map[string]any{"param": "value"}
+
+	// context.Background() carries no raw token.
+	if _, err := r.CallTool(context.Background(), "b", "test_tool", origArgs); err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+
+	captured := getArgs()
+	if captured == nil {
+		t.Fatal("backend did not receive a tool call")
+	}
+	if _, injected := captured["auth"]; injected {
+		t.Error("injection key present even though no token was in context")
+	}
+	if captured["param"] != "value" {
+		t.Errorf("original param lost: captured[\"param\"] = %v", captured["param"])
+	}
+}
+
+// TestCallTool_BodyInjection_NestedMapNotMutated verifies that when args
+// already contain a nested map at the injection path, Router.CallTool does not
+// mutate the original nested map — only the copy sent to the backend is updated.
+func TestCallTool_BodyInjection_NestedMapNotMutated(t *testing.T) {
+	backendURL, getArgs := newCapturingMCPBackend(t)
+
+	r := NewRouter([]BackendConfig{{
+		Name:                  "b",
+		Type:                  "http",
+		URL:                   backendURL,
+		AllowPrivateAddresses: true,
+		IdentityPath:          "auth.token",
+	}})
+
+	// The inner map is shared between origArgs and our local reference.
+	sharedInner := map[string]any{"existing": "original"}
+	origArgs := map[string]any{"auth": sharedInner, "other": "keep"}
+	ctx := withRawToken(context.Background(), "jwt-abc")
+
+	if _, err := r.CallTool(ctx, "b", "test_tool", origArgs); err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+
+	// The backend must have received the injected token.
+	captured := getArgs()
+	if captured == nil {
+		t.Fatal("backend did not receive a tool call")
+	}
+	capturedAuth, ok := captured["auth"].(map[string]any)
+	if !ok {
+		t.Fatalf("captured[\"auth\"] is not a map: %T", captured["auth"])
+	}
+	if capturedAuth["token"] != "jwt-abc" {
+		t.Errorf("backend did not receive injected token: captured auth = %v", capturedAuth)
+	}
+
+	// The original shared inner map must be completely untouched.
+	if _, mutated := sharedInner["token"]; mutated {
+		t.Error("privacy mandate violated: Router.CallTool mutated the original nested map")
+	}
+	if sharedInner["existing"] != "original" {
+		t.Errorf("Router.CallTool corrupted unrelated key: sharedInner[\"existing\"] = %v", sharedInner["existing"])
+	}
+}
+
+// --- config validation ---
+
+func TestValidateBackendIdentityConfig_Valid(t *testing.T) {
+	cases := []BackendConfig{
+		{IdentityHeader: "X-Identity-Token"},
+		{IdentityPath: "auth.token"},
+		{IdentityHeader: "X-User-JWT", IdentityPath: "identity.jwt"},
+		{}, // neither set — always valid
+	}
+	for _, cfg := range cases {
+		if err := validateBackendIdentityConfig(cfg); err != nil {
+			t.Errorf("validateBackendIdentityConfig(%+v) = %v, want nil", cfg, err)
+		}
+	}
+}
+
+func TestValidateBackendIdentityConfig_ForbiddenHeader(t *testing.T) {
+	forbidden := []string{
+		"Host", "Content-Length", "Transfer-Encoding", "Connection",
+		"X-Portcullis-Trace",
+	}
+	for _, h := range forbidden {
+		cfg := BackendConfig{IdentityHeader: h}
+		if err := validateBackendIdentityConfig(cfg); err == nil {
+			t.Errorf("expected error for forbidden identity_header %q, got nil", h)
+		}
+	}
+}
+
+func TestValidateBackendIdentityConfig_InvalidPath(t *testing.T) {
+	badPaths := []string{
+		// empty / whitespace-only
+		" ",
+		"\t",
+		"  ",
+		// empty segments
+		".leading",
+		"trailing.",
+		"a..b",
+		".",
+		// invalid characters within a segment
+		"a b",        // space inside segment
+		"a.b c",      // space in nested segment
+		"auth.tok$en", // dollar sign
+		"auth.tok@en", // at sign
+		"a.b/c",      // slash
+		"a.b.c!",     // exclamation
+	}
+	for _, p := range badPaths {
+		cfg := BackendConfig{IdentityPath: p}
+		if err := validateBackendIdentityConfig(cfg); err == nil {
+			t.Errorf("expected error for malformed identity_path %q, got nil", p)
+		}
+	}
+}
+
+func TestValidateBackendIdentityConfig_ValidPaths(t *testing.T) {
+	good := []string{
+		"token",
+		"auth.token",
+		"a.b.c.d",
+		"auth_token",
+		"x-identity",
+		"Auth-Token-123",
+	}
+	for _, p := range good {
+		cfg := BackendConfig{IdentityPath: p}
+		if err := validateBackendIdentityConfig(cfg); err != nil {
+			t.Errorf("validateBackendIdentityConfig with path %q = %v, want nil", p, err)
+		}
 	}
 }
 

@@ -157,6 +157,12 @@ func (c *Config) Validate(sources cfgloader.SourceMap) (cfgloader.PostureReport,
 		}
 	}
 
+	for i, backend := range c.Responsibility.Backends {
+		if err := validateBackendIdentityConfig(backend); err != nil {
+			return cfgloader.PostureReport{}, fmt.Errorf("mcp_backends[%d] (%q): %w", i, backend.Name, err)
+		}
+	}
+
 	report := cfgloader.BuildPostureReport(c, sources, SecretAllowlist)
 
 	if c.Mode != cfgloader.ModeProduction {
@@ -338,6 +344,16 @@ type BackendConfig struct {
 	// DropHeaders lists headers that must never be sent to this backend, regardless
 	// of ForwardHeaders. Evaluated after the Forbidden hard-coded list. Default: []
 	DropHeaders []string `yaml:"drop_headers"`
+	// IdentityHeader, if non-empty, causes Keep to inject the user's raw identity
+	// token into outgoing requests to this backend as an HTTP header of this name.
+	// Applies to http and sse backends only. Takes precedence over any
+	// client-forwarded header of the same name.
+	IdentityHeader string `yaml:"identity_header"`
+	// IdentityPath, if non-empty, causes Keep to inject the user's raw identity
+	// token into the tool call arguments at the given dot-separated path before
+	// forwarding to this backend. Applies to all backend types (stdio, http, sse).
+	// The original arguments map is never mutated.
+	IdentityPath string `yaml:"identity_path"`
 }
 
 type ServiceNowConfig struct {
@@ -411,6 +427,53 @@ func (l *LimitsConfig) ApplyDefaults() {
 	if l.MaxForwardedHeadersTotalBytes == 0 {
 		l.MaxForwardedHeadersTotalBytes = 16384 // 16 KB
 	}
+}
+
+// validateBackendIdentityConfig checks that IdentityHeader and IdentityPath are
+// well-formed and safe when set on a BackendConfig.
+func validateBackendIdentityConfig(cfg BackendConfig) error {
+	if cfg.IdentityHeader != "" {
+		if strings.TrimSpace(cfg.IdentityHeader) == "" {
+			return fmt.Errorf("identity_header must not be whitespace-only")
+		}
+		if shared.IsForbiddenHeader(cfg.IdentityHeader) {
+			return fmt.Errorf("identity_header %q is a forbidden header and cannot be used for identity injection", cfg.IdentityHeader)
+		}
+	}
+	if cfg.IdentityPath != "" {
+		if err := validateIdentityPath(cfg.IdentityPath); err != nil {
+			return fmt.Errorf("identity_path: %w", err)
+		}
+	}
+	return nil
+}
+
+// validateIdentityPath returns an error if path is whitespace-only, contains
+// empty segments (e.g. ".a", "a.", "a..b"), or contains characters outside the
+// allowed set [a-zA-Z0-9_-] within any segment.  These constraints ensure that
+// every segment maps to a predictable, well-formed map key after injection.
+func validateIdentityPath(path string) error {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("identity_path must not be whitespace-only")
+	}
+	for _, seg := range strings.Split(path, ".") {
+		if seg == "" {
+			return fmt.Errorf("path %q contains an empty segment", path)
+		}
+		for _, r := range seg {
+			if !isValidPathSegmentChar(r) {
+				return fmt.Errorf("path %q contains invalid character %q in segment %q (allowed: a-z, A-Z, 0-9, _, -)", path, r, seg)
+			}
+		}
+	}
+	return nil
+}
+
+// isValidPathSegmentChar reports whether r is allowed inside a path segment.
+// Permitted characters: ASCII letters, digits, underscore, hyphen.
+func isValidPathSegmentChar(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+		(r >= '0' && r <= '9') || r == '_' || r == '-'
 }
 
 // RedisConfig holds connection and security settings for a Redis-backed store.

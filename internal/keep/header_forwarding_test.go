@@ -231,6 +231,80 @@ func TestHeaderInjectingRoundTripper_HotReload(t *testing.T) {
 	}
 }
 
+// --- identity header injection ---
+
+func TestHeaderInjection_AddsIdentityHeader(t *testing.T) {
+	backend, received, mu := roundTripperTestServer(t)
+	conn := &backendConn{cfg: BackendConfig{IdentityHeader: "X-Identity-Token"}}
+	rt := &headerInjectingRoundTripper{conn: conn, inner: http.DefaultTransport}
+
+	ctx := withRawToken(context.Background(), "my-jwt-token")
+	doRoundTrip(t, rt, backend.URL, ctx)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if got := (*received).Get("X-Identity-Token"); got != "my-jwt-token" {
+		t.Errorf("X-Identity-Token = %q, want %q", got, "my-jwt-token")
+	}
+}
+
+func TestHeaderInjection_OverridesForwardedHeader(t *testing.T) {
+	backend, received, mu := roundTripperTestServer(t)
+	conn := &backendConn{cfg: BackendConfig{
+		ForwardHeaders: []string{"*"},
+		IdentityHeader: "X-Identity-Token",
+	}}
+	rt := &headerInjectingRoundTripper{conn: conn, inner: http.DefaultTransport}
+
+	// Client forwards a header with the same name — identity header must win.
+	ctx := withClientHeaders(context.Background(), map[string][]string{
+		"X-Identity-Token": {"client-supplied-value"},
+	})
+	ctx = withRawToken(ctx, "authoritative-token")
+	doRoundTrip(t, rt, backend.URL, ctx)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if got := (*received).Get("X-Identity-Token"); got != "authoritative-token" {
+		t.Errorf("X-Identity-Token = %q, want injected %q", got, "authoritative-token")
+	}
+}
+
+func TestHeaderInjection_SkipsWhenNoRawToken(t *testing.T) {
+	backend, received, mu := roundTripperTestServer(t)
+	conn := &backendConn{cfg: BackendConfig{IdentityHeader: "X-Identity-Token"}}
+	rt := &headerInjectingRoundTripper{conn: conn, inner: http.DefaultTransport}
+
+	// No raw token in context — header must not be injected at all.
+	doRoundTrip(t, rt, backend.URL, context.Background())
+
+	mu.Lock()
+	defer mu.Unlock()
+	if got := (*received).Get("X-Identity-Token"); got != "" {
+		t.Errorf("X-Identity-Token should be absent when no token in context, got %q", got)
+	}
+}
+
+func TestHeaderInjection_SkipsWhenHeaderNotConfigured(t *testing.T) {
+	backend, received, mu := roundTripperTestServer(t)
+	conn := &backendConn{} // no IdentityHeader
+	rt := &headerInjectingRoundTripper{conn: conn, inner: http.DefaultTransport}
+
+	ctx := withRawToken(context.Background(), "some-token")
+	doRoundTrip(t, rt, backend.URL, ctx)
+
+	mu.Lock()
+	defer mu.Unlock()
+	// Token must not appear under any key.
+	for name, vals := range *received {
+		for _, v := range vals {
+			if v == "some-token" {
+				t.Errorf("token leaked into header %q: %q", name, v)
+			}
+		}
+	}
+}
+
 // --- validateClientHeaders ---
 
 func TestValidateClientHeaders_Valid(t *testing.T) {
