@@ -40,6 +40,12 @@ func newTestGate(sandbox string, protected []string) *Gate {
 }
 
 func TestFastPath(t *testing.T) {
+	// "read_file" is intentionally used as the tool name throughout this test.
+	// It is not present in toolCategory, so effectiveStrategy always returns the
+	// default "allow". This isolates the sandbox/forbidden path logic from
+	// strategy behaviour; strategy is covered separately in TestStrategyPrecedence
+	// and related tests.
+	//
 	// Create a parent dir so sandbox and protected are siblings, enabling
 	// reliable path-traversal test cases.
 	parent := t.TempDir()
@@ -347,6 +353,229 @@ func TestFastPath_MultiSandbox(t *testing.T) {
 			}
 		})
 	}
+}
+
+// newTestGateWithStrategy builds a minimal Gate with a workspace, forbidden
+// directories, and a strategy config for strategy-related FastPath tests.
+func newTestGateWithStrategy(dirs []string, protected []string, strategy LocalFSStrategyConfig) *Gate {
+	return &Gate{
+		cfg: Config{
+			Responsibility: ResponsibilityConfig{
+				Tools: ToolsConfig{
+					LocalFS: LocalFSConfig{
+						Workspace: SandboxConfig{Directories: dirs},
+						Forbidden: ForbiddenConfig{Directories: protected},
+						Strategy:  strategy,
+					},
+				},
+			},
+		},
+	}
+}
+
+func TestWildcardWorkspace(t *testing.T) {
+	outside := t.TempDir()
+	protected := t.TempDir()
+	protectedFile := filepath.Join(protected, "secret.txt")
+	_ = os.WriteFile(protectedFile, []byte("x"), 0640)
+
+	g := newTestGateWithStrategy([]string{"*"}, []string{protected}, LocalFSStrategyConfig{})
+	ctx := context.Background()
+
+	t.Run("any path is allowed with wildcard workspace", func(t *testing.T) {
+		got, _ := g.FastPath(ctx, "read_text_file", map[string]any{"path": filepath.Join(outside, "file.txt")})
+		if got != FastPathAllow {
+			t.Errorf("FastPath() = %s, want allow", got)
+		}
+	})
+
+	t.Run("forbidden path is denied even with wildcard workspace", func(t *testing.T) {
+		got, _ := g.FastPath(ctx, "read_text_file", map[string]any{"path": protectedFile})
+		if got != FastPathDeny {
+			t.Errorf("FastPath() = %s, want deny", got)
+		}
+	})
+}
+
+func TestStrategyPrecedence(t *testing.T) {
+	sandbox := t.TempDir()
+	sandboxFile := filepath.Join(sandbox, "file.txt")
+	_ = os.WriteFile(sandboxFile, []byte("x"), 0640)
+	ctx := context.Background()
+
+	t.Run("tool override takes precedence over category", func(t *testing.T) {
+		// Category says "allow" but tool-specific says "deny".
+		g := newTestGateWithStrategy([]string{sandbox}, nil, LocalFSStrategyConfig{
+			Read:         "allow",
+			ReadTextFile: "deny",
+		})
+		got, _ := g.FastPath(ctx, "read_text_file", map[string]any{"path": sandboxFile})
+		if got != FastPathDeny {
+			t.Errorf("FastPath() = %s, want deny", got)
+		}
+	})
+
+	t.Run("category applies when no tool override is set", func(t *testing.T) {
+		// Category says "verify"; no tool override.
+		g := newTestGateWithStrategy([]string{sandbox}, nil, LocalFSStrategyConfig{
+			Read: "verify",
+		})
+		got, _ := g.FastPath(ctx, "read_text_file", map[string]any{"path": sandboxFile})
+		if got != FastPathForward {
+			t.Errorf("FastPath() = %s, want forward", got)
+		}
+	})
+
+	t.Run("tool override verify beats category allow", func(t *testing.T) {
+		g := newTestGateWithStrategy([]string{sandbox}, nil, LocalFSStrategyConfig{
+			Delete:     "allow",
+			DeleteFile: "verify",
+		})
+		got, _ := g.FastPath(ctx, "delete_file", map[string]any{"path": sandboxFile})
+		if got != FastPathForward {
+			t.Errorf("FastPath() = %s, want forward", got)
+		}
+	})
+}
+
+func TestGlobalDenyVerify(t *testing.T) {
+	sandbox := t.TempDir()
+	outside := t.TempDir()
+	sandboxFile := filepath.Join(sandbox, "file.txt")
+	_ = os.WriteFile(sandboxFile, []byte("x"), 0640)
+	outsideFile := filepath.Join(outside, "file.txt")
+	_ = os.WriteFile(outsideFile, []byte("x"), 0640)
+	ctx := context.Background()
+
+	t.Run("deny is global — applies inside workspace", func(t *testing.T) {
+		g := newTestGateWithStrategy([]string{sandbox}, nil, LocalFSStrategyConfig{Delete: "deny"})
+		got, _ := g.FastPath(ctx, "delete_file", map[string]any{"path": sandboxFile})
+		if got != FastPathDeny {
+			t.Errorf("FastPath() = %s, want deny", got)
+		}
+	})
+
+	t.Run("deny is global — applies outside workspace", func(t *testing.T) {
+		g := newTestGateWithStrategy([]string{sandbox}, nil, LocalFSStrategyConfig{Delete: "deny"})
+		got, _ := g.FastPath(ctx, "delete_file", map[string]any{"path": outsideFile})
+		if got != FastPathDeny {
+			t.Errorf("FastPath() = %s, want deny", got)
+		}
+	})
+
+	t.Run("verify is global — applies inside workspace", func(t *testing.T) {
+		g := newTestGateWithStrategy([]string{sandbox}, nil, LocalFSStrategyConfig{Write: "verify"})
+		got, _ := g.FastPath(ctx, "write_file", map[string]any{"path": sandboxFile})
+		if got != FastPathForward {
+			t.Errorf("FastPath() = %s, want forward", got)
+		}
+	})
+
+	t.Run("verify is global — applies outside workspace", func(t *testing.T) {
+		g := newTestGateWithStrategy([]string{sandbox}, nil, LocalFSStrategyConfig{Write: "verify"})
+		got, _ := g.FastPath(ctx, "write_file", map[string]any{"path": outsideFile})
+		if got != FastPathForward {
+			t.Errorf("FastPath() = %s, want forward", got)
+		}
+	})
+
+	t.Run("allow outside workspace downgrades to forward", func(t *testing.T) {
+		g := newTestGateWithStrategy([]string{sandbox}, nil, LocalFSStrategyConfig{Read: "allow"})
+		got, _ := g.FastPath(ctx, "read_text_file", map[string]any{"path": outsideFile})
+		if got != FastPathForward {
+			t.Errorf("FastPath() = %s, want forward", got)
+		}
+	})
+}
+
+func TestForbiddenOverride(t *testing.T) {
+	// Even with wildcard workspace and allow strategy, forbidden wins.
+	forbidden := t.TempDir()
+	forbiddenFile := filepath.Join(forbidden, "secret.txt")
+	_ = os.WriteFile(forbiddenFile, []byte("x"), 0640)
+
+	g := newTestGateWithStrategy([]string{"*"}, []string{forbidden}, LocalFSStrategyConfig{
+		Read: "allow",
+	})
+	ctx := context.Background()
+
+	got, _ := g.FastPath(ctx, "read_text_file", map[string]any{"path": forbiddenFile})
+	if got != FastPathDeny {
+		t.Errorf("FastPath() = %s, want deny (forbidden overrides wildcard+allow)", got)
+	}
+}
+
+func TestImplicitVerify(t *testing.T) {
+	// Paths outside the workspace with strategy "allow" (default) must forward.
+	sandbox := t.TempDir()
+	outside := t.TempDir()
+	outsideFile := filepath.Join(outside, "file.txt")
+	_ = os.WriteFile(outsideFile, []byte("x"), 0640)
+
+	g := newTestGateWithStrategy([]string{sandbox}, nil, LocalFSStrategyConfig{})
+	ctx := context.Background()
+
+	got, _ := g.FastPath(ctx, "read_text_file", map[string]any{"path": outsideFile})
+	if got != FastPathForward {
+		t.Errorf("FastPath() = %s, want forward (implicit verify outside workspace)", got)
+	}
+}
+
+func TestOperationMapping(t *testing.T) {
+	// copy_file and move_file must be governed by the "write" strategy.
+	sandbox := t.TempDir()
+	fileA := filepath.Join(sandbox, "a.txt")
+	fileB := filepath.Join(sandbox, "b.txt")
+	_ = os.WriteFile(fileA, []byte("x"), 0640)
+	_ = os.WriteFile(fileB, []byte("x"), 0640)
+
+	ctx := context.Background()
+
+	for _, toolName := range []string{"copy_file", "move_file"} {
+		t.Run(toolName+" governed by write strategy deny", func(t *testing.T) {
+			g := newTestGateWithStrategy([]string{sandbox}, nil, LocalFSStrategyConfig{Write: "deny"})
+			got, _ := g.FastPath(ctx, toolName, map[string]any{
+				"source":      fileA,
+				"destination": fileB,
+			})
+			if got != FastPathDeny {
+				t.Errorf("FastPath(%s) = %s, want deny", toolName, got)
+			}
+		})
+
+		t.Run(toolName+" governed by write strategy verify", func(t *testing.T) {
+			g := newTestGateWithStrategy([]string{sandbox}, nil, LocalFSStrategyConfig{Write: "verify"})
+			got, _ := g.FastPath(ctx, toolName, map[string]any{
+				"source":      fileA,
+				"destination": fileB,
+			})
+			if got != FastPathForward {
+				t.Errorf("FastPath(%s) = %s, want forward", toolName, got)
+			}
+		})
+	}
+}
+
+func TestDirectoryArgExtraction(t *testing.T) {
+	// The "directory" argument key must be treated as a path.
+	sandbox := t.TempDir()
+	outside := t.TempDir()
+	ctx := context.Background()
+	g := newTestGateWithStrategy([]string{sandbox}, nil, LocalFSStrategyConfig{})
+
+	t.Run("directory arg inside sandbox is allowed", func(t *testing.T) {
+		got, _ := g.FastPath(ctx, "list_directory", map[string]any{"directory": sandbox})
+		if got != FastPathAllow {
+			t.Errorf("FastPath() = %s, want allow", got)
+		}
+	})
+
+	t.Run("directory arg outside sandbox is forwarded", func(t *testing.T) {
+		got, _ := g.FastPath(ctx, "list_directory", map[string]any{"directory": outside})
+		if got != FastPathForward {
+			t.Errorf("FastPath() = %s, want forward", got)
+		}
+	})
 }
 
 func TestSandboxConfig_EffectiveDirs(t *testing.T) {

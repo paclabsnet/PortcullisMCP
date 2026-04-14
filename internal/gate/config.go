@@ -105,6 +105,9 @@ func (c *Config) Validate(sources cfgloader.SourceMap) (cfgloader.PostureReport,
 	if err := c.Peers.Guard.Validate(); err != nil {
 		return cfgloader.PostureReport{}, err
 	}
+	if err := c.Responsibility.Tools.LocalFS.Strategy.Validate(); err != nil {
+		return cfgloader.PostureReport{}, err
+	}
 
 	switch c.Tenancy {
 	case "", "single":
@@ -304,9 +307,83 @@ type ToolsConfig struct {
 
 // LocalFSConfig configures the built-in local filesystem tool provider.
 type LocalFSConfig struct {
-	Enabled   bool            `yaml:"enabled"`
-	Workspace SandboxConfig   `yaml:"workspace"`
-	Forbidden ForbiddenConfig `yaml:"forbidden"`
+	Enabled   bool                  `yaml:"enabled"`
+	Workspace SandboxConfig         `yaml:"workspace"`
+	Forbidden ForbiddenConfig       `yaml:"forbidden"`
+	Strategy  LocalFSStrategyConfig `yaml:"strategy"`
+}
+
+// LocalFSStrategyConfig controls per-operation and per-tool fast-path behaviour.
+// Category-level keys (Read, Write, Update, Delete) apply to all tools in that
+// category unless overridden by a specific tool key.
+//
+// Valid values:
+//   - "allow": (Scoped) Automatically allow within workspace; verify otherwise.
+//   - "verify": (Global) Always forward to Keep for authorization.
+//   - "deny": (Global) Always reject immediately.
+//
+// deny and verify are global; allow is restricted to the configured workspace.
+// The empty string defaults to "allow".
+type LocalFSStrategyConfig struct {
+	// Category-level keys. These apply to all tools in the category unless
+	// overridden by a tool-specific key.
+	Read   string `yaml:"read"`
+	Write  string `yaml:"write"`
+	Update string `yaml:"update"`
+	Delete string `yaml:"delete"`
+
+	// Tool-specific overrides. If set, these take precedence over category keys.
+	ReadTextFile           string `yaml:"read_text_file"`
+	ReadMediaFile          string `yaml:"read_media_file"`
+	ReadMultipleFiles      string `yaml:"read_multiple_files"`
+	WriteFile              string `yaml:"write_file"`
+	EditFile               string `yaml:"edit_file"`
+	CreateDirectory        string `yaml:"create_directory"`
+	ListDirectory          string `yaml:"list_directory"`
+	ListDirectoryWithSizes string `yaml:"list_directory_with_sizes"`
+	DirectoryTree          string `yaml:"directory_tree"`
+	MoveFile               string `yaml:"move_file"`
+	SearchFiles            string `yaml:"search_files"`
+	CopyFile               string `yaml:"copy_file"`
+	DeleteFile             string `yaml:"delete_file"`
+	SearchWithinFiles      string `yaml:"search_within_files"`
+	GetFileInfo            string `yaml:"get_file_info"`
+	ListAllowedDirectories string `yaml:"list_allowed_directories"`
+}
+
+// Validate returns an error if any strategy field contains an invalid value.
+func (s LocalFSStrategyConfig) Validate() error {
+	fields := map[string]string{
+		"read":                      s.Read,
+		"write":                     s.Write,
+		"update":                    s.Update,
+		"delete":                    s.Delete,
+		"read_text_file":            s.ReadTextFile,
+		"read_media_file":           s.ReadMediaFile,
+		"read_multiple_files":       s.ReadMultipleFiles,
+		"write_file":                s.WriteFile,
+		"edit_file":                 s.EditFile,
+		"create_directory":          s.CreateDirectory,
+		"list_directory":            s.ListDirectory,
+		"list_directory_with_sizes": s.ListDirectoryWithSizes,
+		"directory_tree":            s.DirectoryTree,
+		"move_file":                 s.MoveFile,
+		"search_files":              s.SearchFiles,
+		"copy_file":                 s.CopyFile,
+		"delete_file":               s.DeleteFile,
+		"search_within_files":       s.SearchWithinFiles,
+		"get_file_info":             s.GetFileInfo,
+		"list_allowed_directories":  s.ListAllowedDirectories,
+	}
+	for k, v := range fields {
+		if v != "" && v != "allow" && v != "verify" && v != "deny" {
+			return fmt.Errorf(
+				"responsibility.tools.portcullis-localfs.strategy.%s: invalid value %q (must be \"allow\", \"verify\", or \"deny\")",
+				k, v,
+			)
+		}
+	}
+	return nil
 }
 
 type EscalationConfig struct {

@@ -21,7 +21,8 @@ server:
 #                 the IdP's JWKS endpoint (RS256 / asymmetric keys).
 #
 #  hmac-verify:  Use this when the Agent is given a JWT at startup that is signed with a secret key
-#
+
+
 identity:
   strategy: "oidc-verify"
   config:

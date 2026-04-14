@@ -45,6 +45,31 @@ responsibility:
           - "~/.ssh"
           - "~/.portcullis"
           - "/etc"
+      # strategy controls per-operation and per-tool fast-path behaviour.
+      # Category keys (read, write, update, delete) apply to all tools in the
+      # category unless overridden by a tool-specific key.
+      #
+      # Values:
+      #   allow  - (scoped) allow within workspace; verify outside
+      #   verify - (global) always forward to Keep for authorization
+      #   deny   - (global) always reject immediately
+      #
+      # Example A — standard gate: reads allowed in workspace, writes verified,
+      # deletes blocked everywhere.
+      strategy:
+        read: allow
+        write: verify
+        delete: deny
+      #
+      # Example B — high-trust gate: allow everything on the machine except
+      # sensitive directories, with deletes still requiring Keep approval.
+      # (Requires workspace.directories: ["*"])
+      #
+      # strategy:
+      #   read: allow
+      #   write: allow
+      #   update: allow
+      #   delete: verify
   escalation:
     strategy: "proactive"
     poll_interval: 60

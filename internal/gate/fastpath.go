@@ -33,20 +33,111 @@ const (
 	FastPathForward                       // no local decision; forward to Keep
 )
 
+// toolCategory maps each portcullis-localfs tool name to its operation category.
+var toolCategory = map[string]string{
+	"read_text_file":            "read",
+	"read_media_file":           "read",
+	"read_multiple_files":       "read",
+	"list_directory":            "read",
+	"list_directory_with_sizes": "read",
+	"directory_tree":            "read",
+	"search_files":              "read",
+	"search_within_files":       "read",
+	"get_file_info":             "read",
+	"list_allowed_directories":  "read",
+	"write_file":                "write",
+	"create_directory":          "write",
+	"move_file":                 "write",
+	"copy_file":                 "write",
+	"edit_file":                 "update",
+	"delete_file":               "delete",
+}
+
+// effectiveStrategy returns the resolved strategy for the given tool name.
+// Priority: tool-specific override > category default > "allow".
+func effectiveStrategy(s LocalFSStrategyConfig, toolName string) string {
+	// Tool-specific override takes precedence.
+	override := toolStrategyOverride(s, toolName)
+	if override != "" {
+		return override
+	}
+	// Fall back to category-level default.
+	switch toolCategory[toolName] {
+	case "read":
+		if s.Read != "" {
+			return s.Read
+		}
+	case "write":
+		if s.Write != "" {
+			return s.Write
+		}
+	case "update":
+		if s.Update != "" {
+			return s.Update
+		}
+	case "delete":
+		if s.Delete != "" {
+			return s.Delete
+		}
+	}
+	return "allow"
+}
+
+// toolStrategyOverride returns the tool-specific strategy override, or "" if none is set.
+func toolStrategyOverride(s LocalFSStrategyConfig, toolName string) string {
+	switch toolName {
+	case "read_text_file":
+		return s.ReadTextFile
+	case "read_media_file":
+		return s.ReadMediaFile
+	case "read_multiple_files":
+		return s.ReadMultipleFiles
+	case "write_file":
+		return s.WriteFile
+	case "edit_file":
+		return s.EditFile
+	case "create_directory":
+		return s.CreateDirectory
+	case "list_directory":
+		return s.ListDirectory
+	case "list_directory_with_sizes":
+		return s.ListDirectoryWithSizes
+	case "directory_tree":
+		return s.DirectoryTree
+	case "move_file":
+		return s.MoveFile
+	case "search_files":
+		return s.SearchFiles
+	case "copy_file":
+		return s.CopyFile
+	case "delete_file":
+		return s.DeleteFile
+	case "search_within_files":
+		return s.SearchWithinFiles
+	case "get_file_info":
+		return s.GetFileInfo
+	case "list_allowed_directories":
+		return s.ListAllowedDirectories
+	}
+	return ""
+}
+
 // FastPath evaluates a tool call locally without a network round-trip.
 // It only makes decisions for filesystem operations; all other calls return
 // FastPathForward.
 //
-// Rules (evaluated in order):
-//  1. Any resolved path that matches a protected path → deny immediately.
-//  2. All resolved paths entirely within the sandbox directory → allow immediately.
-//  3. Everything else → forward to Keep.
-//
-// Both rules resolve symlinks and clean the path before comparison to prevent
-// path traversal and symlink attacks.
-//
-// Multi-path tools (copy_file, move_file) extract all path arguments; all
-// paths must pass both rules for an allow decision.
+// Evaluation order:
+//  1. Path extraction — extract all path arguments and resolve to absolute,
+//     symlink-free paths. Deny immediately if any path cannot be resolved.
+//  2. Forbidden check — if any resolved path is within a forbidden directory,
+//     deny immediately (takes precedence over all strategy settings).
+//  3. Strategy resolution — determine the effective strategy for the tool
+//     (tool-specific override > category default > "allow").
+//  4. Strategy application:
+//     - "deny"  → deny immediately (global).
+//     - "verify" → forward to Keep (global).
+//     - "allow" → allow if all paths are within a workspace directory (or
+//     workspace contains "*"); otherwise forward to Keep.
 func (g *Gate) FastPath(_ context.Context, toolName string, args map[string]any) (FastPathResult, error) {
 	paths := extractPaths(args)
 	if len(paths) == 0 {
@@ -64,7 +155,7 @@ func (g *Gate) FastPath(_ context.Context, toolName string, args map[string]any)
 		resolved = append(resolved, r)
 	}
 
-	// Rule 1: forbidden paths take priority over the sandbox.
+	// Step 2: Forbidden check — always evaluated first, always global.
 	for _, r := range resolved {
 		for _, p := range g.cfg.Responsibility.Tools.LocalFS.Forbidden.Directories {
 			forbidden, err := resolvePath(p)
@@ -77,32 +168,47 @@ func (g *Gate) FastPath(_ context.Context, toolName string, args map[string]any)
 		}
 	}
 
-	// Rule 2: all paths must be within a single sandbox directory for a local allow.
-	// Each configured directory is checked in order; a tool call is fast-pathed
-	// when every path argument falls within the same sandbox directory.
-	for _, dir := range g.cfg.Responsibility.Tools.LocalFS.Workspace.EffectiveDirs() {
-		sandbox, err := resolvePath(dir)
-		if err != nil {
-			continue
-		}
-		allInSandbox := true
-		for _, r := range resolved {
-			if !isContainedIn(r, sandbox) {
-				allInSandbox = false
-				break
+	// Step 3: Resolve the effective strategy for this tool.
+	strategy := effectiveStrategy(g.cfg.Responsibility.Tools.LocalFS.Strategy, toolName)
+
+	// Step 4: Apply strategy.
+	switch strategy {
+	case "deny":
+		return FastPathDeny, nil
+	case "verify":
+		return FastPathForward, nil
+	default: // "allow"
+		// All paths must be within a single workspace directory (or workspace
+		// contains the "*" wildcard, which matches every path on the machine).
+		for _, dir := range g.cfg.Responsibility.Tools.LocalFS.Workspace.EffectiveDirs() {
+			if dir == "*" {
+				// Wildcard: all paths pass the workspace check.
+				return FastPathAllow, nil
+			}
+			sandbox, err := resolvePath(dir)
+			if err != nil {
+				continue
+			}
+			allInSandbox := true
+			for _, r := range resolved {
+				if !isContainedIn(r, sandbox) {
+					allInSandbox = false
+					break
+				}
+			}
+			if allInSandbox {
+				return FastPathAllow, nil
 			}
 		}
-		if allInSandbox {
-			return FastPathAllow, nil
-		}
+		// No workspace matched — forward to Keep (implicit verify).
+		return FastPathForward, nil
 	}
-
-	return FastPathForward, nil
 }
 
 // extractPaths returns all filesystem path arguments from a tool call's
-// argument map. It handles three argument conventions:
+// argument map. It handles four argument conventions:
 //   - "path": single path (most tools)
+//   - "directory": single path (used by some MCP filesystem clients)
 //   - "source" + "destination": two-path tools (copy_file, move_file)
 //   - "paths": slice of paths (read_multiple_files)
 //
@@ -110,9 +216,11 @@ func (g *Gate) FastPath(_ context.Context, toolName string, args map[string]any)
 func extractPaths(args map[string]any) []string {
 	var out []string
 
-	if v, ok := args["path"]; ok {
-		if s, ok := v.(string); ok && s != "" {
-			out = append(out, s)
+	for _, key := range []string{"path", "directory"} {
+		if v, ok := args[key]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				out = append(out, s)
+			}
 		}
 	}
 
@@ -179,25 +287,6 @@ func isContainedIn(target, base string) bool {
 	return target == strings.TrimSuffix(base, string(filepath.Separator)) ||
 		strings.HasPrefix(target, base)
 }
-
-/*
-@TODO : 2026-04-02 : remove
-// isFastPathTool reports whether the tool name is a known filesystem tool
-// that may be subject to fast-path evaluation. This is a defence-in-depth
-// check; the path extraction in extractPath is the primary gate.
-func isFastPathTool(toolName string) bool {
-	switch toolName {
-	case "read_text_file", "read_file", "read_media_file", "read_multiple_files",
-		"write_file", "edit_file",
-		"list_directory", "list_directory_with_sizes", "directory_tree",
-		"create_directory", "move_file", "copy_file", "delete_file",
-		"search_files", "search_within_files", "get_file_info",
-		"list_allowed_directories":
-		return true
-	}
-	return false
-}
-*/
 
 // decisionLabel returns a log-friendly string for a FastPathResult.
 func (r FastPathResult) String() string {

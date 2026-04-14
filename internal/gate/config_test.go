@@ -626,3 +626,81 @@ func TestConfig_ValidateMultiTenant_NegativeSessionTTLRejected(t *testing.T) {
 		t.Errorf("expected session_ttl error for negative value, got: %v", err)
 	}
 }
+
+// --- LocalFSStrategyConfig.Validate ---
+
+func TestConfig_Validate_LocalFSStrategy(t *testing.T) {
+	validValues := []string{"", "allow", "verify", "deny"}
+	invalidValues := []string{"Allow", "DENY", "Verify", "block", "pass", "yes"}
+
+	// Each category-level field must accept the three valid values and reject anything else.
+	categorySetters := map[string]func(*LocalFSStrategyConfig, string){
+		"read":   func(s *LocalFSStrategyConfig, v string) { s.Read = v },
+		"write":  func(s *LocalFSStrategyConfig, v string) { s.Write = v },
+		"update": func(s *LocalFSStrategyConfig, v string) { s.Update = v },
+		"delete": func(s *LocalFSStrategyConfig, v string) { s.Delete = v },
+	}
+	// Each tool-specific field must accept the three valid values and reject anything else.
+	toolSetters := map[string]func(*LocalFSStrategyConfig, string){
+		"read_text_file":            func(s *LocalFSStrategyConfig, v string) { s.ReadTextFile = v },
+		"read_media_file":           func(s *LocalFSStrategyConfig, v string) { s.ReadMediaFile = v },
+		"read_multiple_files":       func(s *LocalFSStrategyConfig, v string) { s.ReadMultipleFiles = v },
+		"write_file":                func(s *LocalFSStrategyConfig, v string) { s.WriteFile = v },
+		"edit_file":                 func(s *LocalFSStrategyConfig, v string) { s.EditFile = v },
+		"create_directory":          func(s *LocalFSStrategyConfig, v string) { s.CreateDirectory = v },
+		"list_directory":            func(s *LocalFSStrategyConfig, v string) { s.ListDirectory = v },
+		"list_directory_with_sizes": func(s *LocalFSStrategyConfig, v string) { s.ListDirectoryWithSizes = v },
+		"directory_tree":            func(s *LocalFSStrategyConfig, v string) { s.DirectoryTree = v },
+		"move_file":                 func(s *LocalFSStrategyConfig, v string) { s.MoveFile = v },
+		"search_files":              func(s *LocalFSStrategyConfig, v string) { s.SearchFiles = v },
+		"copy_file":                 func(s *LocalFSStrategyConfig, v string) { s.CopyFile = v },
+		"delete_file":               func(s *LocalFSStrategyConfig, v string) { s.DeleteFile = v },
+		"search_within_files":       func(s *LocalFSStrategyConfig, v string) { s.SearchWithinFiles = v },
+		"get_file_info":             func(s *LocalFSStrategyConfig, v string) { s.GetFileInfo = v },
+		"list_allowed_directories":  func(s *LocalFSStrategyConfig, v string) { s.ListAllowedDirectories = v },
+	}
+
+	allSetters := make(map[string]func(*LocalFSStrategyConfig, string))
+	for k, v := range categorySetters {
+		allSetters[k] = v
+	}
+	for k, v := range toolSetters {
+		allSetters[k] = v
+	}
+
+	for field, set := range allSetters {
+		for _, val := range validValues {
+			t.Run(field+"/valid/"+val, func(t *testing.T) {
+				var s LocalFSStrategyConfig
+				set(&s, val)
+				if err := s.Validate(); err != nil {
+					t.Errorf("Validate() with %s=%q: unexpected error: %v", field, val, err)
+				}
+			})
+		}
+		for _, val := range invalidValues {
+			t.Run(field+"/invalid/"+val, func(t *testing.T) {
+				var s LocalFSStrategyConfig
+				set(&s, val)
+				if err := s.Validate(); err == nil {
+					t.Errorf("Validate() with %s=%q: expected error, got nil", field, val)
+				}
+			})
+		}
+	}
+
+	t.Run("invalid strategy propagates through Config.Validate", func(t *testing.T) {
+		cfg := validBaseConfig()
+		cfg.Responsibility.Tools.LocalFS.Strategy.Read = "Block"
+		_, err := cfg.Validate(nil)
+		if err == nil || !strings.Contains(err.Error(), "strategy.read") {
+			t.Errorf("expected strategy.read error, got: %v", err)
+		}
+	})
+
+	t.Run("empty strategy struct is valid (all defaults)", func(t *testing.T) {
+		if err := (LocalFSStrategyConfig{}).Validate(); err != nil {
+			t.Errorf("empty strategy should be valid; got: %v", err)
+		}
+	})
+}
