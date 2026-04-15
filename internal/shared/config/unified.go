@@ -121,6 +121,18 @@ type IdentityConfig struct {
 	Config   map[string]interface{} `yaml:"config"`
 }
 
+// OIDCBaseConfig defines the fundamental settings for an OIDC provider.
+// Embed this in a component-specific identity config struct to share common fields.
+type OIDCBaseConfig struct {
+	IssuerURL string `yaml:"issuer_url" mapstructure:"issuer_url"`
+	Client    struct {
+		ID     string `yaml:"id" mapstructure:"id"`
+		Secret string `yaml:"secret" mapstructure:"secret"`
+	} `yaml:"client" mapstructure:"client"`
+	Scopes      []string `yaml:"scopes" mapstructure:"scopes"`
+	RedirectURI string   `yaml:"redirect_uri" mapstructure:"redirect_uri"`
+}
+
 // OperationsConfig holds the "run-the-service" settings like logging and telemetry.
 type OperationsConfig struct {
 	Storage   StorageConfig    `yaml:"storage"`
