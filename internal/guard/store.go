@@ -20,6 +20,60 @@ import (
 	"time"
 )
 
+// OIDCTokenSet holds the tokens obtained from a successful OIDC login.
+type OIDCTokenSet struct {
+	AccessToken  string    `json:"access_token"`
+	RefreshToken string    `json:"refresh_token"`
+	IDToken      string    `json:"id_token"`
+	Expiry       time.Time `json:"expiry"`
+}
+
+// PKCEState holds the short-lived login flow state keyed by OIDC state parameter.
+type PKCEState struct {
+	State        string    `json:"state"`
+	Nonce        string    `json:"nonce"`
+	CodeVerifier string    `json:"code_verifier"`
+	ReturnPath   string    `json:"return_path"`
+	ExpiresAt    time.Time `json:"expires_at"`
+}
+
+// AuthSession holds the server-side session record for an authenticated user.
+type AuthSession struct {
+	SessionID    string       `json:"session_id"`
+	UserID       string       `json:"user_id"`
+	DisplayName  string       `json:"display_name"`
+	Tokens       OIDCTokenSet `json:"tokens"`
+	CreatedAt    time.Time    `json:"created_at"`
+	LastActiveAt time.Time    `json:"last_active_at"`
+}
+
+// AuthStore manages PKCE login-flow state and authenticated sessions.
+// All methods must be safe for concurrent use.
+type AuthStore interface {
+	// StorePKCE saves a short-lived PKCE state record keyed by state.State.
+	StorePKCE(ctx context.Context, state PKCEState) error
+
+	// GetPKCE retrieves a PKCE state by the OIDC state parameter.
+	// Returns (nil, nil) if not found or expired.
+	GetPKCE(ctx context.Context, state string) (*PKCEState, error)
+
+	// DeletePKCE removes a PKCE state record after use.
+	DeletePKCE(ctx context.Context, state string) error
+
+	// StoreSession saves an authenticated session keyed by session.SessionID.
+	StoreSession(ctx context.Context, session AuthSession) error
+
+	// GetSession retrieves a session by its opaque session ID.
+	// Returns (nil, nil) if not found or expired.
+	GetSession(ctx context.Context, sessionID string) (*AuthSession, error)
+
+	// DeleteSession removes a session (e.g. on logout or expiry).
+	DeleteSession(ctx context.Context, sessionID string) error
+
+	// UpdateSessionActivity updates LastActiveAt to now for the given session.
+	UpdateSessionActivity(ctx context.Context, sessionID string) error
+}
+
 // ErrCapacityExceeded is returned by store operations when the configured
 // capacity limit would be exceeded by the requested operation.
 var ErrCapacityExceeded = errors.New("store capacity exceeded")
