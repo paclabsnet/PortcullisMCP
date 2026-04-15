@@ -20,7 +20,7 @@ import (
 	"time"
 )
 
-// MemStore is the in-process implementation of both PendingStore and UnclaimedStore.
+// MemStore is the in-process implementation of PendingStore, UnclaimedStore, and AuthStore.
 type MemStore struct {
 	maxPending int
 	maxTotal   int
@@ -30,9 +30,12 @@ type MemStore struct {
 	pendingEntries map[string]PendingRequest
 	// Outer key: UserID.  Inner key: JTI.
 	unclaimedEntries map[string]map[string]UnclaimedToken
+
+	pkceEntries    map[string]PKCEState
+	sessionEntries map[string]AuthSession
 }
 
-// NewMemStore creates an in-memory store for both pending and unclaimed entries.
+// NewMemStore creates an in-memory store for pending, unclaimed, PKCE, and session entries.
 func NewMemStore(maxPending, maxTotal, maxPerUser int) *MemStore {
 	return &MemStore{
 		maxPending:       maxPending,
@@ -40,6 +43,8 @@ func NewMemStore(maxPending, maxTotal, maxPerUser int) *MemStore {
 		maxPerUser:       maxPerUser,
 		pendingEntries:   make(map[string]PendingRequest),
 		unclaimedEntries: make(map[string]map[string]UnclaimedToken),
+		pkceEntries:      make(map[string]PKCEState),
+		sessionEntries:   make(map[string]AuthSession),
 	}
 }
 
@@ -138,5 +143,77 @@ func (s *MemStore) PurgeExpired(_ context.Context) error {
 			delete(s.unclaimedEntries, userID)
 		}
 	}
+
+	// Purge expired PKCE states
+	for state, ps := range s.pkceEntries {
+		if ps.ExpiresAt.Before(now) {
+			delete(s.pkceEntries, state)
+		}
+	}
+
+	return nil
+}
+
+// AuthStore implementation
+
+func (s *MemStore) StorePKCE(_ context.Context, state PKCEState) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pkceEntries[state.State] = state
+	return nil
+}
+
+func (s *MemStore) GetPKCE(_ context.Context, state string) (*PKCEState, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ps, ok := s.pkceEntries[state]
+	if !ok || time.Now().After(ps.ExpiresAt) {
+		return nil, nil
+	}
+	cp := ps
+	return &cp, nil
+}
+
+func (s *MemStore) DeletePKCE(_ context.Context, state string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.pkceEntries, state)
+	return nil
+}
+
+func (s *MemStore) StoreSession(_ context.Context, session AuthSession) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessionEntries[session.SessionID] = session
+	return nil
+}
+
+func (s *MemStore) GetSession(_ context.Context, sessionID string) (*AuthSession, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, ok := s.sessionEntries[sessionID]
+	if !ok {
+		return nil, nil
+	}
+	cp := sess
+	return &cp, nil
+}
+
+func (s *MemStore) DeleteSession(_ context.Context, sessionID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.sessionEntries, sessionID)
+	return nil
+}
+
+func (s *MemStore) UpdateSessionActivity(_ context.Context, sessionID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, ok := s.sessionEntries[sessionID]
+	if !ok {
+		return nil
+	}
+	sess.LastActiveAt = time.Now()
+	s.sessionEntries[sessionID] = sess
 	return nil
 }
