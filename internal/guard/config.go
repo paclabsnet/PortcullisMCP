@@ -29,6 +29,8 @@ var SecretAllowlist = []string{
 	"server.endpoints.token_api.auth.credentials.bearer_token",
 	"responsibility.issuance.approval_request_verification_key",
 	"responsibility.issuance.signing_key",
+	"responsibility.interface.session_secret",
+	"identity.config.client.secret",
 	"operations.storage.config.password",
 }
 
@@ -46,13 +48,27 @@ func LoadConfig(ctx context.Context, path string) (Config, cfgloader.PostureRepo
 type Config struct {
 	Mode           string                     `yaml:"mode"`
 	Server         cfgloader.ServerConfig     `yaml:"server"`
-	Identity       cfgloader.IdentityConfig   `yaml:"identity"`
+	Identity       IdentityConfig             `yaml:"identity"`
 	Peers          PeersConfig                `yaml:"peers"`
 	Responsibility ResponsibilityConfig       `yaml:"responsibility"`
 	Operations     cfgloader.OperationsConfig `yaml:"operations"`
 
 	// Derived / internal use only
 	Limits LimitsConfig `yaml:"-"`
+}
+
+// IdentityConfig is the guard-local identity configuration. It replaces the
+// generic cfgloader.IdentityConfig with a typed structure for the "oidc-login"
+// strategy and its session lifecycle settings.
+type IdentityConfig struct {
+	Strategy string `yaml:"strategy"` // "oidc-login" | ""
+	Config   struct {
+		cfgloader.OIDCBaseConfig `yaml:",inline" mapstructure:",squash"`
+		Session                  struct {
+			IdleTimeoutMins  int `yaml:"idle_timeout_mins" mapstructure:"idle_timeout_mins"`
+			MaxLifetimeHours int `yaml:"max_lifetime_hours" mapstructure:"max_lifetime_hours"`
+		} `yaml:"session" mapstructure:"session"`
+	} `yaml:"config"`
 }
 
 // ResponsibilityConfig defines the specialized duty of Portcullis-Guard.
@@ -77,6 +93,7 @@ type IssuanceConfig struct {
 type InterfaceConfig struct {
 	Templates          string `yaml:"templates"`
 	GateManagementPort int    `yaml:"gate_management_port"` // Port shown in UI instructions
+	SessionSecret      string `yaml:"session_secret"`       // Required when identity.strategy is "oidc-login"
 }
 
 // PeersConfig defines outbound connectivity to other Portcullis services.
@@ -113,6 +130,27 @@ func (c *Config) Validate(sources cfgloader.SourceMap) (cfgloader.PostureReport,
 	}
 	if c.Responsibility.Issuance.SigningKey == "" {
 		return cfgloader.PostureReport{}, fmt.Errorf("responsibility.issuance.signing_key is required")
+	}
+
+	if c.Identity.Strategy == "oidc-login" {
+		ic := c.Identity.Config
+		if ic.IssuerURL == "" {
+			return cfgloader.PostureReport{}, fmt.Errorf("identity.config.issuer_url is required when identity.strategy is \"oidc-login\"")
+		}
+		if ic.Client.ID == "" {
+			return cfgloader.PostureReport{}, fmt.Errorf("identity.config.client.id is required when identity.strategy is \"oidc-login\"")
+		}
+		if ic.Client.Secret == "" {
+			return cfgloader.PostureReport{}, fmt.Errorf("identity.config.client.secret is required when identity.strategy is \"oidc-login\"")
+		}
+		if ic.RedirectURI == "" {
+			return cfgloader.PostureReport{}, fmt.Errorf("identity.config.redirect_uri is required when identity.strategy is \"oidc-login\"")
+		}
+		if c.Responsibility.Interface.SessionSecret == "" {
+			return cfgloader.PostureReport{}, fmt.Errorf("responsibility.interface.session_secret is required when identity.strategy is \"oidc-login\"")
+		}
+	} else if c.Identity.Strategy != "" {
+		return cfgloader.PostureReport{}, fmt.Errorf("identity.strategy %q is not supported; valid value is \"oidc-login\"", c.Identity.Strategy)
 	}
 
 	if c.Operations.Limits != nil {
