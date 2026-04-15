@@ -51,6 +51,11 @@ type Server struct {
 	signingKey []byte
 	ttl        time.Duration
 
+	// OIDC login — non-nil only when identity.strategy is "oidc-login".
+	oidcManager  *OIDCManager
+	authStore    AuthStore
+	cookieCrypto *CookieCrypto
+
 	// uiReady and apiReady are set to true once each listener is successfully bound.
 	uiReady  atomic.Bool
 	apiReady atomic.Bool
@@ -108,7 +113,7 @@ func NewServer(ctx context.Context, cfg Config) (*Server, error) {
 		ttl = 24 * time.Hour
 	}
 
-	return &Server{
+	srv := &Server{
 		cfg:            cfg,
 		pendingStore:   pending,
 		unclaimedStore: unclaimed,
@@ -116,7 +121,16 @@ func NewServer(ctx context.Context, cfg Config) (*Server, error) {
 		keepKey:        []byte(cfg.Responsibility.Issuance.ApprovalRequestVerificationKey),
 		signingKey:     []byte(cfg.Responsibility.Issuance.SigningKey),
 		ttl:            ttl,
-	}, nil
+	}
+
+	if cfg.Identity.Strategy == "oidc-login" {
+		srv.oidcManager = NewOIDCManager(cfg.Identity)
+		srv.cookieCrypto = NewCookieCrypto(cfg.Responsibility.Interface.SessionSecret)
+		// Always use an in-memory AuthStore; Redis AuthStore is a future enhancement.
+		srv.authStore = NewMemStore(0, 0, 0)
+	}
+
+	return srv, nil
 }
 
 // expandHome replaces ~ at the start of a path with the user's home directory.
@@ -145,8 +159,20 @@ func (s *Server) Run(ctx context.Context) error {
 	uiMux := http.NewServeMux()
 	uiMux.HandleFunc("GET /healthz", s.handleHealthz)
 	uiMux.HandleFunc("GET /readyz", s.handleReadyz)
-	uiMux.HandleFunc("GET /approve", s.handleApprovePage)
-	uiMux.HandleFunc("POST /approve", s.handleApproveAction)
+
+	if s.cfg.Identity.Strategy == "oidc-login" {
+		uiSecure := uiEndpoint.IsSecure()
+		authMW := AuthMiddleware(s.authStore, s.oidcManager, s.cookieCrypto, s.cfg.Identity)
+		uiMux.Handle("GET /approve", authMW(http.HandlerFunc(s.handleApprovePage)))
+		uiMux.Handle("POST /approve", authMW(http.HandlerFunc(s.handleApproveAction)))
+		uiMux.HandleFunc("GET /auth/login", s.handleAuthLogin)
+		uiMux.HandleFunc("GET /auth/callback", s.handleAuthCallback)
+		uiMux.HandleFunc("POST /auth/logout", s.handleAuthLogout)
+		_ = uiSecure // used by cookie helpers via s.uiSecure() below
+	} else {
+		uiMux.HandleFunc("GET /approve", s.handleApprovePage)
+		uiMux.HandleFunc("POST /approve", s.handleApproveAction)
+	}
 
 	apiMux := http.NewServeMux()
 	apiMux.HandleFunc("GET /healthz", s.handleHealthz)
@@ -383,6 +409,9 @@ func (s *Server) handleApprovePage(w http.ResponseWriter, r *http.Request) {
 		Reason:          claims.Reason,
 		ScopeJSON:       string(scopeJSON),
 		Token:           tokenStr,
+	}
+	if sess := sessionFromContext(r.Context()); sess != nil {
+		data.LoggedInAs = sess.DisplayName
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := s.templates.ExecuteTemplate(w, "approval.html", data); err != nil {
@@ -638,6 +667,127 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
+// uiSecure returns true if the approval_ui endpoint has TLS configured.
+// Used to set the Secure flag on browser cookies.
+func (s *Server) uiSecure() bool {
+	ep, ok := s.cfg.Server.Endpoints["approval_ui"]
+	return ok && ep.IsSecure()
+}
+
+// handleAuthLogin initiates the OIDC Auth Code + PKCE flow. It stores the PKCE
+// state in the AuthStore, sets the login_state correlation cookie, and
+// immediately redirects the browser to the IdP. There is no interstitial page.
+func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
+	returnPath := validateReturnPath(r.URL.Query().Get("return_path"))
+	if returnPath == "" {
+		returnPath = "/approve"
+	}
+
+	authURL, pkceState, err := s.oidcManager.StartLogin(r.Context(), returnPath)
+	if err != nil {
+		slog.Error("guard/auth: failed to start login", "error", err)
+		http.Error(w, "login unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	if err := s.authStore.StorePKCE(r.Context(), pkceState); err != nil {
+		slog.Error("guard/auth: failed to store PKCE state", "error", err)
+		http.Error(w, "login unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	if err := SetLoginStateCookie(w, s.cookieCrypto, pkceState.State, s.uiSecure()); err != nil {
+		slog.Error("guard/auth: failed to set login state cookie", "error", err)
+		http.Error(w, "login unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	http.Redirect(w, r, authURL, http.StatusFound)
+}
+
+// handleAuthCallback processes the OIDC callback from the IdP.
+func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
+	// Handle IdP-side errors.
+	if errParam := r.URL.Query().Get("error"); errParam != "" {
+		detail := errParam
+		if desc := r.URL.Query().Get("error_description"); desc != "" {
+			detail += ": " + desc
+		}
+		slog.Warn("guard/auth: IdP returned error", "error", detail)
+		http.Error(w, "login failed: "+detail, http.StatusBadRequest)
+		return
+	}
+
+	stateParam := r.URL.Query().Get("state")
+	code := r.URL.Query().Get("code")
+	if stateParam == "" || code == "" {
+		http.Error(w, "missing state or code", http.StatusBadRequest)
+		return
+	}
+
+	// Browser-binding correlation check.
+	cookieState, err := GetLoginStateCookie(r, s.cookieCrypto)
+	if err != nil || cookieState == "" || cookieState != stateParam {
+		slog.Warn("guard/auth: login state mismatch (possible CSRF)", "cookie_state", cookieState, "query_state", stateParam)
+		http.Error(w, "invalid login session", http.StatusBadRequest)
+		return
+	}
+
+	pkceState, err := s.authStore.GetPKCE(r.Context(), stateParam)
+	if err != nil || pkceState == nil {
+		slog.Warn("guard/auth: PKCE state not found or expired", "state", stateParam)
+		http.Error(w, "login session expired, please try again", http.StatusBadRequest)
+		return
+	}
+	_ = s.authStore.DeletePKCE(r.Context(), stateParam)
+	ClearLoginStateCookie(w)
+
+	tokens, userID, displayName, err := s.oidcManager.HandleCallback(r.Context(), code, pkceState.CodeVerifier, pkceState.Nonce)
+	if err != nil {
+		slog.Error("guard/auth: callback handling failed", "error", err)
+		http.Error(w, "login failed", http.StatusBadRequest)
+		return
+	}
+
+	now := time.Now()
+	session := AuthSession{
+		SessionID:    NewSessionID(),
+		UserID:       userID,
+		DisplayName:  displayName,
+		Tokens:       *tokens,
+		CreatedAt:    now,
+		LastActiveAt: now,
+	}
+	if err := s.authStore.StoreSession(r.Context(), session); err != nil {
+		slog.Error("guard/auth: failed to store session", "error", err)
+		http.Error(w, "login failed", http.StatusInternalServerError)
+		return
+	}
+
+	if err := SetSessionCookie(w, s.cookieCrypto, session.SessionID, s.uiSecure()); err != nil {
+		slog.Error("guard/auth: failed to set session cookie", "error", err)
+		http.Error(w, "login failed", http.StatusInternalServerError)
+		return
+	}
+
+	returnPath := validateReturnPath(pkceState.ReturnPath)
+	if returnPath == "" {
+		returnPath = "/approve"
+	}
+	slog.Info("guard/auth: login complete", "user_id", userID, "display_name", displayName)
+	http.Redirect(w, r, returnPath, http.StatusFound)
+}
+
+// handleAuthLogout deletes the server-side session and clears the session cookie.
+func (s *Server) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
+	sessionID, err := GetSessionCookie(r, s.cookieCrypto)
+	if err == nil && sessionID != "" {
+		_ = s.authStore.DeleteSession(r.Context(), sessionID)
+	}
+	ClearSessionCookie(w)
+	http.Redirect(w, r, "/approve", http.StatusFound)
+}
+
 type approvalPageData struct {
 	UserID          string
 	UserDisplayName string
@@ -646,6 +796,8 @@ type approvalPageData struct {
 	Reason          string
 	ScopeJSON       string
 	Token           string
+	// LoggedInAs is non-empty when OIDC is enabled and the user is authenticated.
+	LoggedInAs string
 }
 
 type tokenPageData struct {
