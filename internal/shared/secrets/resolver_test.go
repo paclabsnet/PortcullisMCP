@@ -404,6 +404,113 @@ func TestResolveConfig_Vault_MockServer_CustomKey(t *testing.T) {
 	}
 }
 
+func TestResolveConfig_Vault_MockServer_Errors(t *testing.T) {
+	t.Run("read failure", func(t *testing.T) {
+		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "vault down", http.StatusInternalServerError)
+		})
+		ts := httptest.NewServer(handler)
+		defer ts.Close()
+		t.Setenv("VAULT_ADDR", ts.URL)
+		t.Setenv("VAULT_TOKEN", "test")
+
+		_, err := wrapResolve(context.Background(), "vault://s/p#k", []string{"val"})
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !strings.Contains(err.Error(), "vault read failed") {
+			t.Errorf("wrong error: %v", err)
+		}
+	})
+
+	t.Run("no data", func(t *testing.T) {
+		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": nil})
+		})
+		ts := httptest.NewServer(handler)
+		defer ts.Close()
+		t.Setenv("VAULT_ADDR", ts.URL)
+		t.Setenv("VAULT_TOKEN", "test")
+
+		_, err := wrapResolve(context.Background(), "vault://s/p#k", []string{"val"})
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !strings.Contains(err.Error(), "vault returned no data") {
+			t.Errorf("wrong error: %v", err)
+		}
+	})
+
+	t.Run("key not found", func(t *testing.T) {
+		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			payload := map[string]any{
+				"data": map[string]any{
+					"data": map[string]any{"other": "val"},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(payload)
+		})
+		ts := httptest.NewServer(handler)
+		defer ts.Close()
+		t.Setenv("VAULT_ADDR", ts.URL)
+		t.Setenv("VAULT_TOKEN", "test")
+
+		_, err := wrapResolve(context.Background(), "vault://s/p#missing", []string{"val"})
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !strings.Contains(err.Error(), "not found in vault secret") {
+			t.Errorf("wrong error: %v", err)
+		}
+	})
+
+	t.Run("not a string", func(t *testing.T) {
+		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			payload := map[string]any{
+				"data": map[string]any{
+					"data": map[string]any{"key": 123},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(payload)
+		})
+		ts := httptest.NewServer(handler)
+		defer ts.Close()
+		t.Setenv("VAULT_ADDR", ts.URL)
+		t.Setenv("VAULT_TOKEN", "test")
+
+		_, err := wrapResolve(context.Background(), "vault://s/p#key", []string{"val"})
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !strings.Contains(err.Error(), "is not a string") {
+			t.Errorf("wrong error: %v", err)
+		}
+	})
+
+	t.Run("missing mount", func(t *testing.T) {
+		_, err := wrapResolve(context.Background(), "vault:///path", []string{"val"})
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !strings.Contains(err.Error(), "missing mount") {
+			t.Errorf("wrong error: %v", err)
+		}
+	})
+
+	t.Run("missing path", func(t *testing.T) {
+		_, err := wrapResolve(context.Background(), "vault://mount", []string{"val"})
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !strings.Contains(err.Error(), "missing secret path") {
+			t.Errorf("wrong error: %v", err)
+		}
+	})
+}
+
 // ---- context cancellation ---------------------------------------------------
 
 func TestResolveConfig_CancelledContext_EnvVar(t *testing.T) {

@@ -272,6 +272,11 @@ func (m *OIDCManager) exchangeCode(ctx context.Context, code, codeVerifier strin
 		params.Set("client_secret", m.cfg.Config.Client.Secret)
 	}
 
+	// Testing hook: if _test_nonce is in the context, pass it to the token endpoint.
+	if tn, ok := ctx.Value("_test_nonce").(string); ok {
+		params.Set("_test_nonce", tn)
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, m.tokenEndpoint,
 		strings.NewReader(params.Encode()))
 	if err != nil {

@@ -15,6 +15,7 @@
 package identity
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -206,4 +207,101 @@ func TestValidatePrincipal(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestNormalizerConfig_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     NormalizerConfig
+		wantErr bool
+	}{
+		{"valid passthrough", NormalizerConfig{Normalizer: "passthrough"}, false},
+		{"valid oidc", NormalizerConfig{
+			Normalizer: "oidc-verify",
+			OIDCVerify: OIDCVerifyConfig{Issuer: "iss", JWKSURL: "https://jwks"},
+		}, false},
+		{"valid hmac", NormalizerConfig{
+			Normalizer: "hmac-verify",
+			HMACVerify: HMACVerifyConfig{Secret: "secret"},
+		}, false},
+		{"missing normalizer", NormalizerConfig{}, true},
+		{"invalid normalizer", NormalizerConfig{Normalizer: "invalid"}, true},
+		{"oidc missing issuer", NormalizerConfig{
+			Normalizer: "oidc-verify",
+			OIDCVerify: OIDCVerifyConfig{JWKSURL: "https://jwks"},
+		}, true},
+		{"oidc missing jwks", NormalizerConfig{
+			Normalizer: "oidc-verify",
+			OIDCVerify: OIDCVerifyConfig{Issuer: "iss"},
+		}, true},
+		{"oidc insecure jwks rejected", NormalizerConfig{
+			Normalizer: "oidc-verify",
+			OIDCVerify: OIDCVerifyConfig{Issuer: "iss", JWKSURL: "http://jwks"},
+		}, true},
+		{"oidc insecure jwks allowed", NormalizerConfig{
+			Normalizer: "oidc-verify",
+			OIDCVerify: OIDCVerifyConfig{Issuer: "iss", JWKSURL: "http://jwks", AllowInsecureJWKSURL: true},
+		}, false},
+		{"hmac missing secret", NormalizerConfig{Normalizer: "hmac-verify"}, true},
+		{"hmac invalid algorithm", NormalizerConfig{
+			Normalizer: "hmac-verify",
+			HMACVerify: HMACVerifyConfig{Secret: "s", Algorithm: "invalid"},
+		}, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.cfg.Validate()
+			if tt.wantErr {
+				if err == nil {
+					t.Error("expected error, got nil")
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+			}
+		})
+	}
+}
+
+type mockNormalizer struct{}
+
+func (m *mockNormalizer) Normalize(ctx context.Context, id shared.UserIdentity) (shared.Principal, error) {
+	return shared.Principal{}, nil
+}
+
+func TestRegistry(t *testing.T) {
+	factory := func(cfg NormalizerConfig) (Normalizer, error) {
+		return &mockNormalizer{}, nil
+	}
+
+	Register("mock", factory)
+
+	t.Run("Build success", func(t *testing.T) {
+		cfg := NormalizerConfig{Normalizer: "mock"}
+		n, err := Build(cfg)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if _, ok := n.(*mockNormalizer); !ok {
+			t.Error("expected *mockNormalizer")
+		}
+	})
+
+	t.Run("Build missing normalizer", func(t *testing.T) {
+		cfg := NormalizerConfig{Normalizer: ""}
+		_, err := Build(cfg)
+		if err == nil {
+			t.Error("expected error")
+		}
+	})
+
+	t.Run("Build unknown normalizer", func(t *testing.T) {
+		cfg := NormalizerConfig{Normalizer: "unknown"}
+		_, err := Build(cfg)
+		if err == nil {
+			t.Error("expected error")
+		}
+	})
 }

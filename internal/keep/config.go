@@ -34,6 +34,8 @@ var SecretAllowlist = []string{
 	"server.endpoints.main.auth.credentials.bearer_token",
 	"responsibility.issuance.signing_key",
 	"responsibility.admin.token",
+	"responsibility.workflow.config.headers",
+	"responsibility.workflow.config.instance",
 	"identity.config.secret",
 	"peers.normalization.auth.credentials.bearer_token",
 	"operations.storage.config.password",

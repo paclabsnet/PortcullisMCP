@@ -91,6 +91,21 @@ type pendingEscalation struct {
 	ExpiresAt  time.Time
 }
 
+// KeepForwarder defines the interface for communicating with Portcullis Keep.
+type KeepForwarder interface {
+	CallTool(ctx context.Context, req shared.EnrichedMCPRequest) (*mcp.CallToolResult, error)
+	Authorize(ctx context.Context, req shared.EnrichedMCPRequest) error
+	ListTools(ctx context.Context, identity shared.UserIdentity, escalationTokens []shared.EscalationToken) ([]shared.AnnotatedTool, error)
+	SendLogs(ctx context.Context, entries []DecisionLogEntry) error
+}
+
+// GuardSource defines the interface for communicating with Portcullis Guard.
+type GuardSource interface {
+	ListUnclaimedTokens(ctx context.Context, userID string) ([]unclaimedTokenInfo, error)
+	RegisterPending(ctx context.Context, jti, jwt string) error
+	ClaimToken(ctx context.Context, jti string) (string, error)
+}
+
 // Gate is the portcullis-gate MCP proxy server.
 type Gate struct {
 	cfg           Config
@@ -98,8 +113,8 @@ type Gate struct {
 	escalations   EscalationTokenStore   // handles escalation JWTs
 	pending       PendingEscalationStore // handles in-flight requests
 	identity      IdentitySource         // handles user info resolution
-	forwarder     *Forwarder
-	guardClient   *GuardClient // nil if Guard endpoint not configured
+	forwarder     KeepForwarder
+	guardClient   GuardSource // nil if Guard endpoint not configured
 	server        *mcp.Server
 	localFS       *mcp.ClientSession // in-process filesystem backend
 	sessionID     string
@@ -170,13 +185,13 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 		}
 	}
 
-	var guardClient *GuardClient
+	var guardClient GuardSource
 	if cfg.Peers.Guard.resolvedAPIEndpoint() != "" {
-		var err error
-		guardClient, err = NewGuardClient(cfg.Peers.Guard)
+		gc, err := NewGuardClient(cfg.Peers.Guard)
 		if err != nil {
 			return nil, fmt.Errorf("init guard client: %w", err)
 		}
+		guardClient = gc
 	}
 
 	// Initialize session store. In multi-tenant mode, Redis is preferred for

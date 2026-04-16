@@ -105,6 +105,27 @@ func TestSetup_Stdout(t *testing.T) {
 	}
 }
 
+func TestSetup_OTLP(t *testing.T) {
+	resetGlobalProvider(t)
+
+	// OTLP exporter needs a valid-looking endpoint to not return a creation error.
+	// It doesn't need to actually connect during Setup() itself.
+	shutdown, err := telemetry.Setup(context.Background(), telemetry.Config{
+		Exporter: "otlp",
+		OTLP: telemetry.OTLPConfig{
+			Endpoint: "http://localhost:4318",
+			Headers:  map[string]string{"X-Test": "Value"},
+		},
+		ServiceName: "portcullis-otlp-test",
+	})
+	if err != nil {
+		t.Fatalf("Setup(otlp) returned error: %v", err)
+	}
+	if err := shutdown(context.Background()); err != nil {
+		t.Errorf("shutdown() returned error: %v", err)
+	}
+}
+
 func TestSetup_UnknownExporter(t *testing.T) {
 	_, err := telemetry.Setup(context.Background(), telemetry.Config{Exporter: "influxdb"})
 	if err == nil {
