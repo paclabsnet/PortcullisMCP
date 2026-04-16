@@ -85,7 +85,8 @@ clean:
 	@rm -rf bin/
 
 # Start demo stack (OPA + Keep + Guard + mock backends) via docker compose
-demo-start: deploy/docker-singletenant/.env
+demo-start:
+	@echo "VERSION=$(VERSION)" > deploy/docker-singletenant/.env
 	@docker compose -f deploy/docker-singletenant/docker-compose.yml up -d --build
 	@echo "Demo stack running. Keep: http://localhost:8080  Guard: http://localhost:8444  OPA: http://localhost:8181"
 
