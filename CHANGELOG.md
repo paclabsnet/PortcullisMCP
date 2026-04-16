@@ -16,3 +16,14 @@
 
 
 
+## [0.4.1]
+
+### Added
+
+- Initial release
+- support both stdio and mcp-based Portcullis-Gate
+- support Gate both in a single-tenant (i.e. individual user) mode as well as a multi-tenant mode for AI-enabled consoles
+- Supports Portcullis-Guard to allow users to authorize the Agent's use of MCP capabilities
+- Portcullis-Keep hides the MCPs behind a common, central proxy, which handles authentication, authorization and other chores, so the MCPs can focus on their business logic
+
+
