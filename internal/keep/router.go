@@ -118,10 +118,14 @@ func (r *Router) CallTool(ctx context.Context, serverName, toolName string, args
 			}
 			if identity.Structured != nil {
 				injectAtPath(argsCopy, identityPath, identity.Structured)
+				slog.Info("keep: injected identity into tool arguments", "backend", serverName, "tool", toolName, "json_path", identityPath, "type", "structured")
 			} else {
 				injectAtPath(argsCopy, identityPath, identity.Str)
+				slog.Info("keep: injected identity into tool arguments", "backend", serverName, "tool", toolName, "json_path", identityPath, "type", "string")
 			}
 			args = argsCopy
+		} else {
+			slog.Warn("keep: identity injection configured but no identity token in context — skipping json_path injection", "backend", serverName, "tool", toolName, "json_path", identityPath)
 		}
 	}
 
@@ -555,12 +559,15 @@ func (t *headerInjectingRoundTripper) RoundTrip(req *http.Request) (*http.Respon
 	// Inject identity header last so it overrides any forwarded client header
 	// of the same name. JSON object/array identities cannot be header values —
 	// skip with a warning so the request still proceeds (non-fatal).
-	if identityHeader != "" && identity != nil {
-		if identity.Structured != nil {
+	if identityHeader != "" {
+		if identity == nil {
+			slog.Warn("keep: identity injection configured but no identity token in context — skipping header injection", "backend", t.conn.cfg.Name, "header", identityHeader)
+		} else if identity.Structured != nil {
 			slog.Warn("keep: identity exchange returned a JSON object/array; cannot inject as HTTP header, skipping header injection",
 				"backend", t.conn.cfg.Name, "header", identityHeader)
 		} else {
 			outReq.Header.Set(identityHeader, identity.Str)
+			slog.Info("keep: injected identity into request header", "backend", t.conn.cfg.Name, "header", identityHeader)
 		}
 	}
 

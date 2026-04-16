@@ -179,7 +179,17 @@
 				"allow" : {
 					"groups" : [ "admin" ]
 				}
-			}
+			},
+                        "echo_user": {
+                                "allow" : {
+                                        "groups":["*"]
+                                }
+                        },
+                        "echo_header": {
+                                "allow" : {
+                                        "groups":["*"]
+                                }
+                        }
 
 		},
                 "fetch" : {

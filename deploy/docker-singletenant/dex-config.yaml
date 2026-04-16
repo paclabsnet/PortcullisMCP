@@ -20,6 +20,12 @@ staticClients:
     redirectURIs:
       - http://localhost:7777/auth/callback
 
+  - id: portcullis-guard
+    secret: portcullis-guard-secret
+    name: Portcullis Guard
+    redirectURIs:
+      - http://localhost:8444/auth/callback
+
 enablePasswordDB: true
 
 staticPasswords:

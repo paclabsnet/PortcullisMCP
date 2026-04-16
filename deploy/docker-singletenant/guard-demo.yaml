@@ -22,6 +22,20 @@ server:
       # mtls:
       #   client_ca: "/tls/ca.crt"
 
+identity:
+  strategy: "oidc-login"
+  config:
+    issuer_url: "http://localhost:5556/dex"
+    redirect_uri: "http://localhost:8444/auth/callback"
+    client:
+      id: "portcullis-guard"
+      secret: "portcullis-guard-secret"
+    scopes:
+      - "openid"
+      - "profile"
+      - "email"
+      - "groups"
+
 responsibility:
   issuance:
     approval_request_verification_key: "dev-keep-signing-secret"
@@ -31,6 +45,7 @@ responsibility:
   interface:
     templates: "/templates"
     gate_management_port: 7777
+    session_secret: "dev-guard-session-secret-32chars!!"
 
 operations:
   storage:

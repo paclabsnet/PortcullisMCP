@@ -144,7 +144,13 @@ responsibility:
           - "/etc"
   escalation:
     strategy: "proactive"
-    poll_interval: 10
+    # This is the polling interval for unanticipated escalations. During the normal flow, if Keep
+    # sends a pending JWT to gate, gate forwards it to Guard and keeps track of it in memory, with
+    # the assumption that the user will approve the escalation.  When the user attempts the same
+    # exact service/tool combo again, Gate observes that it was awaiting approval on that action
+    # and immediately checks Guard.  So no need for a frequent polling mechanism.
+    #
+    poll_interval: 300  
     token_store: "~/.portcullis/tokens.json"
 
 

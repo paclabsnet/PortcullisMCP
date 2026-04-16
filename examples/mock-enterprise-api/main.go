@@ -15,15 +15,39 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+// logRequests is HTTP middleware that logs all incoming request headers and body
+// before passing the request to the MCP handler.
+func logRequests(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("mock-enterprise-api: incoming request %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
+		for name, vals := range r.Header {
+			log.Printf("  header: %s: %s", name, strings.Join(vals, ", "))
+		}
+		if r.Body != nil {
+			body, _ := io.ReadAll(r.Body)
+			r.Body.Close()
+			if len(body) > 0 {
+				log.Printf("  body: %s", body)
+			}
+			r.Body = io.NopCloser(bytes.NewReader(body))
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 
 // MockHTTPMCPServer is a simple HTTP MCP server for testing/demo purposes.
 // It exposes a few example tools that represent enterprise resources.
@@ -67,12 +91,28 @@ func main() {
 		Description: "Update customer profile information such as email, name, or address",
 	}, api.handleUpdateCustomer)
 
-	// HTTP handler using Streamable HTTP transport (compatible with Keep's http backend type)
-	handler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "echo_header",
+		Description: "Echo back the identity of the caller. The caller's identity is injected " +
+			"automatically by Portcullis via the X-User-Identity HTTP header — no arguments " +
+			"are required from the AI agent.",
+	}, api.handleEchoHeader)
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "echo_user",
+		Description: "Echo back the identity of the caller. The identity_jwt argument is injected " +
+			"automatically by Portcullis and must NOT be provided or guessed by the AI agent — " +
+			"leave it empty or omit it entirely.",
+	}, api.handleEchoUser)
+
+	// HTTP handler using Streamable HTTP transport (compatible with Keep's http backend type).
+	// Wrapped with withIdentityHeader middleware so that the X-User-Identity header injected
+	// by Portcullis Keep is available to tool handlers via context.
+	mcpHandler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
 		log.Printf("MCP connection from %s", r.RemoteAddr)
 		return server
 	}, nil)
-	http.Handle("/mcp", handler)
+	http.Handle("/mcp", logRequests(mcpHandler))
 
 	// Health endpoint
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -82,7 +122,7 @@ func main() {
 
 	addr := ":3000"
 	log.Printf("Mock HTTP MCP Server listening on http://localhost%s/mcp", addr)
-	log.Printf("Available tools: get_customer, update_order_status, query_inventory, delete_order, query_order, update_customer")
+	log.Printf("Available tools: get_customer, update_order_status, query_inventory, delete_order, query_order, update_customer, echo_user, echo_header")
 	log.Printf("Health check: http://localhost%s/health", addr)
 
 	if err := http.ListenAndServe(addr, nil); err != nil {
@@ -272,6 +312,106 @@ func (a *apiServer) handleUpdateCustomer(_ context.Context, _ *mcp.CallToolReque
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: string(data)}},
 	}, nil, nil
+}
+
+func (a *apiServer) handleEchoHeader(_ context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
+	var raw string
+	if req.Extra != nil {
+		raw = req.Extra.Header.Get("X-User-Identity")
+	}
+	if raw == "" {
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{
+				&mcp.TextContent{Text: `{"error": "X-User-Identity header not present. To fix this, add the following to the mock-enterprise-api backend entry in Portcullis Keep's keep.yaml:\n\n  user_identity:\n    placement:\n      header: X-User-Identity"}`},
+			},
+		}, nil, nil
+	}
+
+	claims, err := unsafeDecodeJWTClaims(raw)
+	if err != nil {
+		return nil, nil, fmt.Errorf("decode X-User-Identity JWT: %w", err)
+	}
+
+	username := ""
+	for _, key := range []string{"preferred_username", "email", "sub"} {
+		if v, ok := claims[key].(string); ok && v != "" {
+			username = v
+			break
+		}
+	}
+	if username == "" {
+		username = "(unknown — no preferred_username, email, or sub claim found)"
+	}
+
+	result := map[string]interface{}{
+		"username": username,
+		"claims":   claims,
+	}
+	data, _ := json.MarshalIndent(result, "", "  ")
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{Text: string(data)}},
+	}, nil, nil
+}
+
+type echoUserInput struct {
+	// IdentityJWT is injected by Portcullis (via user_identity.placement.json_path).
+	// The AI agent must not supply this value.
+	IdentityJWT string `json:"identity_jwt"`
+}
+
+func (a *apiServer) handleEchoUser(_ context.Context, _ *mcp.CallToolRequest, in echoUserInput) (*mcp.CallToolResult, any, error) {
+	if in.IdentityJWT == "" {
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{
+				&mcp.TextContent{Text: `{"error": "identity_jwt not provided — is Portcullis identity injection configured for this backend?"}`},
+			},
+		}, nil, nil
+	}
+
+	claims, err := unsafeDecodeJWTClaims(in.IdentityJWT)
+	if err != nil {
+		return nil, nil, fmt.Errorf("decode identity_jwt: %w", err)
+	}
+
+	// Extract the best available username from standard OIDC claims.
+	username := ""
+	for _, key := range []string{"preferred_username", "email", "sub"} {
+		if v, ok := claims[key].(string); ok && v != "" {
+			username = v
+			break
+		}
+	}
+	if username == "" {
+		username = "(unknown — no preferred_username, email, or sub claim found)"
+	}
+
+	result := map[string]interface{}{
+		"username": username,
+		"claims":   claims,
+	}
+	data, _ := json.MarshalIndent(result, "", "  ")
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{Text: string(data)}},
+	}, nil, nil
+}
+
+// unsafeDecodeJWTClaims decodes the claims segment of a JWT without verifying
+// the signature. This is intentional for the mock server — real backends should
+// always validate signatures.
+func unsafeDecodeJWTClaims(raw string) (map[string]interface{}, error) {
+	parts := strings.Split(strings.TrimSpace(raw), ".")
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("not a valid JWT: expected 3 segments, got %d", len(parts))
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, fmt.Errorf("decode JWT payload: %w", err)
+	}
+	var claims map[string]interface{}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return nil, fmt.Errorf("unmarshal JWT claims: %w", err)
+	}
+	return claims, nil
 }
 
 func (a *apiServer) handleDeleteOrder(_ context.Context, _ *mcp.CallToolRequest, in deleteOrderInput) (*mcp.CallToolResult, any, error) {

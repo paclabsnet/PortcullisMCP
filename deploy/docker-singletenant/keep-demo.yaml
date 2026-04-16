@@ -46,10 +46,10 @@ responsibility:
       type: "http"
       url: "http://mock-enterprise-api:3000/mcp"
       allow_private_addresses: true
-      # user_identity:
-      #   placement:
-      #     header: "X-User-Identity"
-      #     json_path: "auth.token"
+      user_identity:
+         placement:
+           header: "X-User-Identity"
+#           json_path: "identity_jwt"
       #   exchange:
       #     url: "http://identity-exchange:9000/exchange"
       #     timeout: 5

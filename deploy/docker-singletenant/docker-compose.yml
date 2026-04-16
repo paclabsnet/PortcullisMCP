@@ -70,6 +70,9 @@ services:
     depends_on:
       - keep
       - redis
+      - dex
+    extra_hosts:
+      - "localhost:host-gateway"  # allows Guard to reach http://localhost:5556/dex (Dex's issuer URL) for server-side token exchange
     networks:
       - portcullis
 
