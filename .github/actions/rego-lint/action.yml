@@ -1,0 +1,52 @@
+name: Rego Lint (Regal)
+description: Lint changed Rego files using Regal
+
+inputs:
+  regal-version:
+    description: Regal version to install
+    required: false
+    default: v0.39.0
+
+runs:
+  using: composite
+  steps:
+    - uses: open-policy-agent/setup-regal@v1
+      with:
+        version: ${{ inputs.regal-version }}
+
+    - name: Get changed Rego files
+      id: changed
+      shell: bash
+      run: |
+        if [[ "${{ github.event_name }}" == "pull_request" && -n "${{ github.base_ref }}" ]]; then
+          FILES=$(git diff --name-only --diff-filter=ACMR "origin/${{ github.base_ref }}...HEAD" -- '*.rego')
+        elif [[ -n "${{ github.event.before }}" && "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]]; then
+          FILES=$(git diff --name-only --diff-filter=ACMR "${{ github.event.before }}...HEAD" -- '*.rego')
+        else
+          # Fallback for manual/initial runs — lint all Rego files
+          FILES=$(git ls-files '*.rego')
+        fi
+        if [ -z "$FILES" ]; then
+          echo "has_files=false" >> "$GITHUB_OUTPUT"
+        else
+          # Resolve to environment roots (dev/stage/prod) so regal can resolve
+          # cross-directory imports like data.shared.authentication
+          ROOTS=$(printf '%s\n' "$FILES" | cut -d/ -f1 | sort -u)
+          echo "has_files=true" >> "$GITHUB_OUTPUT"
+          {
+            echo "roots<<EOF"
+            echo "$ROOTS"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Lint changed Rego files
+      if: steps.changed.outputs.has_files == 'true'
+      shell: bash
+      env:
+        CHANGED_ROOTS: ${{ steps.changed.outputs.roots }}
+      run: |
+        mapfile -t roots <<< "$CHANGED_ROOTS"
+        regal lint "${roots[@]}"
+
+
