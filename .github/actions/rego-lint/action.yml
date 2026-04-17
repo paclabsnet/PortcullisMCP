@@ -10,7 +10,7 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: open-policy-agent/setup-regal@v1
+    - uses: open-policy-agent/setup-regal@f077cde128b631383fc9ab37dc5ce0dcdb8f7068
       with:
         version: ${{ inputs.regal-version }}
 
