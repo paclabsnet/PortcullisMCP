@@ -17,7 +17,8 @@ GUARD_BIN := bin/portcullis-guard$(BIN_EXT)
 PLATFORMS := windows/amd64 windows/arm64 darwin/amd64 darwin/arm64 linux/amd64 linux/arm64
 COMPONENTS := gate keep guard
 
-VERSION     := $(shell git describe --tags --exact-match 2>/dev/null || echo "0.4.2-dev")
+SOURCE_VERSION := $(shell grep 'var Version' internal/version/version.go | sed 's/.*"\(.*\)".*/\1/')
+VERSION        := $(shell git describe --tags --exact-match 2>/dev/null || echo "$(SOURCE_VERSION)")
 VERSION_PKG := github.com/paclabsnet/PortcullisMCP/internal/version
 LDFLAGS     := -ldflags "-X $(VERSION_PKG).Version=$(VERSION)"
 
