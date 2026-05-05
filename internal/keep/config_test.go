@@ -434,6 +434,38 @@ func TestConfigValidate_PostureWarnings(t *testing.T) {
 		}
 	})
 
+	t.Run("absent gate_static_policy block is valid (feature disabled)", func(t *testing.T) {
+		cfg := validBaseConfig()
+		// GateStaticPolicy is zero-valued — strategy is empty.
+		if _, err := cfg.Validate(nil); err != nil {
+			t.Errorf("empty gate_static_policy should be valid (disabled), got: %v", err)
+		}
+	})
+
+	t.Run("gate_static_policy with opa strategy and endpoint is valid", func(t *testing.T) {
+		cfg := validBaseConfig()
+		cfg.Responsibility.GateStaticPolicy = GateStaticPolicyConfig{
+			PolicyConfig: PolicyConfig{
+				Strategy: "opa",
+				Config:   map[string]any{"endpoint": "http://opa:8181/v1/data/portcullis/gate_static_config"},
+			},
+		}
+		if _, err := cfg.Validate(nil); err != nil {
+			t.Errorf("configured gate_static_policy should be valid, got: %v", err)
+		}
+	})
+
+	t.Run("gate_static_policy with opa strategy but no endpoint is invalid", func(t *testing.T) {
+		cfg := validBaseConfig()
+		cfg.Responsibility.GateStaticPolicy = GateStaticPolicyConfig{
+			PolicyConfig: PolicyConfig{Strategy: "opa"},
+		}
+		_, err := cfg.Validate(nil)
+		if err == nil || !strings.Contains(err.Error(), "gate_static_policy") {
+			t.Errorf("expected gate_static_policy endpoint error, got: %v", err)
+		}
+	})
+
 	t.Run("oidc-verify with normalization endpoint does not emit inactive-webhook warning", func(t *testing.T) {
 		cfg := validBaseConfig()
 		cfg.Identity.Strategy = "oidc-verify"

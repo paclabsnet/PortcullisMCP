@@ -35,6 +35,10 @@ type mockPDP struct {
 	err      error
 }
 
+func (m *mockPDP) GetStaticPolicy(_ context.Context, _ string) (json.RawMessage, error) {
+	return json.RawMessage("{}"), nil
+}
+
 func (m *mockPDP) Evaluate(ctx context.Context, req AuthorizedRequest) (shared.PDPResponse, error) {
 	if m.err != nil {
 		return shared.PDPResponse{}, m.err
@@ -271,10 +275,10 @@ func newServerWithNormalizer(normalizer IdentityNormalizer) *Server {
 func makeCallRequest(t *testing.T) *http.Request {
 	t.Helper()
 	body, _ := json.Marshal(shared.EnrichedMCPRequest{
-		APIVersion: shared.APIVersion,
-		ServerName: "test-server",
-		ToolName:   "test-tool",
-		TraceID:    "trace-123",
+		APIVersion:   shared.APIVersion,
+		ServerName:   "test-server",
+		ToolName:     "test-tool",
+		TraceID:      "trace-123",
 		UserIdentity: shared.UserIdentity{UserID: "alice"},
 	})
 	return httptest.NewRequest(http.MethodPost, "/call", bytes.NewReader(body))
@@ -310,10 +314,10 @@ func TestServer_HandleCall_WebhookUnavailable_Returns503(t *testing.T) {
 func makeAuthorizeRequest(t *testing.T) *http.Request {
 	t.Helper()
 	body, _ := json.Marshal(shared.EnrichedMCPRequest{
-		APIVersion: shared.APIVersion,
-		ServerName: "test-server",
-		ToolName:   "test-tool",
-		TraceID:    "trace-123",
+		APIVersion:   shared.APIVersion,
+		ServerName:   "test-server",
+		ToolName:     "test-tool",
+		TraceID:      "trace-123",
 		UserIdentity: shared.UserIdentity{UserID: "alice"},
 	})
 	return httptest.NewRequest(http.MethodPost, "/authorize", bytes.NewReader(body))
@@ -359,6 +363,85 @@ func TestServer_HandleAuthorize_WebhookUnavailable_Returns503(t *testing.T) {
 	if w.Code != http.StatusServiceUnavailable {
 		t.Errorf("expected 503 for webhook unavailability, got %d", w.Code)
 	}
+}
+
+func TestNewServer_GateStaticPDP_NilWhenStrategyEmpty(t *testing.T) {
+	// When gate_static_policy.strategy is absent/empty, NewServer must leave
+	// gateStaticPDP nil so that /config returns 404 rather than attempting an
+	// OPA call to an empty endpoint.
+	cfg := Config{
+		Mode: "dev",
+		Server: cfgloader.ServerConfig{
+			Endpoints: map[string]cfgloader.EndpointConfig{
+				"main": {Listen: "localhost:0"},
+			},
+		},
+		Responsibility: ResponsibilityConfig{
+			Policy: PolicyConfig{Strategy: "noop"},
+			// GateStaticPolicy intentionally absent (zero value).
+		},
+		Identity: IdentityConfig{Strategy: "passthrough"},
+	}
+	if err := cfg.Identity.Validate(); err != nil {
+		t.Fatalf("cfg.Identity.Validate: %v", err)
+	}
+	srv, err := NewServer(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	if srv.gateStaticPDP != nil {
+		t.Error("expected gateStaticPDP to be nil when gate_static_policy is not configured")
+	}
+}
+
+func TestServer_HandleGetConfig_DisabledWhenStrategyEmpty(t *testing.T) {
+	// A Server with no gate_static_policy configured (empty strategy) must return
+	// 404 from /config — not attempt an OPA call to an empty endpoint.
+	srv := &Server{
+		cfg:           Config{},
+		gateStaticPDP: nil, // reflects NewServer behavior when strategy == ""
+	}
+	req := httptest.NewRequest(http.MethodGet, "/config/portcullis-localfs", nil)
+	req.SetPathValue("resource", "portcullis-localfs")
+	w := httptest.NewRecorder()
+	srv.handleGetConfig(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected 404 when gate_static_policy is not configured, got %d", w.Code)
+	}
+}
+
+func TestServer_HandleGetConfig_ReturnsConfigForKnownResource(t *testing.T) {
+	staticPDP := &mockConfigPDP{result: json.RawMessage(`{"workspace":{"directory":"/home/user"}}`)}
+	srv := &Server{
+		cfg:           Config{},
+		gateStaticPDP: staticPDP,
+	}
+	req := httptest.NewRequest(http.MethodGet, "/config/portcullis-localfs", nil)
+	req.SetPathValue("resource", "portcullis-localfs")
+	w := httptest.NewRecorder()
+	srv.handleGetConfig(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200 for known resource, got %d", w.Code)
+	}
+	if w.Header().Get("Content-Type") != "application/json" {
+		t.Errorf("expected application/json content-type, got %q", w.Header().Get("Content-Type"))
+	}
+}
+
+// mockConfigPDP is a PolicyDecisionPoint whose GetStaticPolicy returns a fixed payload.
+type mockConfigPDP struct {
+	mockPDP
+	result json.RawMessage
+	err    error
+}
+
+func (m *mockConfigPDP) GetStaticPolicy(_ context.Context, _ string) (json.RawMessage, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.result, nil
 }
 
 func contains(s, substr string) bool {

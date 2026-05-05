@@ -145,6 +145,13 @@ func (g *Gate) FastPath(_ context.Context, toolName string, args map[string]any)
 		return FastPathForward, nil
 	}
 
+	// Snapshot the runtime policy. A nil policy means the tool is degraded
+	// (source: keep, no valid policy fetched yet). Deny fail-closed.
+	policy := g.getLocalFSPolicy()
+	if policy == nil {
+		return FastPathDeny, nil
+	}
+
 	var resolved []string
 	for _, p := range paths {
 		r, err := resolvePath(p)
@@ -157,7 +164,7 @@ func (g *Gate) FastPath(_ context.Context, toolName string, args map[string]any)
 
 	// Step 2: Forbidden check — always evaluated first, always global.
 	for _, r := range resolved {
-		for _, p := range g.cfg.Responsibility.Tools.LocalFS.Forbidden.Directories {
+		for _, p := range policy.Forbidden.Directories {
 			forbidden, err := resolvePath(p)
 			if err != nil {
 				continue
@@ -169,7 +176,7 @@ func (g *Gate) FastPath(_ context.Context, toolName string, args map[string]any)
 	}
 
 	// Step 3: Resolve the effective strategy for this tool.
-	strategy := effectiveStrategy(g.cfg.Responsibility.Tools.LocalFS.Strategy, toolName)
+	strategy := effectiveStrategy(policy.Strategy, toolName)
 
 	// Step 4: Apply strategy.
 	switch strategy {
@@ -180,7 +187,7 @@ func (g *Gate) FastPath(_ context.Context, toolName string, args map[string]any)
 	default: // "allow"
 		// All paths must be within a single workspace directory (or workspace
 		// contains the "*" wildcard, which matches every path on the machine).
-		for _, dir := range g.cfg.Responsibility.Tools.LocalFS.Workspace.EffectiveDirs() {
+		for _, dir := range policy.Workspace.EffectiveDirs() {
 			if dir == "*" {
 				// Wildcard: all paths pass the workspace check.
 				return FastPathAllow, nil

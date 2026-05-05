@@ -16,6 +16,7 @@ package gate
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"os"
@@ -70,6 +71,9 @@ func (m *mockForwarder) ListTools(ctx context.Context, id shared.UserIdentity, t
 }
 func (m *mockForwarder) SendLogs(_ context.Context, _ []DecisionLogEntry) error {
 	return nil
+}
+func (m *mockForwarder) GetStaticPolicy(_ context.Context, _ string) (json.RawMessage, error) {
+	return json.RawMessage("{}"), nil
 }
 
 type mockForwarderWithSendLogs struct {
@@ -186,7 +190,7 @@ func TestHandleToolCall_FastPath_Allow(t *testing.T) {
 	testFile := filepath.Join(tmpDir, "hello.txt")
 	_ = os.WriteFile(testFile, []byte("world"), 0644)
 
-	localSession, err := localfs.Connect(context.Background(), []string{tmpDir})
+	_, localSession, err := localfs.Connect(context.Background(), []string{tmpDir})
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
@@ -253,7 +257,7 @@ func (m *mockGuardClient) ListUnclaimedTokens(ctx context.Context, userID string
 }
 
 type mockTokenStore struct {
-	tokens []shared.EscalationToken
+	tokens  []shared.EscalationToken
 	addFunc func(ctx context.Context, raw string) (shared.EscalationToken, error)
 }
 
@@ -518,9 +522,9 @@ func TestGate_New_Variants(t *testing.T) {
 			Identity: IdentityConfig{
 				Strategy: "oidc-login",
 				Config: map[string]any{
-					"issuer_url":  "http://idp",
-					"redirect_uri": "http://localhost/callback",
-					"client_id":    "id",
+					"issuer_url":    "http://idp",
+					"redirect_uri":  "http://localhost/callback",
+					"client_id":     "id",
 					"client_secret": "secret",
 				},
 			},
@@ -674,7 +678,7 @@ func TestGate_RefreshKeepTools(t *testing.T) {
 				}, nil
 			},
 		}
-		
+
 		g := &Gate{
 			forwarder:     fwd,
 			identity:      &mockIdentitySource{},

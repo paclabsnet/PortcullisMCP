@@ -127,21 +127,28 @@ responsibility:
   tools:
     portcullis-localfs:
       enabled: true
-      workspace:
-        # this list of allowed directories is up to you and your organization's policies
-        directories:
-          - "~/sandbox"
-          - "C:/projects"
-          - "C:/tmp"
-          - "/tmp"
-      forbidden:
-        # these are the directories that the Agent should never be allowed to visit, even if
-        # the parent is allowed.  This also should reflect your organization's policies, but
-        # including ~/.ssh and ~/.portcullis is definitely recommended
-        directories:
-          - "~/.ssh"
-          - "~/.portcullis"
-          - "/etc"
+      rules:
+        source: keep       # workspace/forbidden/strategy are fetched from Keep (via OPA)
+        ttl: 3600          # refresh interval in seconds
+        on_fetch_failure: cached  # keep last-known-good policy if Keep is temporarily unreachable
+      # workspace, forbidden, and strategy are intentionally omitted here — they are
+      # defined in policies/rego/data.json under portcullis.gate_static_policy and
+      # served to Gate by Keep's /config/portcullis-localfs endpoint.
+      #
+      # To use local policy instead, set rules.source: local (or remove the rules block
+      # entirely) and uncomment the sections below:
+      #
+      # workspace:
+      #   directories:
+      #     - "~/sandbox"
+      #     - "C:/projects"
+      #     - "C:/tmp"
+      #     - "/tmp"
+      # forbidden:
+      #   directories:
+      #     - "~/.ssh"
+      #     - "~/.portcullis"
+      #     - "/etc"
   escalation:
     strategy: "proactive"
     # This is the polling interval for unanticipated escalations. During the normal flow, if Keep

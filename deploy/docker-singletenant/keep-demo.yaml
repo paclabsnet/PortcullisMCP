@@ -41,6 +41,13 @@ responsibility:
     config:
       endpoint: "http://opa:8181/v1/data/portcullis/tabular/decision"
 
+  # gate_static_policy distributes localfs sandbox rules to Gate dynamically.
+  # Used when gate.yaml has responsibility.tools.portcullis-localfs.rules.source: keep.
+  gate_static_policy:
+    strategy: "opa"
+    config:
+      endpoint: "http://opa:8181/v1/data/portcullis/gate_static_config"
+
   mcp_backends:
     - name: "mock-enterprise-api"
       type: "http"

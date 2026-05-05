@@ -37,6 +37,15 @@ responsibility:
     config:
       endpoint: "http://opa:8181/v1/data/portcullis/tabular/decision"
 
+
+  # gate_static_policy distributes localfs sandbox rules to Gate dynamically.
+  # Not applicable in multi-tenant mode — localfs is disabled for tenant isolation.
+  #
+  # gate_static_policy:
+  #   strategy: "opa"
+  #   config:
+  #     endpoint: "http://opa:8181/v1/data/portcullis/gate_static_config"
+
   mcp_backends:
     - name: "mock-enterprise-api"
       type: "http"
@@ -75,6 +84,11 @@ responsibility:
       #       ttl: 300
       #     auth_headers:
       #       Authorization: "Bearer envvar://EXCHANGE_API_TOKEN"
+
+    - name: "enforce-auth"
+      type: "http"
+      url: "https://mcp.enforceauth.dev/t/026730a0-b4cc-4cf7-bdd2-a79a73ca4772"
+      allow_private_addresses: true
 
   issuance:
     signing_key: "dev-keep-signing-secret"

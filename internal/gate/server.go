@@ -97,6 +97,7 @@ type KeepForwarder interface {
 	Authorize(ctx context.Context, req shared.EnrichedMCPRequest) error
 	ListTools(ctx context.Context, identity shared.UserIdentity, escalationTokens []shared.EscalationToken) ([]shared.AnnotatedTool, error)
 	SendLogs(ctx context.Context, entries []DecisionLogEntry) error
+	GetStaticPolicy(ctx context.Context, resource string) (json.RawMessage, error)
 }
 
 // GuardSource defines the interface for communicating with Portcullis Guard.
@@ -108,22 +109,25 @@ type GuardSource interface {
 
 // Gate is the portcullis-gate MCP proxy server.
 type Gate struct {
-	cfg           Config
-	sessions      SessionStore           // handles session state
-	escalations   EscalationTokenStore   // handles escalation JWTs
-	pending       PendingEscalationStore // handles in-flight requests
-	identity      IdentitySource         // handles user info resolution
-	forwarder     KeepForwarder
-	guardClient   GuardSource // nil if Guard endpoint not configured
-	server        *mcp.Server
-	localFS       *mcp.ClientSession // in-process filesystem backend
-	sessionID     string
-	toolServerMap map[string]string // tool name → backend server name
-	localFSTools  map[string]bool   // tools served by local filesystem
-	logChan       chan DecisionLogEntry
-	logDone       chan struct{}
-	logWg         sync.WaitGroup
-	provider      TenancyProvider
+	cfg             Config
+	sessions        SessionStore           // handles session state
+	escalations     EscalationTokenStore   // handles escalation JWTs
+	pending         PendingEscalationStore // handles in-flight requests
+	identity        IdentitySource         // handles user info resolution
+	forwarder       KeepForwarder
+	guardClient     GuardSource // nil if Guard endpoint not configured
+	server          *mcp.Server
+	localFS         *mcp.ClientSession // in-process filesystem backend
+	localFSServer   *localfs.Server    // nil when localFS is disabled
+	localFSPolicyMu sync.RWMutex
+	localFSPolicy   *localFSPolicy // nil = degraded (no valid policy yet)
+	sessionID       string
+	toolServerMap   map[string]string // tool name → backend server name
+	localFSTools    map[string]bool   // tools served by local filesystem
+	logChan         chan DecisionLogEntry
+	logDone         chan struct{}
+	logWg           sync.WaitGroup
+	provider        TenancyProvider
 
 	stateMachine *StateMachine
 	oidcLogin    *OIDCLoginManager
@@ -163,25 +167,57 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 		provider = NewSingleTenantProvider(identityCache, mcpEpCfg.Auth.Credentials.Header)
 	}
 
-	// Start the in-process local filesystem server if enabled and sandbox dirs are configured.
+	// Start the in-process local filesystem server if enabled.
 	// Hard-blocked in multi-tenant mode regardless of the Enabled flag or workspace dirs,
 	// so that a misconfigured config file cannot violate tenant isolation at runtime.
+	// When rules.source is "keep", the server starts in degraded (deny-all) state and
+	// is activated by the policy refresh loop in Run().
 	var localFSSession *mcp.ClientSession
+	var localFSServer *localfs.Server
+	var initDirs []string // expanded workspace dirs for source:"local"; nil for source:"keep"
 	if provider.Capabilities().AllowLocalFS && cfg.Responsibility.Tools.LocalFS.Enabled {
-		if rawDirs := cfg.Responsibility.Tools.LocalFS.Workspace.EffectiveDirs(); len(rawDirs) > 0 {
-			expanded := make([]string, 0, len(rawDirs))
-			for _, d := range rawDirs {
-				exp, err := expandHome(d)
-				if err != nil {
-					return nil, fmt.Errorf("expand sandbox dir %q: %w", d, err)
+		localFSRules := cfg.Responsibility.Tools.LocalFS.Rules
+		if localFSRules.Source == "local" {
+			rawDirs := cfg.Responsibility.Tools.LocalFS.Workspace.EffectiveDirs()
+			if len(rawDirs) > 0 {
+				initDirs = make([]string, 0, len(rawDirs))
+				for _, d := range rawDirs {
+					exp, err := expandHome(d)
+					if err != nil {
+						return nil, fmt.Errorf("expand sandbox dir %q: %w", d, err)
+					}
+					initDirs = append(initDirs, exp)
 				}
-				expanded = append(expanded, exp)
 			}
+		}
+		// For source:"keep", initDirs is nil — server starts degraded.
+		// For source:"local" with no dirs configured, skip starting localfs entirely.
+		if localFSRules.Source == "keep" || len(initDirs) > 0 {
 			var err error
-			localFSSession, err = localfs.Connect(ctx, expanded)
+			localFSServer, localFSSession, err = localfs.Connect(ctx, initDirs)
 			if err != nil {
 				return nil, fmt.Errorf("start local filesystem server: %w", err)
 			}
+		}
+	}
+
+	// For source:"local", seed the runtime policy from config immediately.
+	// For source:"keep", policy starts nil (degraded) until the first fetch succeeds.
+	var initialLocalFSPolicy *localFSPolicy
+	if cfg.Responsibility.Tools.LocalFS.Rules.Source == "local" && localFSSession != nil {
+		rawForbidden := cfg.Responsibility.Tools.LocalFS.Forbidden.Directories
+		expandedForbidden := make([]string, 0, len(rawForbidden))
+		for _, d := range rawForbidden {
+			exp, err := expandHome(d)
+			if err != nil {
+				return nil, fmt.Errorf("expand forbidden dir %q: %w", d, err)
+			}
+			expandedForbidden = append(expandedForbidden, exp)
+		}
+		initialLocalFSPolicy = &localFSPolicy{
+			Workspace: SandboxConfig{Directories: initDirs},
+			Forbidden: ForbiddenConfig{Directories: expandedForbidden},
+			Strategy:  cfg.Responsibility.Tools.LocalFS.Strategy,
 		}
 	}
 
@@ -249,6 +285,8 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 		forwarder:     fwd,
 		guardClient:   guardClient,
 		localFS:       localFSSession,
+		localFSServer: localFSServer,
+		localFSPolicy: initialLocalFSPolicy,
 		sessionID:     uuid.New().String(),
 		toolServerMap: make(map[string]string),
 		localFSTools:  make(map[string]bool),
@@ -465,6 +503,18 @@ func (g *Gate) Run(ctx context.Context) error {
 		} else {
 			slog.Warn("guard endpoint not configured; escalation tokens must be added manually")
 		}
+	}
+
+	// When localfs policy source is "keep", perform an initial async fetch and
+	// start the background refresh loop. The server starts fail-closed: localfs
+	// tools are denied until the first successful fetch.
+	if g.localFSServer != nil && g.cfg.Responsibility.Tools.LocalFS.Rules.Source == "keep" {
+		go func() {
+			if err := g.fetchAndApplyLocalFSPolicy(ctx); err != nil {
+				slog.Warn("gate: initial localfs policy fetch failed — localfs tool is degraded", "error", err)
+			}
+		}()
+		g.startLocalFSPolicyRefresh(ctx)
 	}
 
 	go func() {

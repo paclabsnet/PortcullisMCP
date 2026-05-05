@@ -86,13 +86,14 @@ type MCPRouter interface {
 
 // Server is the portcullis-keep HTTP server.
 type Server struct {
-	cfg         Config
-	pdp         PolicyDecisionPoint
-	router      MCPRouter
-	workflow    WorkflowHandler
-	signer      *EscalationSigner
-	decisionLog *DecisionLogger
-	normalizer  IdentityNormalizer
+	cfg           Config
+	pdp           PolicyDecisionPoint
+	gateStaticPDP PolicyDecisionPoint
+	router        MCPRouter
+	workflow      WorkflowHandler
+	signer        *EscalationSigner
+	decisionLog   *DecisionLogger
+	normalizer    IdentityNormalizer
 }
 
 // NewServer creates a Keep server.
@@ -105,6 +106,19 @@ func NewServer(ctx context.Context, cfg Config) (*Server, error) {
 		pdp = NewOPAClient(cfg.Responsibility.Policy.OPA.Endpoint)
 	default:
 		return nil, fmt.Errorf("unknown pdp strategy %q; supported: opa, noop", cfg.Responsibility.Policy.Strategy)
+	}
+
+	staticCfg := cfg.Responsibility.GateStaticPolicy
+	var gateStaticPDP PolicyDecisionPoint // nil means gate_static_policy is disabled
+	switch staticCfg.Strategy {
+	case "":
+		// Not configured: leave nil. /config requests will return 404.
+	case "noop":
+		gateStaticPDP = NewNoopPDPClient()
+	case "opa":
+		gateStaticPDP = NewOPAClient(staticCfg.OPA.Endpoint)
+	default:
+		return nil, fmt.Errorf("unknown gate_static_policy strategy %q; supported: opa, noop", staticCfg.Strategy)
 	}
 
 	router := NewRouter(cfg.Responsibility.Backends, cfg.Operations.Storage)
@@ -129,13 +143,14 @@ func NewServer(ctx context.Context, cfg Config) (*Server, error) {
 	}
 
 	return &Server{
-		cfg: cfg,
-		pdp:         pdp,
-		router:      router,
-		workflow:    wf,
-		signer:      signer,
-		decisionLog: NewDecisionLogger(cfg.DecisionLog),
-		normalizer:  normalizer,
+		cfg:           cfg,
+		pdp:           pdp,
+		gateStaticPDP: gateStaticPDP,
+		router:        router,
+		workflow:      wf,
+		signer:        signer,
+		decisionLog:   NewDecisionLogger(cfg.DecisionLog),
+		normalizer:    normalizer,
 	}, nil
 }
 
@@ -160,6 +175,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("POST /authorize", s.handleAuthorize)
 	mux.HandleFunc("POST /tools", s.handleListTools)
 	mux.HandleFunc("POST /log", s.handleLog)
+	mux.HandleFunc("GET /config/{resource}", s.handleGetConfig)
 
 	var handler http.Handler = mux
 	if mainEndpoint.Auth.Credentials.BearerToken != "" {
@@ -541,6 +557,36 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleGetConfig fetches a static tool configuration from the gate_static_policy PDP.
+// The PDP is responsible for deciding which resources are served; unknown resources
+// receive an empty policy ({}) rather than an error.
+func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
+	if s.gateStaticPDP == nil {
+		http.Error(w, "gate_static_policy is not configured on this Keep instance", http.StatusNotFound)
+		return
+	}
+
+	resource := r.PathValue("resource")
+
+	slog.Info("keep: gate_static_policy request received", "resource", resource)
+
+	cfg, err := s.gateStaticPDP.GetStaticPolicy(r.Context(), resource)
+	if err != nil {
+		slog.Error("keep: gate_static_policy fetch failed", "resource", resource, "error", err)
+		http.Error(w, "failed to fetch config", http.StatusInternalServerError)
+		return
+	}
+
+	if string(cfg) == "{}" || len(cfg) == 0 {
+		slog.Warn("keep: gate_static_policy returned empty policy — resource may be missing from PDP data", "resource", resource)
+	} else {
+		slog.Info("keep: gate_static_policy served", "resource", resource)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(cfg)
+}
+
 func isValidDecision(d string) bool {
 	switch d {
 	case "allow", "deny", "escalate", "workflow":
@@ -549,7 +595,6 @@ func isValidDecision(d string) bool {
 		return false
 	}
 }
-
 
 func (s *Server) hasWorkflow() bool {
 	_, isNoop := s.workflow.(*noopWorkflow)

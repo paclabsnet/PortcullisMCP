@@ -249,6 +249,17 @@
                         }
                 }
 
-	}
-  }
+	},
+        "gate_static_policy" : {
+                "portcullis-localfs": {
+                        "workspace": {
+                                "directories": ["~", "C:/Projects", "C:/tmp", "/tmp", "/proof_we_got_this_from_keep"]
+                        },
+                        "forbidden": {
+                                "directories": ["~/.ssh", "~/.portcullis", "/etc", "C:/windows", "C:/proof_we_got_this_from_keep_also"]
+                        },
+                        "strategy": {}
+                }
+        }
+} 
 }

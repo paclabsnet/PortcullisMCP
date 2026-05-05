@@ -35,6 +35,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -42,25 +43,56 @@ import (
 	"github.com/paclabsnet/PortcullisMCP/internal/version"
 )
 
-// NewServer creates an MCP server that exposes filesystem tools for any path
-// on the local filesystem. sandboxDirs lists the allowed sandbox directories;
-// the first entry is used as the base for resolving relative paths. At least
-// one directory must be provided. The caller is responsible for connecting a
-// transport.
-func NewServer(sandboxDirs []string) (*mcp.Server, error) {
-	if len(sandboxDirs) == 0 {
-		return nil, fmt.Errorf("localfs: at least one sandbox directory is required")
-	}
+// Server wraps the internal filesystem server and exposes UpdatePolicy for
+// dynamic reconfiguration by Gate's keep-driven policy refresh loop.
+type Server struct {
+	fs *fsServer
+}
+
+// UpdatePolicy atomically replaces the sandbox directory list. After the first
+// successful call the server transitions from degraded (deny-all) to healthy.
+// sandboxDirs may be nil or empty; if all provided directories are missing
+// from the local filesystem the server marks itself ready but will deny all
+// paths in resolve().
+func (s *Server) UpdatePolicy(sandboxDirs []string) error {
 	resolved := make([]string, 0, len(sandboxDirs))
 	for _, d := range sandboxDirs {
 		r, err := filepath.EvalSymlinks(filepath.Clean(d))
 		if err != nil {
-			return nil, fmt.Errorf("localfs: resolve sandbox dir %q: %w", d, err)
+			if os.IsNotExist(err) {
+				continue
+			}
+			return fmt.Errorf("localfs: resolve sandbox dir %q: %w", d, err)
 		}
 		resolved = append(resolved, r)
 	}
+	s.fs.setPolicy(resolved)
+	return nil
+}
 
-	s := &fsServer{sandbox: resolved[0], sandboxDirs: resolved}
+// NewServer creates an MCP server that exposes filesystem tools for any path
+// on the local filesystem. sandboxDirs lists the allowed sandbox directories;
+// the first entry is used as the base for resolving relative paths. If
+// sandboxDirs is empty the server starts in a degraded (deny-all) state until
+// UpdatePolicy is called. The caller is responsible for connecting a transport.
+func NewServer(sandboxDirs []string) (*mcp.Server, *Server, error) {
+	s := &fsServer{}
+	if len(sandboxDirs) > 0 {
+		resolved := make([]string, 0, len(sandboxDirs))
+		for _, d := range sandboxDirs {
+			r, err := filepath.EvalSymlinks(filepath.Clean(d))
+			if err != nil {
+				if os.IsNotExist(err) {
+					continue
+				}
+				return nil, nil, fmt.Errorf("localfs: resolve sandbox dir %q: %w", d, err)
+			}
+			resolved = append(resolved, r)
+		}
+		// Transition from degraded state if sandboxDirs was provided,
+		// even if none of them currently exist on disk on this machine.
+		s.setPolicy(resolved)
+	}
 
 	srv := mcp.NewServer(&mcp.Implementation{
 		Name:    "portcullis-localfs",
@@ -147,23 +179,23 @@ func NewServer(sandboxDirs []string) (*mcp.Server, error) {
 		Description: "Returns information about filesystem access policy. All paths on the filesystem are accessible subject to Portcullis policy enforcement. Use this tool to understand which paths are in the fast-path (no policy check required) and which require policy evaluation.",
 	}, s.listAllowedDirectories)
 
-	return srv, nil
+	return srv, &Server{fs: s}, nil
 }
 
 // Connect creates a connected in-memory client session to a new localfs server.
-// This is the primary entry point for gate to obtain a local filesystem client.
-// sandboxDirs must contain at least one directory; the first is used as the
-// base for resolving relative paths.
-func Connect(ctx context.Context, sandboxDirs []string) (*mcp.ClientSession, error) {
-	srv, err := NewServer(sandboxDirs)
+// sandboxDirs may be nil or empty when the policy will be provided later via
+// Server.UpdatePolicy (keep-driven mode). The returned *Server must be used to
+// call UpdatePolicy before tool calls will succeed.
+func Connect(ctx context.Context, sandboxDirs []string) (*Server, *mcp.ClientSession, error) {
+	mcpSrv, server, err := NewServer(sandboxDirs)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	t1, t2 := mcp.NewInMemoryTransports()
 
-	if _, err := srv.Connect(ctx, t1, nil); err != nil {
-		return nil, fmt.Errorf("localfs: connect server side: %w", err)
+	if _, err := mcpSrv.Connect(ctx, t1, nil); err != nil {
+		return nil, nil, fmt.Errorf("localfs: connect server side: %w", err)
 	}
 
 	client := mcp.NewClient(&mcp.Implementation{
@@ -173,15 +205,38 @@ func Connect(ctx context.Context, sandboxDirs []string) (*mcp.ClientSession, err
 
 	session, err := client.Connect(ctx, t2, nil)
 	if err != nil {
-		return nil, fmt.Errorf("localfs: connect client side: %w", err)
+		return nil, nil, fmt.Errorf("localfs: connect client side: %w", err)
 	}
-	return session, nil
+	return server, session, nil
 }
 
 // fsServer holds the sandbox constraints and implements tool handlers.
 type fsServer struct {
+	mu          sync.RWMutex
+	policyReady bool
 	sandbox     string   // primary sandbox dir; used for relative-path resolution
 	sandboxDirs []string // all configured sandbox dirs; resolve checks against each
+}
+
+// setPolicy atomically replaces the sandbox configuration and marks the server ready.
+func (s *fsServer) setPolicy(resolved []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(resolved) > 0 {
+		s.sandbox = resolved[0]
+	} else {
+		s.sandbox = ""
+	}
+	s.sandboxDirs = resolved
+	s.policyReady = true
+}
+
+// snapshotPolicy returns a consistent snapshot of the policy under RLock.
+// ready is false when no policy has been applied yet (degraded/startup state).
+func (s *fsServer) snapshotPolicy() (sandbox string, sandboxDirs []string, ready bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.sandbox, s.sandboxDirs, s.policyReady
 }
 
 // resolve returns an absolute, symlink-free path for the given input,
@@ -194,11 +249,15 @@ type fsServer struct {
 // deeply nested new paths like /some/dir/a/b/c where none of the intermediates
 // exist yet.
 func (s *fsServer) resolve(path string) (string, error) {
+	sandbox, sandboxDirs, ready := s.snapshotPolicy()
+	if !ready {
+		return "", fmt.Errorf("localfs: policy not yet available — waiting for Keep")
+	}
 	if path == "" {
 		return "", fmt.Errorf("path is required")
 	}
 	if !filepath.IsAbs(path) {
-		path = filepath.Join(s.sandbox, path)
+		path = filepath.Join(sandbox, path)
 	}
 	clean := filepath.Clean(path)
 
@@ -208,7 +267,7 @@ func (s *fsServer) resolve(path string) (string, error) {
 		resolved, err := filepath.EvalSymlinks(current)
 		if err == nil {
 			full := filepath.Join(append([]string{resolved}, missing...)...)
-			for _, sandboxDir := range s.sandboxDirs {
+			for _, sandboxDir := range sandboxDirs {
 				rel, relErr := filepath.Rel(sandboxDir, full)
 				if relErr == nil && !strings.HasPrefix(rel, "..") {
 					return full, nil
@@ -772,7 +831,11 @@ func (s *fsServer) getFileInfo(_ context.Context, _ *mcp.CallToolRequest, in pat
 }
 
 func (s *fsServer) listAllowedDirectories(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
-	dirList := strings.Join(s.sandboxDirs, "\n  ")
+	_, sandboxDirs, ready := s.snapshotPolicy()
+	if !ready {
+		return errResult(fmt.Errorf("localfs: policy not yet available — waiting for Keep")), nil, nil
+	}
+	dirList := strings.Join(sandboxDirs, "\n  ")
 	text := "All directories on this computer are accessible, subject to Portcullis policy enforcement.\n\n" +
 		"Fast-path directories (no policy check required):\n  " + dirList + "\n\n" +
 		"Operations outside the fast-path directories are sent to portcullis-keep for policy evaluation. " +

@@ -67,10 +67,11 @@ type Config struct {
 
 // ResponsibilityConfig defines the specialized duty of Portcullis-Keep.
 type ResponsibilityConfig struct {
-	Policy   PolicyConfig     `yaml:"policy"`
-	Backends []BackendConfig  `yaml:"mcp_backends"`
-	Issuance IssuanceConfig   `yaml:"issuance"`
-	Workflow EscalationConfig `yaml:"workflow"`
+	Policy           PolicyConfig           `yaml:"policy"`
+	GateStaticPolicy GateStaticPolicyConfig `yaml:"gate_static_policy"`
+	Backends         []BackendConfig        `yaml:"mcp_backends"`
+	Issuance         IssuanceConfig         `yaml:"issuance"`
+	Workflow         EscalationConfig       `yaml:"workflow"`
 }
 
 // IssuanceConfig holds signing logic for escalation requests.
@@ -141,6 +142,9 @@ func (c *Config) Validate(sources cfgloader.SourceMap) (cfgloader.PostureReport,
 	}
 	if err := c.Responsibility.Policy.Validate(); err != nil {
 		return cfgloader.PostureReport{}, err
+	}
+	if err := c.Responsibility.GateStaticPolicy.Validate(); err != nil {
+		return cfgloader.PostureReport{}, fmt.Errorf("gate_static_policy: %w", err)
 	}
 	if err := c.Responsibility.Workflow.Validate(); err != nil {
 		return cfgloader.PostureReport{}, err
@@ -287,6 +291,22 @@ func (c *PolicyConfig) Validate() error {
 	return nil
 }
 
+// GateStaticPolicyConfig configures the PDP used for Gate's static tool policy distribution.
+// The PDP itself controls which resource names are served; unknown resources receive an
+// empty policy rather than an error.
+type GateStaticPolicyConfig struct {
+	PolicyConfig `yaml:",inline" mapstructure:",inline"`
+}
+
+// Validate validates the gate_static_policy block. It is a no-op if strategy is empty
+// (i.e., the block is not configured).
+func (c *GateStaticPolicyConfig) Validate() error {
+	if c.Strategy == "" {
+		return nil
+	}
+	return c.PolicyConfig.Validate()
+}
+
 type EscalationConfig struct {
 	Strategy string         `yaml:"strategy"` // "servicenow" | "webhook" | "url" | "noop"
 	Config   map[string]any `yaml:"config"`
@@ -416,17 +436,17 @@ type SigningConfig = shared.SigningConfig
 // LimitsConfig controls request body and field length limits for Keep.
 // Zero values are replaced with service defaults by ApplyDefaults.
 type LimitsConfig struct {
-	MaxRequestBodyBytes           int `yaml:"max_request_body_bytes" mapstructure:"max_request_body_bytes"`                         // default: 1048576 (1 MB)
-	MaxServerNameBytes            int `yaml:"max_server_name_bytes" mapstructure:"max_server_name_bytes"`                           // default: 256
-	MaxToolNameBytes              int `yaml:"max_tool_name_bytes" mapstructure:"max_tool_name_bytes"`                               // default: 256
-	MaxUserIDBytes                int `yaml:"max_user_id_bytes" mapstructure:"max_user_id_bytes"`                                   // default: 512
-	MaxTraceIDBytes               int `yaml:"max_trace_id_bytes" mapstructure:"max_trace_id_bytes"`                                 // default: 128
-	MaxSessionIDBytes             int `yaml:"max_session_id_bytes" mapstructure:"max_session_id_bytes"`                             // default: 128
-	MaxReasonBytes                int `yaml:"max_reason_bytes" mapstructure:"max_reason_bytes"`                                     // default: 4096
-	MaxLogBatchSize               int `yaml:"max_log_batch_size" mapstructure:"max_log_batch_size"`                                 // default: 1000
-	MaxForwardedHeaders           int `yaml:"max_forwarded_headers" mapstructure:"max_forwarded_headers"`                           // default: 20
-	MaxHeaderNameBytes            int `yaml:"max_header_name_bytes" mapstructure:"max_header_name_bytes"`                           // default: 128
-	MaxHeaderValueBytes           int `yaml:"max_header_value_bytes" mapstructure:"max_header_value_bytes"`                         // default: 4096
+	MaxRequestBodyBytes           int `yaml:"max_request_body_bytes" mapstructure:"max_request_body_bytes"`                       // default: 1048576 (1 MB)
+	MaxServerNameBytes            int `yaml:"max_server_name_bytes" mapstructure:"max_server_name_bytes"`                         // default: 256
+	MaxToolNameBytes              int `yaml:"max_tool_name_bytes" mapstructure:"max_tool_name_bytes"`                             // default: 256
+	MaxUserIDBytes                int `yaml:"max_user_id_bytes" mapstructure:"max_user_id_bytes"`                                 // default: 512
+	MaxTraceIDBytes               int `yaml:"max_trace_id_bytes" mapstructure:"max_trace_id_bytes"`                               // default: 128
+	MaxSessionIDBytes             int `yaml:"max_session_id_bytes" mapstructure:"max_session_id_bytes"`                           // default: 128
+	MaxReasonBytes                int `yaml:"max_reason_bytes" mapstructure:"max_reason_bytes"`                                   // default: 4096
+	MaxLogBatchSize               int `yaml:"max_log_batch_size" mapstructure:"max_log_batch_size"`                               // default: 1000
+	MaxForwardedHeaders           int `yaml:"max_forwarded_headers" mapstructure:"max_forwarded_headers"`                         // default: 20
+	MaxHeaderNameBytes            int `yaml:"max_header_name_bytes" mapstructure:"max_header_name_bytes"`                         // default: 128
+	MaxHeaderValueBytes           int `yaml:"max_header_value_bytes" mapstructure:"max_header_value_bytes"`                       // default: 4096
 	MaxForwardedHeadersTotalBytes int `yaml:"max_forwarded_headers_total_bytes" mapstructure:"max_forwarded_headers_total_bytes"` // default: 16384 (16 KB)
 }
 

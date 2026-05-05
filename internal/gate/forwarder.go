@@ -22,14 +22,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 
-	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
+	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
 )
 
 // Forwarder sends enriched MCP requests to portcullis-keep and returns the result.
@@ -100,6 +101,45 @@ func (f *Forwarder) SendLogs(ctx context.Context, entries []DecisionLogEntry) er
 	}
 	var result map[string]interface{}
 	return f.post(ctx, "/log", batch, &result)
+}
+
+// GetStaticPolicy fetches a static tool configuration from Keep's /config/{resource} endpoint.
+func (f *Forwarder) GetStaticPolicy(ctx context.Context, resource string) (json.RawMessage, error) {
+	var raw json.RawMessage
+	if err := f.get(ctx, "/config/"+url.PathEscape(resource), &raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+// get sends a GET request to Keep and decodes the JSON response into out.
+func (f *Forwarder) get(ctx context.Context, path string, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, f.auth.Endpoint+path, nil)
+	if err != nil {
+		return fmt.Errorf("build http request: %w", err)
+	}
+	if f.auth.Auth.Type == "bearer" && f.auth.Auth.Credentials.BearerToken != "" {
+		req.Header.Set("Authorization", "Bearer "+f.auth.Auth.Credentials.BearerToken)
+	}
+
+	resp, err := f.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("keep request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return json.NewDecoder(resp.Body).Decode(out)
+	case http.StatusForbidden:
+		return fmt.Errorf("keep returned 403: resource not allowed")
+	default:
+		var errBody struct {
+			Error string `json:"error"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&errBody)
+		return fmt.Errorf("keep returned %d: %s", resp.StatusCode, errBody.Error)
+	}
 }
 
 // the core mechanism for sending messages to Keep, both the

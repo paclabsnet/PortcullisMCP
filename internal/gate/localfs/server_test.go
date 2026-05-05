@@ -60,7 +60,7 @@ func setup(t *testing.T) (session *mcp.ClientSession, sandbox string, outside st
 	outside = t.TempDir()
 	ctx := context.Background()
 	var err error
-	session, err = Connect(ctx, []string{sandbox})
+	_, session, err = Connect(ctx, []string{sandbox})
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
@@ -546,7 +546,7 @@ func TestLocalFS_Symlinks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	session, err := Connect(context.Background(), []string{sandbox})
+	_, session, err := Connect(context.Background(), []string{sandbox})
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
@@ -1156,7 +1156,7 @@ func TestMultiSandbox_ReadsFromEitherDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	session, err := Connect(context.Background(), []string{sandboxA, sandboxB})
+	_, session, err := Connect(context.Background(), []string{sandboxA, sandboxB})
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
@@ -1189,7 +1189,7 @@ func TestMultiSandbox_ListAllowedDirectoriesShowsAll(t *testing.T) {
 	sandboxA := t.TempDir()
 	sandboxB := t.TempDir()
 
-	session, err := Connect(context.Background(), []string{sandboxA, sandboxB})
+	_, session, err := Connect(context.Background(), []string{sandboxA, sandboxB})
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
@@ -1209,7 +1209,7 @@ func TestMultiSandbox_WriteToEitherDirectory(t *testing.T) {
 	sandboxA := t.TempDir()
 	sandboxB := t.TempDir()
 
-	session, err := Connect(context.Background(), []string{sandboxA, sandboxB})
+	_, session, err := Connect(context.Background(), []string{sandboxA, sandboxB})
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}

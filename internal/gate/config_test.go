@@ -704,3 +704,53 @@ func TestConfig_Validate_LocalFSStrategy(t *testing.T) {
 		}
 	})
 }
+
+func TestConfig_Validate_LocalFSRules(t *testing.T) {
+	t.Run("negative ttl is rejected", func(t *testing.T) {
+		cfg := validBaseConfig()
+		cfg.Responsibility.Tools.LocalFS.Rules.TTL = -1
+		_, err := cfg.Validate(nil)
+		if err == nil || !strings.Contains(err.Error(), "ttl") {
+			t.Errorf("expected ttl error for negative value, got: %v", err)
+		}
+	})
+
+	t.Run("zero ttl is rejected (after ApplyDefaults replaces 0→3600, negative stays negative)", func(t *testing.T) {
+		// Explicitly set a negative value — zero is fine because ApplyDefaults
+		// converts it to 3600 before validation runs.
+		cfg := validBaseConfig()
+		cfg.Responsibility.Tools.LocalFS.Rules.TTL = -60
+		_, err := cfg.Validate(nil)
+		if err == nil || !strings.Contains(err.Error(), "ttl") {
+			t.Errorf("expected ttl error for negative value, got: %v", err)
+		}
+	})
+
+	t.Run("valid source values accepted", func(t *testing.T) {
+		for _, src := range []string{"local", "keep"} {
+			cfg := validBaseConfig()
+			cfg.Responsibility.Tools.LocalFS.Rules.Source = src
+			if _, err := cfg.Validate(nil); err != nil {
+				t.Errorf("source %q should be valid, got: %v", src, err)
+			}
+		}
+	})
+
+	t.Run("invalid source is rejected", func(t *testing.T) {
+		cfg := validBaseConfig()
+		cfg.Responsibility.Tools.LocalFS.Rules.Source = "remote"
+		_, err := cfg.Validate(nil)
+		if err == nil || !strings.Contains(err.Error(), "source") {
+			t.Errorf("expected source error, got: %v", err)
+		}
+	})
+
+	t.Run("invalid on_fetch_failure is rejected", func(t *testing.T) {
+		cfg := validBaseConfig()
+		cfg.Responsibility.Tools.LocalFS.Rules.OnFetchFailure = "ignore"
+		_, err := cfg.Validate(nil)
+		if err == nil || !strings.Contains(err.Error(), "on_fetch_failure") {
+			t.Errorf("expected on_fetch_failure error, got: %v", err)
+		}
+	})
+}

@@ -68,5 +68,5 @@ operations:
   telemetry:
     exporter: "noop"
   logging:
-    level: "info"
+    level: "debug"
     format: "text"

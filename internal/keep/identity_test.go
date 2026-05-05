@@ -166,6 +166,10 @@ type capturingPDP struct {
 	lastReq AuthorizedRequest
 }
 
+func (c *capturingPDP) GetStaticPolicy(_ context.Context, _ string) (json.RawMessage, error) {
+	return json.RawMessage("{}"), nil
+}
+
 func (c *capturingPDP) Evaluate(_ context.Context, req AuthorizedRequest) (shared.PDPResponse, error) {
 	c.lastReq = req
 	return shared.PDPResponse{Decision: "allow"}, nil
@@ -268,10 +272,10 @@ func TestOIDCVerifyingNormalizer_MaxTokenAge_Zero_MissingIATAllowed(t *testing.T
 
 func TestOIDCVerifyingNormalizer_PreferredUsernameAndACR(t *testing.T) {
 	tests := []struct {
-		name              string
-		claims            jwt.MapClaims
-		wantPreferred     string
-		wantACR           string
+		name          string
+		claims        jwt.MapClaims
+		wantPreferred string
+		wantACR       string
 	}{
 		{
 			name: "both claims present",
@@ -382,13 +386,13 @@ func TestHMACVerifyingNormalizer(t *testing.T) {
 	}
 
 	tests := []struct {
-		name        string
-		normalizer  *hmacVerifyingNormalizer
-		identity    shared.UserIdentity
-		wantErr     string
-		wantUserID  string
-		wantGroups  []string
-		wantEmail   string
+		name       string
+		normalizer *hmacVerifyingNormalizer
+		identity   shared.UserIdentity
+		wantErr    string
+		wantUserID string
+		wantGroups []string
+		wantEmail  string
 	}{
 		{
 			name:       "valid HS256 token",
@@ -646,7 +650,7 @@ func newWebhookNormalizer(t *testing.T, webhookSrv *httptest.Server, allowClaims
 	}
 	n.cache = NewPrincipalCache(100)
 	n.normCfg = identity.NormalizerConfig{
-		CacheTTL:       cacheTTL,
+		CacheTTL:        cacheTTL,
 		MaxUserIDLength: 256,
 	}
 	n.allowClaims = allowClaims

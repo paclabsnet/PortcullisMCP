@@ -105,6 +105,31 @@ func (c *Config) Validate(sources cfgloader.SourceMap) (cfgloader.PostureReport,
 	if err := c.Peers.Guard.Validate(); err != nil {
 		return cfgloader.PostureReport{}, err
 	}
+	c.Responsibility.Tools.LocalFS.Rules.ApplyDefaults()
+	switch c.Responsibility.Tools.LocalFS.Rules.Source {
+	case "local", "keep":
+		// valid
+	default:
+		return cfgloader.PostureReport{}, fmt.Errorf(
+			"responsibility.tools.portcullis-localfs.rules.source %q is invalid: must be \"local\" or \"keep\"",
+			c.Responsibility.Tools.LocalFS.Rules.Source,
+		)
+	}
+	if c.Responsibility.Tools.LocalFS.Rules.TTL <= 0 {
+		return cfgloader.PostureReport{}, fmt.Errorf(
+			"responsibility.tools.portcullis-localfs.rules.ttl must be a positive integer (got %d)",
+			c.Responsibility.Tools.LocalFS.Rules.TTL,
+		)
+	}
+	switch c.Responsibility.Tools.LocalFS.Rules.OnFetchFailure {
+	case "cached", "fail":
+		// valid
+	default:
+		return cfgloader.PostureReport{}, fmt.Errorf(
+			"responsibility.tools.portcullis-localfs.rules.on_fetch_failure %q is invalid: must be \"cached\" or \"fail\"",
+			c.Responsibility.Tools.LocalFS.Rules.OnFetchFailure,
+		)
+	}
 	if err := c.Responsibility.Tools.LocalFS.Strategy.Validate(); err != nil {
 		return cfgloader.PostureReport{}, err
 	}
@@ -305,9 +330,30 @@ type ToolsConfig struct {
 	LocalFS LocalFSConfig `yaml:"portcullis-localfs"`
 }
 
+// LocalFSRulesConfig controls how Gate sources its localfs policy.
+type LocalFSRulesConfig struct {
+	Source         string `yaml:"source"`           // "local" (default) | "keep"
+	TTL            int    `yaml:"ttl"`               // seconds between policy refreshes (default: 3600)
+	OnFetchFailure string `yaml:"on_fetch_failure"`  // "cached" (default) | "fail"
+}
+
+// ApplyDefaults fills zero-value fields with their service defaults.
+func (r *LocalFSRulesConfig) ApplyDefaults() {
+	if r.Source == "" {
+		r.Source = "local"
+	}
+	if r.TTL == 0 {
+		r.TTL = 3600
+	}
+	if r.OnFetchFailure == "" {
+		r.OnFetchFailure = "cached"
+	}
+}
+
 // LocalFSConfig configures the built-in local filesystem tool provider.
 type LocalFSConfig struct {
 	Enabled   bool                  `yaml:"enabled"`
+	Rules     LocalFSRulesConfig    `yaml:"rules"`
 	Workspace SandboxConfig         `yaml:"workspace"`
 	Forbidden ForbiddenConfig       `yaml:"forbidden"`
 	Strategy  LocalFSStrategyConfig `yaml:"strategy"`

@@ -37,6 +37,7 @@ import (
 // PolicyDecisionPoint evaluates an authorized MCP request and returns a decision.
 type PolicyDecisionPoint interface {
 	Evaluate(ctx context.Context, req AuthorizedRequest) (shared.PDPResponse, error)
+	GetStaticPolicy(ctx context.Context, resource string) (json.RawMessage, error)
 }
 
 // noopPDP is a PolicyDecisionPoint that allows every request unconditionally.
@@ -56,6 +57,10 @@ func (n *noopPDP) Evaluate(_ context.Context, _ AuthorizedRequest) (shared.PDPRe
 		Decision: "allow",
 		Reason:   "noop pdp: policy enforcement disabled",
 	}, nil
+}
+
+func (n *noopPDP) GetStaticPolicy(_ context.Context, _ string) (json.RawMessage, error) {
+	return json.RawMessage("{}"), nil
 }
 
 // opaClient calls the OPA REST API to evaluate policy.
@@ -285,4 +290,44 @@ func (c *opaClient) Evaluate(ctx context.Context, req AuthorizedRequest) (shared
 		Reason:          opaResp.Result.Reason,
 		EscalationScope: opaResp.Result.EscalationScope,
 	}, nil
+}
+
+// GetStaticPolicy fetches a static configuration resource from OPA.
+// It posts {"input": {"resource": "<resource>"}} and returns the raw result value.
+func (c *opaClient) GetStaticPolicy(ctx context.Context, resource string) (json.RawMessage, error) {
+	input := map[string]any{
+		"input": map[string]string{
+			"resource": resource,
+		},
+	}
+	body, err := json.Marshal(input)
+	if err != nil {
+		return nil, fmt.Errorf("marshal opa config request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("build opa config request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s", shared.ErrPDPUnavailable, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%w: opa returned %d", shared.ErrPDPUnavailable, resp.StatusCode)
+	}
+
+	var opaResp struct {
+		Result struct {
+			Policy json.RawMessage `json:"policy"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&opaResp); err != nil {
+		return nil, fmt.Errorf("decode opa config response: %w", err)
+	}
+	return opaResp.Result.Policy, nil
 }
