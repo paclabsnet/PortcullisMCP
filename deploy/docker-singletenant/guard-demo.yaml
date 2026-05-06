@@ -22,19 +22,19 @@ server:
       # mtls:
       #   client_ca: "/tls/ca.crt"
 
-identity:
-  strategy: "oidc-login"
-  config:
-    issuer_url: "http://localhost:5556/dex"
-    redirect_uri: "http://localhost:8444/auth/callback"
-    client:
-      id: "portcullis-guard"
-      secret: "portcullis-guard-secret"
-    scopes:
-      - "openid"
-      - "profile"
-      - "email"
-      - "groups"
+# identity:
+#  strategy: "oidc-login"
+#  config:
+#    issuer_url: "http://localhost:5556/dex"
+#    redirect_uri: "http://localhost:8444/auth/callback"
+#    client:
+#      id: "portcullis-guard"
+#      secret: "portcullis-guard-secret"
+#    scopes:
+#      - "openid"
+#      - "profile"
+#      - "email"
+#      - "groups"
 
 responsibility:
   issuance:

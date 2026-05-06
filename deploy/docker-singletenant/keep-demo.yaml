@@ -74,6 +74,21 @@ responsibility:
       #   placement:
       #     header: "X-User-Identity"
 
+    - name: "gitmcp"
+      type: "http"
+      url: "https://gitmcp.io/paclabsnet/PortcullisMCP"
+      tool_list:
+        source: file
+        file: tools/gitmcp_portcullis.json
+
+    - name: "enforceauth"
+      type: "http"
+      url: "https://mcp.enforceauth.dev/t/026730a0-b4cc-4cf7-bdd2-a79a73ca4772"
+      tool_list:
+        source: file
+        file: tools/enforceauth_mcp.json
+
+
   issuance:
     signing_key: "dev-keep-signing-secret"
     ttl: 86400

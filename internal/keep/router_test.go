@@ -18,7 +18,10 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -728,57 +731,85 @@ func TestCallTool_BodyInjection_NestedMapNotMutated(t *testing.T) {
 	}
 }
 
+// --- static tool routing ---
+
+func TestRouter_ListTools_Static(t *testing.T) {
+	mockTool := &mcp.Tool{
+		Name:        "static_tool",
+		Description: "A static tool",
+	}
+
+	cfg := BackendConfig{
+		Name: "static_backend",
+		ToolList: ToolListConfig{
+			Source: "file",
+		},
+		StaticTools: []*mcp.Tool{mockTool},
+	}
+
+	router := NewRouter([]BackendConfig{cfg})
+
+	tools, err := router.ListTools(context.Background(), "static_backend")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(tools) != 1 || tools[0].Name != "static_tool" {
+		t.Errorf("expected to get static tool, got: %+v", tools)
+	}
+}
+
 // --- config validation ---
 
-func TestValidateBackendIdentityConfig_Valid(t *testing.T) {
+func TestValidateBackendConfig_Valid(t *testing.T) {
 	cases := []BackendConfig{
 		{UserIdentity: BackendUserIdentity{Placement: BackendIdentityPlacement{Header: "X-Identity-Token"}}},
 		{UserIdentity: BackendUserIdentity{Placement: BackendIdentityPlacement{JSONPath: "auth.token"}}},
 		{}, // neither set — always valid
 	}
 	for _, cfg := range cases {
-		if err := validateBackendIdentityConfig(cfg); err != nil {
-			t.Errorf("validateBackendIdentityConfig(%+v) = %v, want nil", cfg, err)
+		if err := validateBackendConfig(&cfg); err != nil {
+			t.Errorf("validateBackendConfig(%+v) = %v, want nil", cfg, err)
 		}
 	}
 }
 
-func TestValidateBackendIdentityConfig_BothPlacementFieldsRejected(t *testing.T) {
+func TestValidateBackendConfig_BothPlacementFieldsRejected(t *testing.T) {
 	cfg := BackendConfig{UserIdentity: BackendUserIdentity{Placement: BackendIdentityPlacement{
 		Header:   "X-Identity-Token",
 		JSONPath: "auth.token",
 	}}}
-	if err := validateBackendIdentityConfig(cfg); err == nil {
+	if err := validateBackendConfig(&cfg); err == nil {
 		t.Error("expected error when both header and json_path are set, got nil")
 	}
 }
 
-func TestValidateBackendIdentityConfig_ExchangeURLWithoutPlacementRejected(t *testing.T) {
+func TestValidateBackendConfig_ExchangeURLWithoutPlacementRejected(t *testing.T) {
 	cfg := BackendConfig{
 		AllowPrivateAddresses: true,
 		UserIdentity: BackendUserIdentity{
 			Exchange: BackendIdentityExchange{URL: "http://exchange.internal/exchange"},
 		},
 	}
-	if err := validateBackendIdentityConfig(cfg); err == nil {
+	if err := validateBackendConfig(&cfg); err == nil {
 		t.Error("expected error when exchange.url is set but no placement is configured, got nil")
 	}
 }
 
-func TestValidateBackendIdentityConfig_ForbiddenHeader(t *testing.T) {
+func TestValidateBackendConfig_ForbiddenHeader(t *testing.T) {
 	forbidden := []string{
 		"Host", "Content-Length", "Transfer-Encoding", "Connection",
 		"X-Portcullis-Trace",
 	}
 	for _, h := range forbidden {
 		cfg := BackendConfig{UserIdentity: BackendUserIdentity{Placement: BackendIdentityPlacement{Header: h}}}
-		if err := validateBackendIdentityConfig(cfg); err == nil {
+		if err := validateBackendConfig(&cfg); err == nil {
 			t.Errorf("expected error for forbidden identity_header %q, got nil", h)
 		}
 	}
 }
 
-func TestValidateBackendIdentityConfig_InvalidPath(t *testing.T) {
+func TestValidateBackendConfig_InvalidPath(t *testing.T) {
 	badPaths := []string{
 		// empty / whitespace-only
 		" ",
@@ -799,13 +830,13 @@ func TestValidateBackendIdentityConfig_InvalidPath(t *testing.T) {
 	}
 	for _, p := range badPaths {
 		cfg := BackendConfig{UserIdentity: BackendUserIdentity{Placement: BackendIdentityPlacement{JSONPath: p}}}
-		if err := validateBackendIdentityConfig(cfg); err == nil {
+		if err := validateBackendConfig(&cfg); err == nil {
 			t.Errorf("expected error for malformed json_path %q, got nil", p)
 		}
 	}
 }
 
-func TestValidateBackendIdentityConfig_ValidPaths(t *testing.T) {
+func TestValidateBackendConfig_ValidPaths(t *testing.T) {
 	good := []string{
 		"token",
 		"auth.token",
@@ -816,10 +847,129 @@ func TestValidateBackendIdentityConfig_ValidPaths(t *testing.T) {
 	}
 	for _, p := range good {
 		cfg := BackendConfig{UserIdentity: BackendUserIdentity{Placement: BackendIdentityPlacement{JSONPath: p}}}
-		if err := validateBackendIdentityConfig(cfg); err != nil {
-			t.Errorf("validateBackendIdentityConfig with path %q = %v, want nil", p, err)
+		if err := validateBackendConfig(&cfg); err != nil {
+			t.Errorf("validateBackendConfig with path %q = %v, want nil", p, err)
 		}
 	}
+}
+
+func TestValidateBackendConfig_StaticToolList(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "tools.json")
+
+	toolsData := `{
+		"tools": [
+			{
+				"name": "static_tool",
+				"description": "A tool loaded from a file"
+			}
+		]
+	}`
+	if err := os.WriteFile(filePath, []byte(toolsData), 0644); err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+
+	cfg := BackendConfig{
+		ToolList: ToolListConfig{
+			Source: "file",
+			File:   filePath,
+		},
+	}
+
+	if err := validateBackendConfig(&cfg); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(cfg.StaticTools) != 1 || cfg.StaticTools[0].Name != "static_tool" {
+		t.Errorf("failed to load static tools correctly: %+v", cfg.StaticTools)
+	}
+}
+
+func TestValidateBackendConfig_StaticToolListErrors(t *testing.T) {
+	cfgNoFile := BackendConfig{
+		ToolList: ToolListConfig{Source: "file"},
+	}
+	if err := validateBackendConfig(&cfgNoFile); err == nil {
+		t.Error("expected error when source is file but no file is provided")
+	}
+
+	cfgInvalidSource := BackendConfig{
+		ToolList: ToolListConfig{Source: "invalid"},
+	}
+	if err := validateBackendConfig(&cfgInvalidSource); err == nil {
+		t.Error("expected error for invalid source")
+	}
+
+	cfgMissingFile := BackendConfig{
+		ToolList: ToolListConfig{
+			Source: "file",
+			File:   "missing/relative/path.json",
+		},
+	}
+	err := validateBackendConfig(&cfgMissingFile)
+	if err == nil {
+		t.Error("expected error for missing file")
+	} else {
+		errMsg := err.Error()
+		if !strings.Contains(errMsg, "attempted=") || !strings.Contains(errMsg, "base_dir=") {
+			t.Errorf("error message missing diagnostic info, got: %v", errMsg)
+		}
+		parts := strings.SplitN(errMsg, "attempted=\"", 2)
+		if len(parts) == 2 {
+			pathPart := strings.SplitN(parts[1], "\"", 2)[0]
+			if !filepath.IsAbs(pathPart) {
+				t.Errorf("expected attempted path to be absolute, got: %q", pathPart)
+			}
+		} else {
+			t.Errorf("could not extract attempted path from error: %v", errMsg)
+		}
+	}
+
+	tmpDir := t.TempDir()
+	malformedPath := filepath.Join(tmpDir, "malformed.json")
+	_ = os.WriteFile(malformedPath, []byte("{ not valid json "), 0644)
+
+	cfgMalformedFile := BackendConfig{
+		ToolList: ToolListConfig{
+			Source: "file",
+			File:   malformedPath,
+		},
+	}
+	err = validateBackendConfig(&cfgMalformedFile)
+	if err == nil {
+		t.Error("expected error for malformed file")
+	} else {
+		errMsg := err.Error()
+		if !strings.Contains(errMsg, "configured=") || !strings.Contains(errMsg, "attempted=") {
+			t.Errorf("error message missing diagnostic info, got: %v", errMsg)
+		}
+	}
+}
+
+func TestValidateBackendConfig_EnforceAuthToolList(t *testing.T) {
+	_, thisFile, _, _ := runtime.Caller(0)
+	refPath := filepath.Join(filepath.Dir(thisFile), "../../examples/tool-lists/enforceauth_mcp.json")
+
+	cfg := BackendConfig{
+		ToolList: ToolListConfig{
+			Source: "file",
+			File:   refPath,
+		},
+	}
+
+	if err := validateBackendConfig(&cfg); err != nil {
+		t.Fatalf("enforceauth_mcp.json failed to parse: %v", err)
+	}
+
+	if len(cfg.StaticTools) == 0 {
+		t.Fatal("expected tools to be loaded, got none")
+	}
+
+	if cfg.StaticTools[0].Name != "ea_me" {
+		t.Errorf("expected first tool to be ea_me, got %q", cfg.StaticTools[0].Name)
+	}
+
+	t.Logf("loaded %d tools from enforceauth_mcp.json", len(cfg.StaticTools))
 }
 
 func TestNoRedirectHTTPClient_RefusesRedirect(t *testing.T) {

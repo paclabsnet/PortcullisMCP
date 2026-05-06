@@ -171,6 +171,9 @@ the Agents and Users are in compliance with corporate policy.
 - **Docker** (optional, for full demo stack)
 - **Make** (standard on Linux/Mac; install via `winget install ezwinports.make` on Windows)
 
+For full version requirements across all components (Redis, OPA, Docker, etc.), see
+[docs/system-requirements.md](docs/system-requirements.md).
+
 ### Minimal (no Docker, no OPA)
 
 This path runs Keep with the `noop` PDP, which allows all requests. Useful for understanding the flow before adding

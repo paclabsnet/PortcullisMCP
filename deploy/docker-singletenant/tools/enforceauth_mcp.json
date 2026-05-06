@@ -1,0 +1,1042 @@
+{ "tools":[
+  {
+    "name": "ea_me",
+    "description": "Return the authenticated user (id, email, roles), the list of tenants they can access, and the connection-default tenant. Use to confirm identity and enumerate available tenants.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "response_format": {
+          "type": "string",
+          "enum": ["json", "markdown"],
+          "default": "markdown",
+          "description": "Either 'json' (machine-parseable) or 'markdown' (human-readable). Default 'markdown'."
+        }
+      }
+    }
+  },
+  {
+    "name": "ea_get_current_user",
+    "description": "Returns the current authenticated user's profile and organizations. Organizations are loaded from the EA entity system, not from JWT claims.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "response_format": {
+          "type": "string",
+          "enum": ["json", "markdown"],
+          "default": "markdown"
+        }
+      }
+    }
+  },
+  {
+    "name": "ea_get_oidc_discovery",
+    "description": "Returns the OIDC discovery document for clients that want to discover the token endpoint. Tenant-agnostic public document.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "response_format": {
+          "type": "string",
+          "enum": ["json", "markdown"],
+          "default": "markdown"
+        }
+      }
+    }
+  },
+  {
+    "name": "ea_list_my_tenants",
+    "description": "List the tenants the authenticated user can access. Returns tenant id, name, and is_connection_default flag. Use when tenant slug is needed for tenant-scoped tools.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "response_format": {
+          "type": "string",
+          "enum": ["json", "markdown"],
+          "default": "markdown"
+        }
+      }
+    }
+  },
+  {
+    "name": "ea_get_my_permissions",
+    "description": "Returns all effective permissions for the authenticated user based on their roles.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1, "description": "Tenant slug or UUID. Omit to use connection default." }
+      }
+    }
+  },
+  {
+    "name": "ea_get_role_definitions",
+    "description": "Returns all available roles and their associated permissions.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_list_entities",
+    "description": "List all entities within a tenant with optional filtering by type, parent, or root-only.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "entityType": { "type": "string", "description": "Filter by entity type (org, system, etc.)" },
+        "parentId": { "type": "string", "format": "uuid" },
+        "rootOnly": { "type": "boolean", "description": "Return only root entities (no parents)" },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_entity",
+    "description": "Get a single entity by ID.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid", "description": "Entity identifier" },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_entity_tree",
+    "description": "Returns the entity hierarchy as a recursive tree scoped to the active tenant. Each node includes a children array.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_entity_children",
+    "description": "Get direct child entities of a given entity.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_entity_descendants",
+    "description": "Get all descendant entities of a given entity.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_entity_ancestors",
+    "description": "Get all ancestor entities (supports multiple parents).",
+    "inputSchema": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_entity_parents",
+    "description": "Get direct parent entities of a given entity.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_entity_relations",
+    "description": "Get all relations for an entity.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_entity_environments",
+    "description": "Get environment configuration summary for an entity.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_list_entity_configs",
+    "description": "Get all configurations for an entity.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_entity_config",
+    "description": "Get a specific configuration for an entity. Supports effective config after inheritance.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["id", "type"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "type": { "type": "string", "enum": ["policy_source", "bundle_destination", "environment_config"] },
+        "effective": { "type": "string", "enum": ["true", "false"] },
+        "env": { "type": "string", "maxLength": 255 },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_effective_config",
+    "description": "Get the effective configuration after inheritance from ancestors. For bundle_destination + env, applies the environment override.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["id", "type"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "type": { "type": "string", "enum": ["policy_source", "bundle_destination", "environment_config"] },
+        "env": { "type": "string", "maxLength": 255 },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_entity_git_permissions",
+    "description": "Checks whether the entity's PAT has write access to its Git repository. Only supports Git/GitHub storage.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_list_entity_invitations",
+    "description": "List all pending invitations for an entity.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_list_entity_users",
+    "description": "List all users of an entity (org or system).",
+    "inputSchema": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_list_policies",
+    "description": "List policies in the active tenant with optional filtering by status, entity, or substring search. Paginated.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cursor": { "type": "string", "maxLength": 1024 },
+        "entity_id": { "type": "string", "format": "uuid" },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "linked": { "type": "string", "enum": ["yes", "no"] },
+        "search": { "type": "string", "maxLength": 255 },
+        "sort_by": { "type": "string", "enum": ["fileName", "createdAt", "lastEditedAt", "lastInvokedAt"] },
+        "sort_dir": { "type": "string", "enum": ["asc", "desc"] },
+        "status": { "type": "string", "enum": ["active", "error", "draft", "disabled"] },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_policy_by_id",
+    "description": "Returns a single policy item by its generated ID.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_policy_stats",
+    "description": "Returns aggregated policy counts by status and the fraction of policies that are active.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_policy_usage_over_time",
+    "description": "Returns policy evaluation counts bucketed by day.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_top_triggered_policies",
+    "description": "Returns the most frequently evaluated policies in a time range.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "range": { "type": "string", "enum": ["7d", "30d"] },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_policy_draft",
+    "description": "Fetches code from Git branch, PR state from GitHub API, and metadata from DB.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_policy_draft_status",
+    "description": "Lightweight status poll — no code fetch, just PR state from GitHub.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_policy_file_tree",
+    "description": "Fetch the tree of policy files from the entity's configured policy source (Git, S3, GCS, Azure).",
+    "inputSchema": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_policy_file_content",
+    "description": "Fetch the content of a specific .rego policy file from the entity's configured policy source.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["id", "path"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "path": { "type": "string", "description": "File path within policy source, must end with .rego" },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_policy_index",
+    "description": "Get the build-time policy index for an entity. Maps .rego files to their OPA packages and rules.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "revision": { "type": "string", "maxLength": 255, "description": "Bundle revision (git SHA). Omit for latest." },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_list_deployments",
+    "description": "List all deployments with optional filtering by entity, status, or search. Paginated.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cursor": { "type": "string", "maxLength": 1024 },
+        "entity_id": { "type": "string", "format": "uuid" },
+        "group_id": { "type": "string", "format": "uuid" },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "search": { "type": "string", "maxLength": 255 },
+        "sort_by": { "type": "string", "enum": ["started_at", "completed_at", "status", "duration_ms", "entity_name"] },
+        "sort_dir": { "type": "string", "enum": ["asc", "desc"] },
+        "status": { "type": "string", "enum": ["pending", "in_progress", "success", "failed", "timeout", "all"] },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_deployment",
+    "description": "Retrieve a specific deployment by its 16-character run ID.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["run_id"],
+      "properties": {
+        "run_id": { "type": "string", "minLength": 16, "maxLength": 16 },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_deployment_stats",
+    "description": "Get aggregate deployment counts by status.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_running_deployments",
+    "description": "Get all currently running deployments, optionally filtered by entity.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "entity_id": { "type": "string", "format": "uuid" },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_latest_entity_deployment",
+    "description": "Get the most recent deployment for a specific entity.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_list_entity_deployments",
+    "description": "List all deployments for a specific entity, with optional status filter and cursor pagination.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "cursor": { "type": "string", "maxLength": 1024 },
+        "include_descendants": { "type": "boolean" },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "status": { "type": "string", "enum": ["pending", "in_progress", "success", "failed", "timeout", "all"] },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_trigger_deployment",
+    "description": "Kick off a single-entity policy deployment. Returns run_id immediately with status in_progress. Poll ea_get_deployment for terminal status. DESTRUCTIVE.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["entity_id"],
+      "properties": {
+        "entity_id": { "type": "string", "format": "uuid" },
+        "commit_sha": { "type": "string", "minLength": 7, "maxLength": 64 },
+        "environment": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "force": { "type": "boolean", "default": false },
+        "idempotency_key": { "type": "string", "minLength": 8, "maxLength": 128 },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_rollback_deployment",
+    "description": "Redeploy the bundle from a prior successful deployment. Returns new run_id immediately. DESTRUCTIVE.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["entity_id", "target_run_id"],
+      "properties": {
+        "entity_id": { "type": "string", "format": "uuid" },
+        "target_run_id": { "type": "string", "minLength": 16, "maxLength": 16, "pattern": "^[A-Za-z0-9_-]{16}$" },
+        "idempotency_key": { "type": "string", "minLength": 8, "maxLength": 128 },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_promote_bundle",
+    "description": "Promote the bundle currently running in source_env to target_env for one entity. Finds latest successful source deployment automatically.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["entity_id", "source_env", "target_env"],
+      "properties": {
+        "entity_id": { "type": "string", "format": "uuid" },
+        "source_env": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "target_env": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "recent_limit": { "type": "integer", "minimum": 1, "maximum": 200, "default": 100 },
+        "idempotency_key": { "type": "string", "minLength": 8, "maxLength": 128 },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_compare_envs",
+    "description": "Compare the latest deployments for one entity across its environments. Shows sync state, bundle versions, and drift.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["entity_id"],
+      "properties": {
+        "entity_id": { "type": "string", "format": "uuid" },
+        "recent_limit": { "type": "integer", "minimum": 1, "maximum": 200, "default": 100 },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_environment_drift",
+    "description": "Compare policy content between the specified environment and its promotion target. Returns added, removed, or modified modules.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["id", "env"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "env": { "type": "string", "maxLength": 100 },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_list_policy_logs",
+    "description": "Query policy deployment pipeline logs for a specific entity.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "run_id": { "type": "string", "minLength": 16, "maxLength": 16 },
+        "start_time": { "type": "string", "format": "date-time" },
+        "end_time": { "type": "string", "format": "date-time" },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 1000 },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_list_decisions",
+    "description": "List recent OPA decision logs for the active tenant. Filter by outcome, entity, path, or time range. Paginated.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cursor": { "type": "string", "maxLength": 1024 },
+        "decision_id": { "type": "string", "format": "uuid" },
+        "entity_id": { "type": "string", "format": "uuid" },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "outcome": { "type": "string", "enum": ["allow", "deny", "error", "partial"] },
+        "path": { "type": "string", "maxLength": 1024 },
+        "since": { "type": "string", "format": "date-time" },
+        "until": { "type": "string", "format": "date-time" },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_decision",
+    "description": "Fetch a single decision log by UUID with full OPA record (input, result, bundle, metrics). Use date hint for older logs.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["decision_id"],
+      "properties": {
+        "decision_id": { "type": "string", "format": "uuid" },
+        "date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$", "description": "YYYY-MM-DD hint for Athena partition pruning" },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_list_logs",
+    "description": "Query decision logs with filtering by time range, path, outcome, system ID, decision ID, or bundle revision. Paginated.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cursor": { "type": "string", "maxLength": 1024 },
+        "bundle_revision": { "type": "string", "maxLength": 256 },
+        "decision_id": { "type": "string", "maxLength": 256 },
+        "decision_outcome": { "type": "string", "enum": ["allow", "deny", "error", "partial"] },
+        "entity_id": { "type": "string", "format": "uuid" },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "path": { "type": "string" },
+        "random_sample": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "sort_by": { "type": "string", "enum": ["timestamp", "decision_outcome", "path", "system_id"] },
+        "sort_order": { "type": "string", "enum": ["asc", "desc"] },
+        "system_id": { "type": "string", "maxLength": 256 },
+        "timestamp_start": { "type": "string", "format": "date-time" },
+        "timestamp_end": { "type": "string", "format": "date-time" },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_log",
+    "description": "Retrieve a single decision log by its UUID ID. Provide date for efficient Athena partition pruning.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "date": { "type": "string", "format": "date" },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_list_audit_logs",
+    "description": "List audit log entries for the active tenant (API/UI actions). Distinct from decision logs. Paginated by page number.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": { "type": "string" },
+        "end_date": { "type": "string", "format": "date-time" },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 1000 },
+        "outcome": { "type": "string", "enum": ["allowed", "denied"] },
+        "page": { "type": "integer", "minimum": 1 },
+        "resource_type": { "type": "string" },
+        "start_date": { "type": "string", "format": "date-time" },
+        "user_id": { "type": "string", "format": "uuid" },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_fleet_status",
+    "description": "Query current OPA/PDP fleet status. Returns most recent status per instance with health summary. Paginated.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cursor": { "type": "string", "maxLength": 1024 },
+        "end": { "type": "string", "format": "date-time" },
+        "entity_id": { "type": "string", "format": "uuid" },
+        "health_status": { "type": "string", "enum": ["healthy", "degraded", "unhealthy", "unknown"] },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "pdp_instance_id": { "type": "string", "maxLength": 255 },
+        "start": { "type": "string", "format": "date-time" },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_instance_status_history",
+    "description": "Get status history for a specific OPA/PDP instance.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "description": "PDP instance identifier" },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_monitoring_metrics",
+    "description": "Query time-series monitoring metrics for fleet health charts.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["metric"],
+      "properties": {
+        "metric": { "type": "string", "enum": ["status_reports", "bundle_activation_age", "healthy_instances", "degraded_instances", "unhealthy_instances", "unknown_instances", "total_instances"] },
+        "start": { "type": "string", "format": "date-time" },
+        "end": { "type": "string", "format": "date-time" },
+        "entity_id": { "type": "string", "format": "uuid" },
+        "period": { "type": "integer", "minimum": 60, "maximum": 86400, "description": "Aggregation period in seconds (default 300)" },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_monitoring_errors",
+    "description": "Query recent PDP status errors (degraded/unhealthy entries) for troubleshooting.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "start": { "type": "string", "format": "date-time" },
+        "end": { "type": "string", "format": "date-time" },
+        "entity_id": { "type": "string", "format": "uuid" },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_list_api_keys",
+    "description": "List all API keys across all entities for the current tenant (metadata only).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_list_entity_api_keys",
+    "description": "List all API keys scoped to a specific entity (metadata only).",
+    "inputSchema": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_api_key",
+    "description": "Get details of a specific API key (does not return the full key value).",
+    "inputSchema": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_create_api_key",
+    "description": "Create a new API key scoped to a specific entity. Full key value returned ONCE — surface to user immediately. DESTRUCTIVE.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["entity_id", "name", "scopes"],
+      "properties": {
+        "entity_id": { "type": "string", "format": "uuid" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "scopes": { "type": "array", "items": { "type": "string", "enum": ["decisions:write", "decisions:read", "status:write", "status:read"] }, "minItems": 1, "maxItems": 10 },
+        "description": { "type": "string", "maxLength": 1000 },
+        "expires_at": { "type": "string", "format": "date-time" },
+        "idempotency_key": { "type": "string", "minLength": 8, "maxLength": 128 },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_revoke_api_key",
+    "description": "Revoke (immediately disable) an API key. DESTRUCTIVE.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_rotate_api_key",
+    "description": "Rotate an API key: issue a fresh secret tied to the same entity. DESTRUCTIVE.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_list_stale_keys",
+    "description": "Surface API keys that have not been used recently (or ever) for the current tenant.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_list_all_secrets",
+    "description": "List all secrets (metadata only, never values) across all entities in the tenant hierarchy.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_list_entity_secrets",
+    "description": "List all secrets (metadata only) for a specific entity.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["entityId", "entityType"],
+      "properties": {
+        "entityId": { "type": "string", "format": "uuid" },
+        "entityType": { "type": "string", "enum": ["org", "system"] },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_list_available_secrets",
+    "description": "List all secrets available to an entity, including inherited secrets from ancestors.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["entityId"],
+      "properties": {
+        "entityId": { "type": "string", "format": "uuid" },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_secret_metadata",
+    "description": "Get metadata about a secret (does NOT return the secret value).",
+    "inputSchema": {
+      "type": "object",
+      "required": ["entityId", "entityType", "secretName"],
+      "properties": {
+        "entityId": { "type": "string", "format": "uuid" },
+        "entityType": { "type": "string", "enum": ["org", "system"] },
+        "secretName": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_list_trust_policies",
+    "description": "List all trust policies for the tenant with optional filtering by CI provider or entity.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "ci_provider_id": { "type": "string", "format": "uuid" },
+        "entity_id": { "type": "string", "format": "uuid" },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_trust_policy",
+    "description": "Get a specific trust policy by ID.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_list_ci_providers",
+    "description": "List all CI providers configured for the tenant.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_ci_provider",
+    "description": "Get a specific CI provider by ID.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_credential_types",
+    "description": "Returns available credential type definitions for rendering dynamic secret forms.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_list_promotions",
+    "description": "List promotion events for an entity, ordered by most recent first.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_current_month_usage",
+    "description": "Returns the usage summary for the current billing month.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_monthly_usage",
+    "description": "Returns monthly usage summaries for the authenticated tenant, ordered by billing period.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_lifetime_usage",
+    "description": "Returns the lifetime usage total for the authenticated tenant.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_usage_cutoff_status",
+    "description": "Returns whether the tenant is currently cut off from processing decision logs due to exceeding free tier limits.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_tenant_billing_profile",
+    "description": "Returns the active billing profile for the authenticated tenant, including pricing tier details.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_get_payment_method",
+    "description": "Returns the active payment method for the authenticated tenant.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  {
+    "name": "ea_list_pricing_tiers",
+    "description": "Returns all active pricing tiers ordered by display_order. Global reference data shared across all tenants.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "response_format": { "type": "string", "enum": ["json", "markdown"], "default": "markdown" },
+        "tenant": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+]
+}

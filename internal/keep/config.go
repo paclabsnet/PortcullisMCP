@@ -16,10 +16,14 @@ package keep
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/mitchellh/mapstructure"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
 	identity "github.com/paclabsnet/PortcullisMCP/internal/shared/identity"
@@ -163,9 +167,9 @@ func (c *Config) Validate(sources cfgloader.SourceMap) (cfgloader.PostureReport,
 		}
 	}
 
-	for i, backend := range c.Responsibility.Backends {
-		if err := validateBackendIdentityConfig(backend); err != nil {
-			return cfgloader.PostureReport{}, fmt.Errorf("mcp_backends[%d] (%q): %w", i, backend.Name, err)
+	for i := range c.Responsibility.Backends {
+		if err := validateBackendConfig(&c.Responsibility.Backends[i]); err != nil {
+			return cfgloader.PostureReport{}, fmt.Errorf("mcp_backends[%d] (%q): %w", i, c.Responsibility.Backends[i].Name, err)
 		}
 	}
 
@@ -370,6 +374,14 @@ type BackendConfig struct {
 	// forwarded to this backend, and optionally exchanges the raw token for a
 	// backend-specific value via an exchange service.
 	UserIdentity BackendUserIdentity `yaml:"user_identity"`
+
+	ToolList    ToolListConfig `yaml:"tool_list"`
+	StaticTools []*mcp.Tool    `yaml:"-"` // Loaded directly if Source == "file"
+}
+
+type ToolListConfig struct {
+	Source string `yaml:"source"` // "file" | "remote"
+	File   string `yaml:"file"`
 }
 
 // BackendUserIdentity groups all per-backend identity injection and exchange settings.
@@ -490,9 +502,9 @@ func (l *LimitsConfig) ApplyDefaults() {
 	}
 }
 
-// validateBackendIdentityConfig checks that user_identity placement and exchange
-// settings are well-formed and safe when set on a BackendConfig.
-func validateBackendIdentityConfig(cfg BackendConfig) error {
+// validateBackendConfig checks that user_identity placement, exchange, and
+// tool_list settings are well-formed and safe when set on a BackendConfig.
+func validateBackendConfig(cfg *BackendConfig) error {
 	h := cfg.UserIdentity.Placement.Header
 	p := cfg.UserIdentity.Placement.JSONPath
 
@@ -521,6 +533,34 @@ func validateBackendIdentityConfig(cfg BackendConfig) error {
 			return fmt.Errorf("user_identity.exchange.url: %w", err)
 		}
 	}
+
+	if cfg.ToolList.Source == "file" {
+		if cfg.ToolList.File == "" {
+			return fmt.Errorf("tool_list.file is required when source is 'file'")
+		}
+
+		attemptedPath, err := filepath.Abs(cfg.ToolList.File)
+		if err != nil {
+			return fmt.Errorf("failed to resolve absolute path for static tool list file: configured=%q: %w", cfg.ToolList.File, err)
+		}
+		cwd, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("failed to determine current working directory for path resolution: %w", err)
+		}
+
+		data, err := os.ReadFile(attemptedPath)
+		if err != nil {
+			return fmt.Errorf("failed to read static tool list file: configured=%q attempted=%q base_dir=%q (cwd): %w", cfg.ToolList.File, attemptedPath, cwd, err)
+		}
+		var result mcp.ListToolsResult
+		if err := json.Unmarshal(data, &result); err != nil {
+			return fmt.Errorf("failed to parse static tool list file: configured=%q attempted=%q: %w", cfg.ToolList.File, attemptedPath, err)
+		}
+		cfg.StaticTools = result.Tools
+	} else if cfg.ToolList.Source != "" && cfg.ToolList.Source != "remote" {
+		return fmt.Errorf("tool_list.source %q is invalid; must be 'file' or 'remote'", cfg.ToolList.Source)
+	}
+
 	return nil
 }
 

@@ -247,6 +247,74 @@
                                         ]
                                 }
                         }
+                },
+                "deepwiki" : {
+                        "read_wiki_structure" : {
+                                "allow" : {
+                                        "groups" : ["*"]
+                                }
+                        }, 
+                        "read_wiki_contents" : {
+                                "allow" : {
+                                        "groups" : ["*"]
+                                }
+                        },
+                        "ask_question" : {
+                                "allow" : {
+                                        "groups" : ["*"]
+                                }
+                        }
+                },
+                "enforceauth" : {
+                        "ea_me" : {
+                                "allow" : {
+                                        "groups" : ["*"]
+                                }
+                        },
+                        "ea_get_current_user" : {
+                                "allow" : {
+                                        "groups" : ["*"]
+                                }
+                        },
+                        "ea_list_entities" : {
+                                "allow" : {
+                                        "groups" : ["*"]
+                                }
+                        }, 
+                        "ea_get_entity_config" : {
+                                "allow" : {
+                                        "groups" : ["*"]
+                                },
+                                "deny" : {
+                                        "arg_restrictions" : [
+                                            { "type":"prefix", "key_path": "resource.arguments.type", "data": "environment_config" }
+                                        ]
+                                }
+                        }
+                },
+                "gitmcp" : {
+                        "fetch_PortcullisMCP_documentation" : {
+                                "allow" : {
+                                        "groups" : ["*"]
+                                }
+                        },
+                        "search_PortcullisMCP_docs" : {
+                                "allow" : {
+                                        "groups" : ["*"]
+                                }
+                        },
+                        "search_PortcullisMCP_code" : {
+                                "allow" : {
+                                        "groups" : ["*"]
+                                }
+                        },
+                        "fetch_generic_url_content" : {
+                                "escalate" : {
+                                        "arg_restrictions" : [
+                                                { "type":"any","key_path":"resource.arguments.url"}
+                                        ]
+                                }
+                        }
                 }
 
 	},

@@ -3,44 +3,157 @@
 Some of these tasks were deferred from Phase 2 because they are complicated and involve access to potentially expensive
 cloud resources
 
-### Task: allow for Keep to act as a direct proxy for some MCPs, instead of having to go through Gate
+### Task: Static Tool List - modify Keep configuration to allow admins to load the tool list for a remote MCP into a config file, rather than querying the MCP at startup
 
-For a lot of third-party MCPs, the tool/list is gated behind OAuth. So Keep can't get the list directly, and will have to use
-a static list.  This is ok, because we need policy rules for accessing the tools anyways.
+#### Problem:
+For a lot of third-party MCPs, the tool/list is gated behind OAuth. So Keep can't get the tool/list at startup.
 
-But a static list is not ideal, and other MCP proxy gateway vendors have designed their systems to act as direct proxies
-for multiple independent third-party MCPs.  This was not the original vision for Portcullis, but it absolutely can work if
-we want it to - the agents are configured with the address of Keep, with an appropriate URL for the MCP, and Keep listens on
-that endpoint for access to a particular remote MCP. Using Figma as an example:
 
-* Keep admins add Figma as a proxied MCP, with a local endpoint and a remote URL for Figma
+#### Proposed Solution
+
+For single-tenant mode, we can load the tool list from some sort of config file at Keep, and pass that list back to Portcullis-Gate
+
+#### Implementation
+
+Update the `mcp_backend` structure to include a new element:
+
+```
+    tool_list:
+      source:  file | remote
+      file: <path> 
+```     
+
+If the tool list acquisition is static, we would expect details about the file that contains the JSON that represents the tool list.  We would expect that this JSON would be the equivalent of fetching the tool list from an MCP and saving that JSON as a file. (although we don't necessarily need fields that don't provide useful information about the actual tool list)
+
+#### Backwards compatibility
+
+If the tool_list section is not included, the default is remote.
+
+
+#### Security
+
+- We'll assume that if the mcp_backend is listed, it is available for use. adding an extra tier of authorization for the tool list seems unnecessary.
+
+
+#### Priority
+- priority: high
+
+
+
+### Task: Allow Gate to act as a Proxy for third-party MCPs that shouldn't be unified within the Portcullis MCP
+
+#### Problem
+
+But many MCPs require OAuth before they will return the tool list.  Keep cannot get the OAuth credentials necessary to fetch this tool list at startup, so we
+can't dynamically offer the tool as part of the portcullis "family"
+
+#### Proposed Solution
+
+For single-tenant: the static tool list described above, so the tool becomes part of the portcullis MCP "umbrella".
+
+For multi-tenant: Set up the Portcullis-Gate with unique endpoints for each remote MCP.  Set up the Agents to use the Portcullis-Gate endpoint as a proxy for the remote MCP. 
+
+
+#### Implementation
+
+For each remote MCP that Portcullis will proxy:
+- the agents are configured with the address of Gate, with an appropriate URL endpoint that is unique for the remote MCP
+- Gate passes the request onto Keep. For tool calls, it will use the current endpoint.  For tool list calls, it will use a new endpoint.  `/tool-list`
+
+Using Figma as an example:
+
+* Keep admins add Figma as a `bridged` MCP, specifying a local endpoint `/figma` and the actual remote URL for Figma
 * Keep policy writers discover and create policy rules for Figma
-* Agents are configured to use the Keep URL for Figma
-* Agents start up, query the Keep URL for Figma.  
-  * Agent sends that request to the Keep proxy.
-  * Keep passes that request along to the true Figma MCP
-  * Figma responds with an OAuth request
-  * Keep passes that OAuth request back to the user
-  * The user authenticates, and repeats the request
-  * Keep passes that request along to the true Figma MCP
-  * Figma answers with a tool list
-  * Keep sends the tool list back to the Agent
-  * Agent now has the tool list for doing stuff with Figma
+* Agents are configured to use an MCP for Figma, that uses the Gate URL, but with a Figma-specific endpoint `/figma` (instead of just using `/mcp`)
+* Agents start up. It will want to query the Figma MCP for the tool list 
+  * Agent sends that tool list request to the Gate-managed endpoint `/figma`
+  * If Gate is configured to demand authentication, it may respond with a login requirement.
+  * Once the tool list request is acceptable, Gate will pass it along to the `/tool-list` endpoint at Keep
+  * Keep passes that tool list request along to the true Figma MCP
+  * Figma responds with headers requiring login
+  * Keep passes the response (with the headers) back to Gate, which passes it back to the Agent
+  * The Agent gets the user to authenticate, and repeats the tool list request
+  * Gate receives the tool list request, enriches and passes to Keep as before. But now there are new headers that satisfy Figma's OAuth requirement
+  * Keep evaluates and passes that tool list request along to the true Figma MCP
+  * Figma validates the OAuth headers, and answers with the appropriate tool list
+  * Keep sends the tool list back to Gate
+  * Gate sends the tool list back to the Agent
+  * Agent now has the tool list for doing stuff with Figma. All of the tool calls will go through Gate and Keep, and Keep will be able to perform authorization on the calls.
+  * Agent calls for a specific tool at Figma. They will use the MCP proxy at Gate at the `/figma` endpoint
+  * Gate will detect that this is a tool call, not a tool list call, enrich the request and pass it along to the "classic" tool call endpoint at Keep
+    * At this point, this call to Figma is indistiguishable from any other "normal" MCP call
 
-#### Key implementation questions
 
-1. Keep needs to pass headers on to Figma?  or is the OAuth stuff going to be in the JSON body?
-2. Keep needs to have a policy rule about fetching tool lists from remote MCPs
-3. Keep will need policy rules for the individual MCP tools offered by the remote MCP (since they fail by default)
+#### Key implementation questions and thoughts
+
+1. When the agents use this method, Gate and Keep needs to pass headers on to Figma, and Keep and Gate need to accept the response headers from Figma and faithfully send them back to the Agent
+2. Keep will require the admins to create policy rules for the individual MCP tools offered by the remote MCP (since they fail by default)
+3. Each `mcp_backend` entry in the Keep config needs to support a new sub-structure:
+```
+   bridge:
+     enabled: true | false
+     endpoint: <string>     
+```
+
+  The endpoint string is expected to be short and closely aligned with the 
+  name of the destination MCP
+
+  This represents endpoints that are implemented in a bridged way, where
+  Portcullis does not unify them into the portcullis MCP, but still provides
+  a mechanism for authorization and decision logging.  The Users (or IT admins) will will need
+  to add the MCP to the Agents, but these `bridged` MCPs will be configured to use the URL for the MCP-specific endpoint at Gate instead of the actual MCP endpoint.  Note that this `bridged` capability only applies in multi-tenant Portcullis, since single-tenant uses stdio and doesn't listen on a port for MCP requests.
+
+
+
+4. When Gate starts up, it already fetches the list of backends.  In single-tenant mode it will be modified to ignore the ones that are `bridged`.  In multi-tenant, it will add an endpoint listener for each enabled `bridged` endpoint. There will be two types of requests that come in:
+   * Tool calls
+   * Tool lists
+5. When requests come in to a `bridged` endpoint, Gate will:
+   * wrap tool call requests in an enriched request, as done today and send
+     them to Keep as done today.
+   * wrap tool list requests in a different enriched request, and send it to
+     a different endpoint at Keep
+   * Keep will send the request on to the *actual* endpoint
+   * Keep will receive the response (including the headers) from the endpoint   
+     and pass it back to Gate, which will pass it back to the agent
+
+    
 
 #### Interesting challenges
 
-1. Keep won't know about the identity of the user in this scenario, so the policy rules will need to be much simpler
-2. Primarily, this will be valuable as a decision log, and disabling some specific tools
-3. If the organization wants fine-grained authorization, they need the request to be managed by Gate, which requires either a
-   static tool list, or a tool list that can be fetched with a long-lived token
+* Backwards compatibility - the new stuff is optional, and if it isn't there,
+  we assume there's no bridge
+* If the destination MCP requires OAuth, we'll end up sending two different
+  OAuth credentials with each request, one for Portcullis, and one for the 
+  destination MCP.
+* The agents will include MCP-specific auth credentials in the headers of the MCP requests (both tool calls and tool list calls). We need to make sure that we pass all of the headers from the Agent to the destination MCP, and we also need to make sure to pass all of the headers from the destination MCP back to the Agent.
+  * IMPORTANT: we also need to make sure that the existing tool call flow properly handles all of the headers in both directions
 
+
+#### Fail Closed
+
+* If there is no tool call policy for a given MCP tool, we don't forward the request
+
+
+#### Open Questions
+
+
+#### Goals
+
+1. Set up a policy such that a tool works, but certain specific arguments cause a deny (so, for example, you can delete something temporary, but you can't delete something important).
+
+
+#### Priority
 - priority: high
+
+
+
+
+
+
+
+
+
 
 
 ### Task: Support 'escalate' in multi-tenant environments

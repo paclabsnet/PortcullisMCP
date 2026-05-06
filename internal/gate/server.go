@@ -463,7 +463,14 @@ func (g *Gate) handleLoginTool(ctx context.Context, force bool) string {
 				fmt.Sscanf(portStr, "%d", &mgmtPort)
 			}
 		}
-		return fmt.Sprintf("Please open the following URL in your browser to log in:\n%s\n\nThe login URL is also available at: http://localhost:%d/auth/login", loginURL, mgmtPort)
+		shortURL := fmt.Sprintf("http://localhost:%d/auth/login", mgmtPort)
+		return fmt.Sprintf(
+			"Please log in to Portcullis by clicking this link: [Log in to Portcullis](%s)\n\n"+
+				"DISPLAY INSTRUCTIONS: Always render the login link above as a clickable hyperlink. "+
+				"Do not show the full direct URL unless the user specifically asks for it. "+
+				"If asked, the direct login URL is: %s",
+			shortURL, loginURL,
+		)
 	}
 	return "Login is not necessary."
 }
@@ -731,6 +738,9 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 		}
 		return g.policyErrToResult(ctx, err, toolName, traceID)
 	}
+	if result != nil && result.IsError {
+		result = g.enrichBackendAuthChallenge(result, serverName, toolName)
+	}
 	return result, err
 }
 
@@ -934,6 +944,48 @@ func (g *Gate) claimAllUnclaimedTokens(ctx context.Context) {
 		slog.Info("claimed escalation token via poll", "jti", entry.JTI, "token_id", tok.TokenID)
 
 		g.pending.DeleteByJTI(entry.JTI)
+	}
+}
+
+// enrichBackendAuthChallenge checks whether result is an error CallToolResult
+// whose content contains a WWW-Authenticate header from a backend HTTP response.
+// If so, it replaces the raw header dump with a structured, agent-friendly
+// message that names the backend, explains the auth challenge, and tells the
+// agent what to do. The check is case-insensitive so it works regardless of
+// how the header name was canonicalized by the HTTP stack.
+func (g *Gate) enrichBackendAuthChallenge(result *mcp.CallToolResult, serverName, toolName string) *mcp.CallToolResult {
+	if len(result.Content) == 0 {
+		return result
+	}
+	text, ok := result.Content[0].(*mcp.TextContent)
+	if !ok || text.Text == "" {
+		return result
+	}
+	var wwwAuth string
+	for _, line := range strings.Split(text.Text, "\n") {
+		idx := strings.IndexByte(line, ':')
+		if idx < 0 {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(line[:idx]), "www-authenticate") {
+			wwwAuth = strings.TrimSpace(line[idx+1:])
+			break
+		}
+	}
+	if wwwAuth == "" {
+		return result
+	}
+	msg := fmt.Sprintf(
+		"Authentication required to call tool %q on backend %q.\n\n"+
+			"The backend issued an authentication challenge:\n"+
+			"  WWW-Authenticate: %s\n\n"+
+			"Obtain a valid credential for the %q backend and ensure it is "+
+			"configured in your Gate identity settings, or contact your administrator.",
+		toolName, serverName, wwwAuth, serverName,
+	)
+	return &mcp.CallToolResult{
+		IsError: true,
+		Content: []mcp.Content{&mcp.TextContent{Text: msg}},
 	}
 }
 

@@ -129,6 +129,12 @@ func (r *Router) CallTool(ctx context.Context, serverName, toolName string, args
 		}
 	}
 
+	// Inject a capture struct so the RoundTripper can record the HTTP status and
+	// response headers if the backend returns a non-2xx response. This lets us
+	// return a structured CallToolResult (isError: true) with the headers intact
+	// rather than a generic error that discards useful auth information.
+	ctx, respCap := withBackendRespCapture(ctx)
+
 	session, err := r.sessionFor(ctx, serverName)
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
@@ -139,6 +145,27 @@ func (r *Router) CallTool(ctx context.Context, serverName, toolName string, args
 		Arguments: args,
 	})
 	if err != nil {
+		// If the backend sent a non-2xx HTTP response, surface the status and
+		// headers to the agent as a structured error result so it can act on
+		// them (e.g. a 401 with WWW-Authenticate tells it how to re-authenticate).
+		respCap.mu.Lock()
+		statusCode := respCap.statusCode
+		headers := respCap.headers
+		respCap.mu.Unlock()
+		if statusCode != 0 {
+			var sb strings.Builder
+			fmt.Fprintf(&sb, "Backend returned HTTP %d %s\n", statusCode, http.StatusText(statusCode))
+			for k, vs := range headers {
+				for _, v := range vs {
+					fmt.Fprintf(&sb, "%s: %s\n", k, v)
+				}
+			}
+			span.SetStatus(codes.Error, fmt.Sprintf("backend HTTP %d", statusCode))
+			return &mcp.CallToolResult{
+				IsError: true,
+				Content: []mcp.Content{&mcp.TextContent{Text: strings.TrimRight(sb.String(), "\n")}},
+			}, nil
+		}
 		span.SetStatus(codes.Error, err.Error())
 	}
 	return result, err
@@ -200,6 +227,23 @@ func (r *Router) resolveToolName(serverName, toolName string) string {
 
 // ListTools returns all tools exposed by the named backend server.
 func (r *Router) ListTools(ctx context.Context, serverName string) ([]*mcp.Tool, error) {
+	r.mu.Lock()
+	conn, ok := r.backends[serverName]
+	r.mu.Unlock()
+
+	if !ok {
+		return nil, fmt.Errorf("unknown backend %q", serverName)
+	}
+
+	conn.cfgMu.RLock()
+	source := conn.cfg.ToolList.Source
+	staticTools := conn.cfg.StaticTools
+	conn.cfgMu.RUnlock()
+
+	if source == "file" {
+		return staticTools, nil
+	}
+
 	session, err := r.sessionFor(ctx, serverName)
 	if err != nil {
 		return nil, err
@@ -520,58 +564,76 @@ func (t *headerInjectingRoundTripper) RoundTrip(req *http.Request) (*http.Respon
 	identityHeader := t.conn.cfg.UserIdentity.Placement.Header
 	t.conn.cfgMu.RUnlock()
 
-	// Skip cloning the request when there is nothing to inject.
+	var resp *http.Response
+	var err error
+
 	if len(clientHeaders) == 0 && (identityHeader == "" || identity == nil) {
-		return t.inner.RoundTrip(req)
-	}
-
-	if len(fwdHeaders) == 0 {
-		fwdHeaders = []string{"*"}
-	}
-
-	outReq := req.Clone(req.Context())
-	for name, vals := range clientHeaders {
-		// Step 1: skip forbidden headers (should already be excluded by Gate,
-		// but enforce again as defence-in-depth).
-		if shared.IsForbiddenHeader(name) {
-			continue
+		// Nothing to inject; skip cloning.
+		resp, err = t.inner.RoundTrip(req)
+	} else {
+		if len(fwdHeaders) == 0 {
+			fwdHeaders = []string{"*"}
 		}
-		// Step 2: skip headers matched by the drop list.
-		dropped := false
-		for _, pattern := range dropHeaders {
-			if shared.MatchesHeaderPattern(pattern, name) {
-				dropped = true
-				break
+
+		outReq := req.Clone(req.Context())
+		for name, vals := range clientHeaders {
+			// Step 1: skip forbidden headers (should already be excluded by Gate,
+			// but enforce again as defence-in-depth).
+			if shared.IsForbiddenHeader(name) {
+				continue
+			}
+			// Step 2: skip headers matched by the drop list.
+			dropped := false
+			for _, pattern := range dropHeaders {
+				if shared.MatchesHeaderPattern(pattern, name) {
+					dropped = true
+					break
+				}
+			}
+			if dropped {
+				continue
+			}
+			// Step 3: forward headers matched by the forward list.
+			for _, pattern := range fwdHeaders {
+				if shared.MatchesHeaderPattern(pattern, name) {
+					outReq.Header[name] = vals
+					break
+				}
 			}
 		}
-		if dropped {
-			continue
-		}
-		// Step 3: forward headers matched by the forward list.
-		for _, pattern := range fwdHeaders {
-			if shared.MatchesHeaderPattern(pattern, name) {
-				outReq.Header[name] = vals
-				break
+
+		// Inject identity header last so it overrides any forwarded client header
+		// of the same name. JSON object/array identities cannot be header values —
+		// skip with a warning so the request still proceeds (non-fatal).
+		if identityHeader != "" {
+			if identity == nil {
+				slog.Warn("keep: identity injection configured but no identity token in context — skipping header injection", "backend", t.conn.cfg.Name, "header", identityHeader)
+			} else if identity.Structured != nil {
+				slog.Warn("keep: identity exchange returned a JSON object/array; cannot inject as HTTP header, skipping header injection",
+					"backend", t.conn.cfg.Name, "header", identityHeader)
+			} else {
+				outReq.Header.Set(identityHeader, identity.Str)
+				slog.Info("keep: injected identity into request header", "backend", t.conn.cfg.Name, "header", identityHeader)
 			}
 		}
+
+		resp, err = t.inner.RoundTrip(outReq)
 	}
 
-	// Inject identity header last so it overrides any forwarded client header
-	// of the same name. JSON object/array identities cannot be header values —
-	// skip with a warning so the request still proceeds (non-fatal).
-	if identityHeader != "" {
-		if identity == nil {
-			slog.Warn("keep: identity injection configured but no identity token in context — skipping header injection", "backend", t.conn.cfg.Name, "header", identityHeader)
-		} else if identity.Structured != nil {
-			slog.Warn("keep: identity exchange returned a JSON object/array; cannot inject as HTTP header, skipping header injection",
-				"backend", t.conn.cfg.Name, "header", identityHeader)
-		} else {
-			outReq.Header.Set(identityHeader, identity.Str)
-			slog.Info("keep: injected identity into request header", "backend", t.conn.cfg.Name, "header", identityHeader)
+	// Capture the HTTP status and response headers from the first non-2xx
+	// response so that CallTool can surface them to the agent.
+	if resp != nil && resp.StatusCode >= 400 {
+		if cap := backendRespCaptureFromContext(req.Context()); cap != nil {
+			cap.mu.Lock()
+			if cap.statusCode == 0 {
+				cap.statusCode = resp.StatusCode
+				cap.headers = resp.Header.Clone()
+			}
+			cap.mu.Unlock()
 		}
 	}
 
-	return t.inner.RoundTrip(outReq)
+	return resp, err
 }
 
 // noRedirectHTTPClient returns an http.Client that refuses to follow any
@@ -609,6 +671,29 @@ var privateRanges = func() []*net.IPNet {
 	}
 	return ranges
 }()
+
+// backendRespCapture holds the HTTP status code and response headers from the
+// first non-2xx response received during a single CallTool dispatch. A pointer
+// to this struct is stored in the context before the call so that
+// headerInjectingRoundTripper can fill it without needing a separate channel or
+// return value. Only the first non-2xx response is captured.
+type backendRespCapture struct {
+	mu         sync.Mutex
+	statusCode int
+	headers    http.Header
+}
+
+type backendRespKey struct{}
+
+func withBackendRespCapture(ctx context.Context) (context.Context, *backendRespCapture) {
+	cap := &backendRespCapture{}
+	return context.WithValue(ctx, backendRespKey{}, cap), cap
+}
+
+func backendRespCaptureFromContext(ctx context.Context) *backendRespCapture {
+	v, _ := ctx.Value(backendRespKey{}).(*backendRespCapture)
+	return v
+}
 
 // injectAtPath sets value at the dot-separated path within m, creating
 // intermediate maps as needed. If a non-map value already exists at an
