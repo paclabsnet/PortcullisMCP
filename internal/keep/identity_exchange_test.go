@@ -31,7 +31,7 @@ import (
 // given cache TTL (0 = no caching).
 func newTestExchangeClient(t *testing.T, srv *httptest.Server, cacheTTL time.Duration) *IdentityExchangeClient {
 	t.Helper()
-	httpClient := noRedirectHTTPClient()
+	httpClient := newHTTPClient(false)
 	httpClient.Timeout = 5 * time.Second
 	var cache IdentityExchangeCacher
 	if cacheTTL > 0 {
@@ -391,7 +391,7 @@ func TestIdentityExchangeClient_CustomHeaders(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	httpClient := noRedirectHTTPClient()
+	httpClient := newHTTPClient(false)
 	httpClient.Timeout = 5 * time.Second
 	client := &IdentityExchangeClient{
 		url:         srv.URL,

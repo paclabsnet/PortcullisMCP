@@ -878,40 +878,52 @@ func TestValidateBackendConfig_StaticToolList(t *testing.T) {
 		},
 	}
 
+	// Structural validation must pass without reading the file.
 	if err := validateBackendConfig(&cfg); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	if cfg.StaticTools != nil {
+		t.Error("validateBackendConfig must not populate StaticTools (I/O belongs in loadStaticToolList)")
+	}
 
+	// File loading is the responsibility of the initialization phase.
+	if err := loadStaticToolList(&cfg); err != nil {
+		t.Fatalf("loadStaticToolList: %v", err)
+	}
 	if len(cfg.StaticTools) != 1 || cfg.StaticTools[0].Name != "static_tool" {
 		t.Errorf("failed to load static tools correctly: %+v", cfg.StaticTools)
 	}
 }
 
 func TestValidateBackendConfig_StaticToolListErrors(t *testing.T) {
-	cfgNoFile := BackendConfig{
-		ToolList: ToolListConfig{Source: "file"},
-	}
-	if err := validateBackendConfig(&cfgNoFile); err == nil {
-		t.Error("expected error when source is file but no file is provided")
-	}
+	// These are structural errors caught by validateBackendConfig (no I/O).
+	t.Run("missing file name", func(t *testing.T) {
+		cfg := BackendConfig{ToolList: ToolListConfig{Source: "file"}}
+		if err := validateBackendConfig(&cfg); err == nil {
+			t.Error("expected error when source is file but no file path is configured")
+		}
+	})
 
-	cfgInvalidSource := BackendConfig{
-		ToolList: ToolListConfig{Source: "invalid"},
-	}
-	if err := validateBackendConfig(&cfgInvalidSource); err == nil {
-		t.Error("expected error for invalid source")
-	}
+	t.Run("invalid source", func(t *testing.T) {
+		cfg := BackendConfig{ToolList: ToolListConfig{Source: "invalid"}}
+		if err := validateBackendConfig(&cfg); err == nil {
+			t.Error("expected error for invalid source")
+		}
+	})
 
-	cfgMissingFile := BackendConfig{
-		ToolList: ToolListConfig{
-			Source: "file",
-			File:   "missing/relative/path.json",
-		},
-	}
-	err := validateBackendConfig(&cfgMissingFile)
-	if err == nil {
-		t.Error("expected error for missing file")
-	} else {
+	// These are I/O errors caught by loadStaticToolList (initialization phase).
+	t.Run("file not on disk", func(t *testing.T) {
+		cfg := BackendConfig{
+			ToolList: ToolListConfig{Source: "file", File: "missing/relative/path.json"},
+		}
+		// validateBackendConfig must not fail — path existence is an I/O concern.
+		if err := validateBackendConfig(&cfg); err != nil {
+			t.Fatalf("validateBackendConfig: unexpected error: %v", err)
+		}
+		err := loadStaticToolList(&cfg)
+		if err == nil {
+			t.Fatal("expected error for file not on disk")
+		}
 		errMsg := err.Error()
 		if !strings.Contains(errMsg, "attempted=") || !strings.Contains(errMsg, "base_dir=") {
 			t.Errorf("error message missing diagnostic info, got: %v", errMsg)
@@ -922,30 +934,29 @@ func TestValidateBackendConfig_StaticToolListErrors(t *testing.T) {
 			if !filepath.IsAbs(pathPart) {
 				t.Errorf("expected attempted path to be absolute, got: %q", pathPart)
 			}
-		} else {
-			t.Errorf("could not extract attempted path from error: %v", errMsg)
 		}
-	}
+	})
 
-	tmpDir := t.TempDir()
-	malformedPath := filepath.Join(tmpDir, "malformed.json")
-	_ = os.WriteFile(malformedPath, []byte("{ not valid json "), 0644)
+	t.Run("malformed JSON", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		malformedPath := filepath.Join(tmpDir, "malformed.json")
+		_ = os.WriteFile(malformedPath, []byte("{ not valid json "), 0644)
 
-	cfgMalformedFile := BackendConfig{
-		ToolList: ToolListConfig{
-			Source: "file",
-			File:   malformedPath,
-		},
-	}
-	err = validateBackendConfig(&cfgMalformedFile)
-	if err == nil {
-		t.Error("expected error for malformed file")
-	} else {
+		cfg := BackendConfig{
+			ToolList: ToolListConfig{Source: "file", File: malformedPath},
+		}
+		if err := validateBackendConfig(&cfg); err != nil {
+			t.Fatalf("validateBackendConfig: unexpected error: %v", err)
+		}
+		err := loadStaticToolList(&cfg)
+		if err == nil {
+			t.Fatal("expected error for malformed JSON")
+		}
 		errMsg := err.Error()
 		if !strings.Contains(errMsg, "configured=") || !strings.Contains(errMsg, "attempted=") {
 			t.Errorf("error message missing diagnostic info, got: %v", errMsg)
 		}
-	}
+	})
 }
 
 func TestValidateBackendConfig_EnforceAuthToolList(t *testing.T) {
@@ -960,17 +971,18 @@ func TestValidateBackendConfig_EnforceAuthToolList(t *testing.T) {
 	}
 
 	if err := validateBackendConfig(&cfg); err != nil {
-		t.Fatalf("enforceauth_mcp.json failed to parse: %v", err)
+		t.Fatalf("validateBackendConfig: %v", err)
+	}
+	if err := loadStaticToolList(&cfg); err != nil {
+		t.Fatalf("loadStaticToolList: %v", err)
 	}
 
 	if len(cfg.StaticTools) == 0 {
 		t.Fatal("expected tools to be loaded, got none")
 	}
-
 	if cfg.StaticTools[0].Name != "ea_me" {
 		t.Errorf("expected first tool to be ea_me, got %q", cfg.StaticTools[0].Name)
 	}
-
 	t.Logf("loaded %d tools from enforceauth_mcp.json", len(cfg.StaticTools))
 }
 
@@ -1181,7 +1193,11 @@ func TestRouter_TryStartOAuthFlow(t *testing.T) {
 		},
 	}
 
-	result, err := r.tryStartOAuthFlow(ctx, "my-backend", "user-1")
+	eps := oauthEndpoints{
+		AuthorizationEndpoint: "https://auth.example/authorize",
+		TokenEndpoint:         "https://auth.example/token",
+	}
+	result, err := r.tryStartOAuthFlow(ctx, "my-backend", "user-1", eps)
 	if err != nil {
 		t.Fatalf("tryStartOAuthFlow: %v", err)
 	}
@@ -1241,7 +1257,10 @@ func TestRouter_TryStartOAuthFlow_HonorsFlowTimeout(t *testing.T) {
 	}
 
 	// Verify that a zero FlowTimeoutSecs still produces a valid (non-immediately-expired) pending entry.
-	result, err := r.tryStartOAuthFlow(ctx, "be", "u1")
+	result, err := r.tryStartOAuthFlow(ctx, "be", "u1", oauthEndpoints{
+		AuthorizationEndpoint: "https://auth.example/authorize",
+		TokenEndpoint:         "https://auth.example/token",
+	})
 	if err != nil || result == nil {
 		t.Fatalf("tryStartOAuthFlow: %v", err)
 	}
@@ -1287,7 +1306,10 @@ func TestRouter_TryStartOAuthFlow_ExpiredFlowTimeout(t *testing.T) {
 		},
 	}
 
-	result, err := r.tryStartOAuthFlow(ctx, "be", "u1")
+	result, err := r.tryStartOAuthFlow(ctx, "be", "u1", oauthEndpoints{
+		AuthorizationEndpoint: "https://auth.example/authorize",
+		TokenEndpoint:         "https://auth.example/token",
+	})
 	if err != nil || result == nil {
 		t.Fatalf("tryStartOAuthFlow: %v", err)
 	}
@@ -1507,7 +1529,7 @@ func TestNoRedirectHTTPClient_RefusesRedirect(t *testing.T) {
 	}))
 	defer redirectSource.Close()
 
-	client := noRedirectHTTPClient()
+	client := newHTTPClient(false)
 	resp, err := client.Get(redirectSource.URL)
 	if resp != nil {
 		resp.Body.Close()

@@ -123,17 +123,20 @@ func (r *Router) CallTool(ctx context.Context, serverName, toolName string, args
 	)
 
 	backendToolName := r.resolveToolName(serverName, toolName)
+	identityType := r.backendType(serverName)
 
-	// Apply identity exchange if configured for this backend (type "" or "exchange").
-	// This replaces the raw token in the context with the backend-specific exchanged
-	// value, or clears it on failure so that neither header nor path injection occurs.
-	ctx = r.applyIdentityExchange(ctx, serverName)
+	// Apply identity exchange only for exchange-style backends (type "" or "exchange").
+	// For "none", "api_key", and "oauth" the raw token must never be forwarded or
+	// wrapped as an injected identity; skip the exchanger entirely for those types.
+	if identityType == "" || identityType == "exchange" {
+		ctx = r.applyIdentityExchange(ctx, serverName)
+	}
 
 	// For OAuth backends, pre-fetch a valid token from the CredentialsStore and
 	// stash it in the context so the RoundTripper can inject it as a Bearer header.
 	// If the token is within the configured refresh window, proactively refresh it
 	// now so that the backend never sees a token that is about to expire mid-request.
-	if r.backendType(serverName) == "oauth" {
+	if identityType == "oauth" {
 		userID := userIDFromContext(ctx)
 		if userID != "" {
 			if cs := r.getCredStore(); cs != nil {
@@ -146,26 +149,29 @@ func (r *Router) CallTool(ctx context.Context, serverName, toolName string, args
 		}
 	}
 
-	// Apply identity path injection before dispatch. A shallow copy of args is
-	// created so the original map (referenced by the async decision log) is
-	// never mutated. JSON object/array identities are injected as structured
-	// values; plain string identities are injected as strings.
-	if identityPath := r.identityPathFor(serverName); identityPath != "" {
-		if identity := exchangedIdentityFromContext(ctx); identity != nil {
-			argsCopy := make(map[string]any, len(args))
-			for k, v := range args {
-				argsCopy[k] = v
-			}
-			if identity.Structured != nil {
-				injectAtPath(argsCopy, identityPath, identity.Structured)
-				slog.Info("keep: injected identity into tool arguments", "backend", serverName, "tool", toolName, "json_path", identityPath, "type", "structured")
+	// Apply identity path injection before dispatch for exchange-style backends only.
+	// Type "none" suppresses all injection; "api_key" and "oauth" use their own
+	// injection paths and must not additionally inject via json_path.
+	// A shallow copy of args is created so the original map (referenced by the async
+	// decision log) is never mutated.
+	if identityType == "" || identityType == "exchange" {
+		if identityPath := r.identityPathFor(serverName); identityPath != "" {
+			if identity := exchangedIdentityFromContext(ctx); identity != nil {
+				argsCopy := make(map[string]any, len(args))
+				for k, v := range args {
+					argsCopy[k] = v
+				}
+				if identity.Structured != nil {
+					injectAtPath(argsCopy, identityPath, identity.Structured)
+					slog.Info("keep: injected identity into tool arguments", "backend", serverName, "tool", toolName, "json_path", identityPath, "type", "structured")
+				} else {
+					injectAtPath(argsCopy, identityPath, identity.Str)
+					slog.Info("keep: injected identity into tool arguments", "backend", serverName, "tool", toolName, "json_path", identityPath, "type", "string")
+				}
+				args = argsCopy
 			} else {
-				injectAtPath(argsCopy, identityPath, identity.Str)
-				slog.Info("keep: injected identity into tool arguments", "backend", serverName, "tool", toolName, "json_path", identityPath, "type", "string")
+				slog.Warn("keep: identity injection configured but no identity token in context — skipping json_path injection", "backend", serverName, "tool", toolName, "json_path", identityPath)
 			}
-			args = argsCopy
-		} else {
-			slog.Warn("keep: identity injection configured but no identity token in context — skipping json_path injection", "backend", serverName, "tool", toolName, "json_path", identityPath)
 		}
 	}
 
@@ -198,13 +204,25 @@ func (r *Router) CallTool(ctx context.Context, serverName, toolName string, args
 			// URL to the agent so it can prompt the user.
 			if statusCode == http.StatusUnauthorized && r.backendType(serverName) == "oauth" {
 				userID := userIDFromContext(ctx)
-				authResult, flowErr := r.tryStartOAuthFlow(ctx, serverName, userID)
-				if flowErr != nil {
-					slog.Warn("keep: failed to start OAuth flow after 401", "backend", serverName, "error", flowErr)
-					// Fall through to the generic error path below.
+				oauthCfg := r.backendOAuthCfg(serverName)
+				if oauthCfg == nil {
+					slog.Warn("keep: OAuth config missing for backend after 401", "backend", serverName)
 				} else {
-					span.SetStatus(codes.Error, "oauth flow required")
-					return authResult, nil
+					wwwAuth := headers.Get("WWW-Authenticate")
+					eps, discErr := resolveOAuthEndpoints(ctx, *oauthCfg, wwwAuth)
+					if discErr != nil {
+						slog.Warn("keep: OAuth endpoint discovery failed after 401", "backend", serverName, "error", discErr)
+						// Fall through to generic error path.
+					} else {
+						authResult, flowErr := r.tryStartOAuthFlow(ctx, serverName, userID, eps)
+						if flowErr != nil {
+							slog.Warn("keep: failed to start OAuth flow after 401", "backend", serverName, "error", flowErr)
+							// Fall through to the generic error path below.
+						} else {
+							span.SetStatus(codes.Error, "oauth flow required")
+							return authResult, nil
+						}
+					}
 				}
 			}
 
@@ -333,7 +351,9 @@ func (r *Router) refreshOAuthToken(ctx context.Context, serverName, userID strin
 // tryStartOAuthFlow generates a PKCE authorization URL for the named backend
 // and returns a CallToolResult that instructs the agent to prompt the user to
 // visit the URL.  The pending PKCE state is stored in the CredentialsStore.
-func (r *Router) tryStartOAuthFlow(ctx context.Context, serverName, userID string) (*mcp.CallToolResult, error) {
+// eps contains the authorization and token endpoint URLs resolved by the caller
+// (via resolveOAuthEndpoints) so discovery is not repeated inside this function.
+func (r *Router) tryStartOAuthFlow(ctx context.Context, serverName, userID string, eps oauthEndpoints) (*mcp.CallToolResult, error) {
 	r.mu.Lock()
 	conn, ok := r.backends[serverName]
 	r.mu.Unlock()
@@ -360,7 +380,7 @@ func (r *Router) tryStartOAuthFlow(ctx context.Context, serverName, userID strin
 		CodeVerifier:  codeVerifier,
 		BackendName:   serverName,
 		UserID:        userID,
-		TokenEndpoint: oauthCfg.TokenEndpoint,
+		TokenEndpoint: eps.TokenEndpoint,
 		ClientID:      oauthCfg.ClientID,
 		RedirectURI:   oauthCfg.CallbackURL,
 	}
@@ -373,7 +393,7 @@ func (r *Router) tryStartOAuthFlow(ctx context.Context, serverName, userID strin
 		return nil, fmt.Errorf("store pending auth: %w", err)
 	}
 
-	authURL := buildAuthURL(oauthCfg.AuthorizationEndpoint, oauthCfg.ClientID, oauthCfg.CallbackURL, oauthCfg.Scopes, nonce, codeChallenge)
+	authURL := buildAuthURL(eps.AuthorizationEndpoint, oauthCfg.ClientID, oauthCfg.CallbackURL, oauthCfg.Scopes, nonce, codeChallenge)
 	slog.Info("keep: OAuth flow initiated", "backend", serverName, "user_id", userID)
 
 	return &mcp.CallToolResult{
@@ -524,6 +544,16 @@ func (r *Router) ListAllTools(ctx context.Context) ([]shared.AnnotatedTool, erro
 // list tools is logged and skipped so one broken backend does not prevent the
 // rest from being served. Duplicate aliases across backends are a hard error.
 func (r *Router) Reload(ctx context.Context, backends []BackendConfig) error {
+	// Load static tool files before acquiring the lock. File I/O must not
+	// happen while holding the router mutex.
+	for i := range backends {
+		if backends[i].ToolList.Source == "file" {
+			if err := loadStaticToolList(&backends[i]); err != nil {
+				return fmt.Errorf("backend %q: %w", backends[i].Name, err)
+			}
+		}
+	}
+
 	r.mu.Lock()
 
 	newBackends := make(map[string]BackendConfig, len(backends))
@@ -761,7 +791,7 @@ func buildBackendTransport(conn *backendConn) (mcp.Transport, error) {
 		if err := checkBackendURL(cfg.URL, cfg.AllowPrivateAddresses); err != nil {
 			return nil, fmt.Errorf("http backend URL rejected: %w", err)
 		}
-		httpClient := noRedirectHTTPClient()
+		httpClient := newHTTPClient(false)
 		httpClient.Transport = &headerInjectingRoundTripper{conn: conn, inner: http.DefaultTransport}
 		return &mcp.StreamableClientTransport{
 			Endpoint:   cfg.URL,
@@ -774,7 +804,7 @@ func buildBackendTransport(conn *backendConn) (mcp.Transport, error) {
 		if err := checkBackendURL(cfg.URL, cfg.AllowPrivateAddresses); err != nil {
 			return nil, fmt.Errorf("sse backend URL rejected: %w", err)
 		}
-		httpClient := noRedirectHTTPClient()
+		httpClient := newHTTPClient(false)
 		httpClient.Transport = &headerInjectingRoundTripper{conn: conn, inner: http.DefaultTransport}
 		return &mcp.SSEClientTransport{
 			Endpoint:   cfg.URL,
@@ -825,7 +855,7 @@ func (t *headerInjectingRoundTripper) RoundTrip(req *http.Request) (*http.Respon
 	var err error
 
 	needsInjection := len(clientHeaders) > 0 ||
-		(identityHeader != "" && identity != nil) ||
+		((identityType == "" || identityType == "exchange") && identityHeader != "" && identity != nil) ||
 		(identityType == "api_key" && identityHeader != "" && apiKeyValue != "") ||
 		(identityType == "oauth" && oauthToken != "")
 
@@ -875,9 +905,17 @@ func (t *headerInjectingRoundTripper) RoundTrip(req *http.Request) (*http.Respon
 			}
 		case "oauth":
 			if oauthToken != "" {
-				outReq.Header.Set("Authorization", "Bearer "+oauthToken)
-				slog.Info("keep: injected OAuth token into request header", "backend", t.conn.cfg.Name)
+				// Use the configured placement header if set; otherwise default to
+				// the standard Authorization header so zero-config backends work.
+				oauthHeader := identityHeader
+				if oauthHeader == "" {
+					oauthHeader = "Authorization"
+				}
+				outReq.Header.Set(oauthHeader, "Bearer "+oauthToken)
+				slog.Info("keep: injected OAuth token into request header", "backend", t.conn.cfg.Name, "header", oauthHeader)
 			}
+		case "none":
+			// Explicit no-op: type "none" means no identity injection of any kind.
 		default:
 			// "" or "exchange" — use the exchanged identity (existing behaviour).
 			if identityHeader != "" {
@@ -912,15 +950,59 @@ func (t *headerInjectingRoundTripper) RoundTrip(req *http.Request) (*http.Respon
 	return resp, err
 }
 
-// noRedirectHTTPClient returns an http.Client that refuses to follow any
-// redirect. This prevents SSRF attacks where a legitimate MCP backend
-// redirects Keep to an internal service or metadata endpoint.
-func noRedirectHTTPClient() *http.Client {
-	return &http.Client{
+// newHTTPClient returns an *http.Client that always refuses redirects.
+//
+// When blockPrivate is true the transport additionally rejects connections to
+// private, loopback, and link-local addresses at dial time (checked against
+// privateRanges after DNS resolution).  Use this for any request whose URL
+// originates from an untrusted external source — for example, URLs extracted
+// from a backend's WWW-Authenticate header during OAuth discovery.
+//
+// When blockPrivate is false the client uses http.DefaultTransport, which is
+// appropriate when the URL has already been validated at config load time via
+// checkBackendURL.
+func newHTTPClient(blockPrivate bool) *http.Client {
+	client := &http.Client{
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return fmt.Errorf("redirects are not permitted for MCP backend calls (attempted redirect to %s)", req.URL)
+			return fmt.Errorf("redirects are not permitted (attempted redirect to %s)", req.URL)
 		},
 	}
+	if !blockPrivate {
+		return client
+	}
+	dialer := &net.Dialer{
+		Timeout:   5 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
+	client.Transport = &http.Transport{
+		ForceAttemptHTTP2: true,
+		MaxIdleConns:      10,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			host, port, err := net.SplitHostPort(addr)
+			if err != nil {
+				return nil, fmt.Errorf("malformed address %q: %w", addr, err)
+			}
+			ips, err := net.DefaultResolver.LookupHost(ctx, host)
+			if err != nil {
+				return nil, fmt.Errorf("DNS lookup for %q: %w", host, err)
+			}
+			for _, ipStr := range ips {
+				ip := net.ParseIP(ipStr)
+				if ip == nil {
+					continue
+				}
+				for _, private := range privateRanges {
+					if private.Contains(ip) {
+						return nil, fmt.Errorf(
+							"host %q resolves to private/loopback address %s",
+							host, ipStr)
+					}
+				}
+			}
+			return dialer.DialContext(ctx, network, net.JoinHostPort(ips[0], port))
+		},
+	}
+	return client
 }
 
 // privateRanges lists the CIDR blocks that must not be reachable via HTTP

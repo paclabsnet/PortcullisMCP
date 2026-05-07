@@ -75,7 +75,7 @@ func TestRedisCredentialsStore_Pending(t *testing.T) {
 		TokenEndpoint: "https://auth.example/token",
 	}
 
-	if err := s.StorePending(ctx, "nonce-1", p); err != nil {
+	if err := s.StorePending(ctx, "nonce-1", p, time.Minute); err != nil {
 		t.Fatalf("StorePending: %v", err)
 	}
 

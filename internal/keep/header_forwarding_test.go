@@ -445,6 +445,7 @@ func TestHeaderInjectingRoundTripper_OAuthToken(t *testing.T) {
 		Name: "oauth-be",
 		UserIdentity: BackendUserIdentity{
 			Type: "oauth",
+			// No placement header — should default to Authorization.
 		},
 	})
 	rt := &headerInjectingRoundTripper{conn: conn, inner: http.DefaultTransport}
@@ -457,6 +458,31 @@ func TestHeaderInjectingRoundTripper_OAuthToken(t *testing.T) {
 	mu.Unlock()
 	if got != "Bearer tok-xyz" {
 		t.Errorf("Authorization: got %q, want %q", got, "Bearer tok-xyz")
+	}
+}
+
+func TestHeaderInjectingRoundTripper_OAuthToken_CustomPlacementHeader(t *testing.T) {
+	backend, received, mu := roundTripperTestServer(t)
+
+	conn := makeConn(BackendConfig{
+		Name: "oauth-custom-be",
+		UserIdentity: BackendUserIdentity{
+			Type:      "oauth",
+			Placement: BackendIdentityPlacement{Header: "X-Bearer-Token"},
+		},
+	})
+	rt := &headerInjectingRoundTripper{conn: conn, inner: http.DefaultTransport}
+
+	ctx := withOAuthToken(context.Background(), "tok-abc")
+	doRoundTrip(t, rt, backend.URL, ctx)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if got := (*received).Get("X-Bearer-Token"); got != "Bearer tok-abc" {
+		t.Errorf("X-Bearer-Token: got %q, want %q", got, "Bearer tok-abc")
+	}
+	if got := (*received).Get("Authorization"); got != "" {
+		t.Errorf("Authorization should be absent when custom placement header is set, got %q", got)
 	}
 }
 
@@ -479,5 +505,41 @@ func TestHeaderInjectingRoundTripper_OAuthToken_Missing_NoInject(t *testing.T) {
 	mu.Unlock()
 	if got != "" {
 		t.Errorf("Authorization should not be set without token, got %q", got)
+	}
+}
+
+// TestHeaderInjectingRoundTripper_TypeNone_NoInjection verifies that type "none"
+// never injects an identity header even when a placement header is configured and
+// an exchanged identity is present in the context.  This is a regression test for
+// the bug where the default switch branch would inject for type "none".
+func TestHeaderInjectingRoundTripper_TypeNone_NoInjection(t *testing.T) {
+	backend, received, mu := roundTripperTestServer(t)
+
+	conn := makeConn(BackendConfig{
+		Name: "none-be",
+		UserIdentity: BackendUserIdentity{
+			Type:      "none",
+			Placement: BackendIdentityPlacement{Header: "X-Identity-Token"},
+		},
+	})
+	rt := &headerInjectingRoundTripper{conn: conn, inner: http.DefaultTransport}
+
+	// Identity in context simulates what a noop exchanger would have put there
+	// before the bug fix.
+	ctx := withExchangedIdentity(context.Background(), &ExchangedIdentity{Str: "should-not-appear"})
+	doRoundTrip(t, rt, backend.URL, ctx)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if got := (*received).Get("X-Identity-Token"); got != "" {
+		t.Errorf("type=none must not inject identity header; got %q", got)
+	}
+	// Also ensure the value did not leak under any other header name.
+	for name, vals := range *received {
+		for _, v := range vals {
+			if v == "should-not-appear" {
+				t.Errorf("identity value leaked into header %q", name)
+			}
+		}
 	}
 }

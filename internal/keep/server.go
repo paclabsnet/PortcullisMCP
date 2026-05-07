@@ -16,7 +16,6 @@ package keep
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,6 +31,7 @@ import (
 	"golang.org/x/oauth2"
 
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
+	"github.com/paclabsnet/PortcullisMCP/internal/shared/middleware"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared/tlsutil"
 	"github.com/paclabsnet/PortcullisMCP/internal/telemetry"
 )
@@ -851,25 +851,10 @@ func decodeRedisConfig(raw map[string]interface{}, out *RedisConfig) error {
 }
 
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" || r.URL.Path == "/oauth/callback" {
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		mainEndpoint, ok := s.cfg.Server.Endpoints["main"]
-		if !ok {
-			writeError(w, http.StatusInternalServerError, "main endpoint misconfigured")
-			return
-		}
-		auth := r.Header.Get("Authorization")
-		expected := "Bearer " + mainEndpoint.Auth.Credentials.BearerToken
-
-		if subtle.ConstantTimeCompare([]byte(auth), []byte(expected)) != 1 {
-			writeError(w, http.StatusUnauthorized, "invalid or missing bearer token")
-			return
-		}
-
-		next.ServeHTTP(w, r)
-	})
+	mainEndpoint := s.cfg.Server.Endpoints["main"]
+	return middleware.BearerAuth(middleware.AuthConfig{
+		BearerToken: mainEndpoint.Auth.Credentials.BearerToken,
+		SkipPaths:   []string{"/healthz", "/readyz", "/oauth/callback"},
+		Realm:       "portcullis-keep",
+	})(next)
 }

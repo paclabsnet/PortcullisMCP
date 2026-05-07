@@ -86,8 +86,8 @@ func TestMultiTenantProvider_Capabilities(t *testing.T) {
 // TestMultiTenantProvider_MapPolicyError_InterceptsPolicy verifies that
 // escalation and deny errors are intercepted and converted to an opaque marker.
 func TestMultiTenantProvider_MapPolicyError_InterceptsPolicy(t *testing.T) {
-	logChan := make(chan DecisionLogEntry, 10)
-	p := NewMultiTenantProvider("", nil, logChan)
+	captured := &captureLogger{}
+	p := NewMultiTenantProvider("", nil, captured)
 	cfg := &Config{
 		Responsibility: ResponsibilityConfig{
 			Escalation: EscalationConfig{NoEscalationMarker: "BLOCKED"},
@@ -101,6 +101,10 @@ func TestMultiTenantProvider_MapPolicyError_InterceptsPolicy(t *testing.T) {
 	}
 
 	for _, err := range policyErrors {
+		captured.mu.Lock()
+		captured.entries = nil
+		captured.mu.Unlock()
+
 		result, handled := p.MapPolicyError(context.Background(), err, "tool", "trace-1", cfg)
 		if !handled {
 			t.Errorf("MapPolicyError(%T): handled=false, want true", err)
@@ -108,10 +112,7 @@ func TestMultiTenantProvider_MapPolicyError_InterceptsPolicy(t *testing.T) {
 		if result == nil || !result.IsError {
 			t.Errorf("MapPolicyError(%T): expected IsError result", err)
 		}
-		// Drain log entry.
-		select {
-		case <-logChan:
-		default:
+		if entries := captured.all(); len(entries) == 0 {
 			t.Errorf("MapPolicyError(%T): no SIEM log entry emitted", err)
 		}
 	}
@@ -121,8 +122,8 @@ func TestMultiTenantProvider_MapPolicyError_InterceptsPolicy(t *testing.T) {
 // infrastructure errors (transport failures, identity errors) are not
 // intercepted so callers can distinguish policy decisions from outages.
 func TestMultiTenantProvider_MapPolicyError_PassesInfraErrors(t *testing.T) {
-	logChan := make(chan DecisionLogEntry, 10)
-	p := NewMultiTenantProvider("", nil, logChan)
+	captured := &captureLogger{}
+	p := NewMultiTenantProvider("", nil, captured)
 	cfg := &Config{}
 
 	infraErrors := []error{
@@ -131,6 +132,10 @@ func TestMultiTenantProvider_MapPolicyError_PassesInfraErrors(t *testing.T) {
 	}
 
 	for _, err := range infraErrors {
+		captured.mu.Lock()
+		captured.entries = nil
+		captured.mu.Unlock()
+
 		result, handled := p.MapPolicyError(context.Background(), err, "tool", "trace-2", cfg)
 		if handled {
 			t.Errorf("MapPolicyError(%T): handled=true for infra error, want false", err)
@@ -138,10 +143,8 @@ func TestMultiTenantProvider_MapPolicyError_PassesInfraErrors(t *testing.T) {
 		if result != nil {
 			t.Errorf("MapPolicyError(%T): non-nil result for infra error", err)
 		}
-		select {
-		case entry := <-logChan:
-			t.Errorf("MapPolicyError(%T): unexpected SIEM log for infra error: %+v", err, entry)
-		default:
+		if entries := captured.all(); len(entries) > 0 {
+			t.Errorf("MapPolicyError(%T): unexpected SIEM log for infra error: %+v", err, entries[0])
 		}
 	}
 }

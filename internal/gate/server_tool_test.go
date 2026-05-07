@@ -170,6 +170,8 @@ func TestHandleToolCall_Success(t *testing.T) {
 		toolServerMap: map[string]string{"test_tool": "test-server"},
 		sessionID:     "test-session",
 		escalations:   &mockTokenStore{},
+		escalationMgr: NewEscalationManager(nil, NewInMemoryPendingStore(), &mockTokenStore{}, EscalationConfig{}, NewSingleTenantProvider(nil, ""), idSource),
+		logger:        &captureLogger{},
 	}
 
 	res, err := g.handleToolCall(context.Background(), "test_tool", map[string]any{"arg1": "val1"})
@@ -195,6 +197,7 @@ func TestHandleToolCall_FastPath_Allow(t *testing.T) {
 		t.Fatalf("Connect failed: %v", err)
 	}
 
+	captured := &captureLogger{}
 	g := &Gate{
 		cfg: Config{
 			Responsibility: ResponsibilityConfig{
@@ -209,7 +212,7 @@ func TestHandleToolCall_FastPath_Allow(t *testing.T) {
 		localFS:   localSession,
 		identity:  &mockIdentitySource{},
 		sessionID: "test-session",
-		logChan:   make(chan DecisionLogEntry, 10),
+		logger:    captured,
 	}
 
 	res, err := g.handleToolCall(context.Background(), "read_text_file", map[string]any{"path": testFile})
@@ -220,14 +223,12 @@ func TestHandleToolCall_FastPath_Allow(t *testing.T) {
 		t.Fatalf("expected no error in result, got: %v", res.Content)
 	}
 
-	// Verify log entry
-	select {
-	case entry := <-g.logChan:
-		if entry.Decision != "allow" || entry.Reason != "sandbox" {
-			t.Errorf("unexpected log entry: %+v", entry)
-		}
-	default:
-		t.Error("expected log entry")
+	entries := captured.all()
+	if len(entries) == 0 {
+		t.Fatal("expected a log entry")
+	}
+	if entries[0].Decision != "allow" || entries[0].Reason != "sandbox" {
+		t.Errorf("unexpected log entry: %+v", entries[0])
 	}
 }
 
@@ -274,6 +275,8 @@ func (m *mockTokenStore) Delete(_ context.Context, _ string) error {
 	return nil
 }
 
+// ---- EscalationManager tests ------------------------------------------------
+
 func TestCollectEscalationTokens_Claim(t *testing.T) {
 	pending := NewInMemoryPendingStore()
 	pending.Store("srv/tool", pendingEscalation{
@@ -300,13 +303,8 @@ func TestCollectEscalationTokens_Claim(t *testing.T) {
 		return tok, nil
 	}
 
-	g := &Gate{
-		guardClient: guard,
-		pending:     pending,
-		escalations: tokens,
-	}
-
-	res := g.collectEscalationTokens(context.Background(), "srv", "tool")
+	mgr := NewEscalationManager(guard, pending, tokens, EscalationConfig{}, NewSingleTenantProvider(nil, ""), nil)
+	res := mgr.CollectTokens(context.Background(), "srv", "tool")
 	if len(res) != 1 || res[0].TokenID != "tok-id" {
 		t.Errorf("expected 1 token 'tok-id', got %v", res)
 	}
@@ -327,23 +325,14 @@ func TestMaybeStorePendingEscalation_Proactive(t *testing.T) {
 	}
 	pending := NewInMemoryPendingStore()
 
-	g := &Gate{
-		cfg: Config{
-			Responsibility: ResponsibilityConfig{
-				Escalation: EscalationConfig{Strategy: "proactive"},
-			},
-		},
-		guardClient: guard,
-		pending:     pending,
-		provider:    NewSingleTenantProvider(nil, ""),
-	}
+	mgr := NewEscalationManager(guard, pending, &mockTokenStore{}, EscalationConfig{Strategy: "proactive"}, NewSingleTenantProvider(nil, ""), nil)
 
 	err := &shared.EscalationPendingError{
 		EscalationJTI: "jti-proactive",
 		PendingJWT:    "jwt-data",
 	}
 
-	errResult := g.maybeStorePendingEscalation(context.Background(), "srv", "tool", err)
+	errResult := mgr.StorePending(context.Background(), "srv", "tool", err)
 	if errResult != nil {
 		t.Fatalf("unexpected error: %v", errResult)
 	}
@@ -380,21 +369,19 @@ func TestGate_ClaimAllUnclaimedTokens(t *testing.T) {
 	pending := NewInMemoryPendingStore()
 	pending.Store("srv/tool", pendingEscalation{JTI: "jti-poll"})
 
-	g := &Gate{
-		identity:    &mockIdentitySource{identity: shared.UserIdentity{UserID: "user1"}},
-		guardClient: guard,
-		escalations: tokens,
-		pending:     pending,
-	}
+	identity := &mockIdentitySource{identity: shared.UserIdentity{UserID: "user1"}}
+	mgr := NewEscalationManager(guard, pending, tokens, EscalationConfig{}, nil, identity)
 
-	g.claimAllUnclaimedTokens(context.Background())
+	mgr.claimAllUnclaimedTokens(context.Background())
 
 	if _, ok := pending.Get("srv/tool"); ok {
 		t.Error("pending escalation should have been deleted by JTI")
 	}
 }
 
-func TestGate_LogWorker(t *testing.T) {
+// ---- BatchDecisionLogger tests ----------------------------------------------
+
+func TestBatchDecisionLogger_Worker(t *testing.T) {
 	received := make(chan []DecisionLogEntry, 1)
 	fwd := &mockForwarderWithSendLogs{
 		sendLogsFunc: func(ctx context.Context, entries []DecisionLogEntry) error {
@@ -403,26 +390,17 @@ func TestGate_LogWorker(t *testing.T) {
 		},
 	}
 
-	g := &Gate{
-		cfg: Config{
-			Responsibility: ResponsibilityConfig{
-				DecisionLogs: DecisionLogBatchConfig{
-					FlushInterval: 1,
-					MaxBatchSize:  2,
-				},
-			},
-		},
-		forwarder: fwd,
-		logChan:   make(chan DecisionLogEntry, 10),
-		logDone:   make(chan struct{}),
-	}
+	logger := NewBatchDecisionLogger(DecisionLogBatchConfig{
+		FlushInterval: 1,
+		MaxBatchSize:  2,
+	}, fwd)
 
-	g.logWg.Add(1)
-	go g.logWorker()
+	ctx, cancel := context.WithCancel(context.Background())
+	logger.Start(ctx)
 
 	// 1. Batch size trigger
-	g.logChan <- DecisionLogEntry{ToolName: "t1"}
-	g.logChan <- DecisionLogEntry{ToolName: "t2"}
+	logger.Log(DecisionLogEntry{ToolName: "t1"})
+	logger.Log(DecisionLogEntry{ToolName: "t2"})
 
 	select {
 	case batch := <-received:
@@ -434,7 +412,7 @@ func TestGate_LogWorker(t *testing.T) {
 	}
 
 	// 2. Interval trigger
-	g.logChan <- DecisionLogEntry{ToolName: "t3"}
+	logger.Log(DecisionLogEntry{ToolName: "t3"})
 	select {
 	case batch := <-received:
 		if len(batch) != 1 {
@@ -445,9 +423,9 @@ func TestGate_LogWorker(t *testing.T) {
 	}
 
 	// 3. Shutdown flush
-	g.logChan <- DecisionLogEntry{ToolName: "t4"}
-	close(g.logDone)
-	g.logWg.Wait()
+	logger.Log(DecisionLogEntry{ToolName: "t4"})
+	cancel()
+	logger.Wait()
 
 	select {
 	case batch := <-received:
@@ -456,6 +434,31 @@ func TestGate_LogWorker(t *testing.T) {
 		}
 	default:
 		t.Error("expected shutdown flush")
+	}
+}
+
+func TestGate_PollGuardWorker(t *testing.T) {
+	called := make(chan bool, 1)
+	guard := &mockGuardClient{
+		listUnclaimedFunc: func(ctx context.Context, userID string) ([]unclaimedTokenInfo, error) {
+			called <- true
+			return nil, nil
+		},
+	}
+
+	identity := &mockIdentitySource{identity: shared.UserIdentity{UserID: "u1"}}
+	mgr := NewEscalationManager(guard, NewInMemoryPendingStore(), &mockTokenStore{}, EscalationConfig{PollInterval: 1}, nil, identity)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go mgr.pollGuardWorker(ctx)
+
+	select {
+	case <-called:
+		// Success
+	case <-ctx.Done():
+		t.Error("pollGuardWorker was not called within timeout")
 	}
 }
 
@@ -601,45 +604,10 @@ func TestGate_HandleLoginTool(t *testing.T) {
 	})
 }
 
-func TestGate_PollGuardWorker(t *testing.T) {
-	called := make(chan bool, 1)
-	guard := &mockGuardClient{
-		listUnclaimedFunc: func(ctx context.Context, userID string) ([]unclaimedTokenInfo, error) {
-			called <- true
-			return nil, nil
-		},
-	}
-
-	g := &Gate{
-		cfg: Config{
-			Responsibility: ResponsibilityConfig{
-				Escalation: EscalationConfig{PollInterval: 1}, // 1 second
-			},
-		},
-		identity:    &mockIdentitySource{identity: shared.UserIdentity{UserID: "u1"}},
-		guardClient: guard,
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	go g.pollGuardWorker(ctx)
-
-	select {
-	case <-called:
-		// Success
-	case <-ctx.Done():
-		t.Error("pollGuardWorker was not called within timeout")
-	}
-}
-
 func TestGate_RegisterTool_Logic(t *testing.T) {
-	// registerTool uses g.server.AddTool which is hard to test without a full server.
-	// But we can test the handler logic it wraps by calling handleToolCall directly
-	// with various argument types to cover the marshal/unmarshal logic.
-
+	idSource := &mockIdentitySource{identity: shared.UserIdentity{UserID: "u1"}}
 	g := &Gate{
-		identity: &mockIdentitySource{identity: shared.UserIdentity{UserID: "u1"}},
+		identity: idSource,
 		forwarder: &mockForwarder{
 			callToolFunc: func(ctx context.Context, req shared.EnrichedMCPRequest) (*mcp.CallToolResult, error) {
 				arg := req.Arguments["foo"].(string)
@@ -648,6 +616,8 @@ func TestGate_RegisterTool_Logic(t *testing.T) {
 		},
 		toolServerMap: map[string]string{"t1": "s1"},
 		escalations:   &mockTokenStore{},
+		escalationMgr: NewEscalationManager(nil, NewInMemoryPendingStore(), &mockTokenStore{}, EscalationConfig{}, NewSingleTenantProvider(nil, ""), idSource),
+		logger:        &captureLogger{},
 	}
 
 	res, err := g.handleToolCall(context.Background(), "t1", map[string]any{"foo": "bar"})

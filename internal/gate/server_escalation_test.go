@@ -264,7 +264,10 @@ func TestBuildEscalationMessage_CustomInstructions_TraceIDOmitted(t *testing.T) 
 // ---- multi-tenant escalation interception -----------------------------------
 
 func newMultiTenantGate(marker string) *Gate {
-	logChan := make(chan DecisionLogEntry, 10)
+	captured := &captureLogger{}
+	provider := NewMultiTenantProvider("", nil, captured)
+	pending := NewInMemoryPendingStore()
+	escalationMgr := NewEscalationManager(nil, pending, nil, EscalationConfig{}, provider, nil)
 	return &Gate{
 		cfg: Config{
 			Tenancy: "multi",
@@ -272,10 +275,9 @@ func newMultiTenantGate(marker string) *Gate {
 				Escalation: EscalationConfig{NoEscalationMarker: marker},
 			},
 		},
-		pending:  NewInMemoryPendingStore(),
-		logChan:  logChan,
-		logDone:  make(chan struct{}),
-		provider: NewMultiTenantProvider("", nil, logChan),
+		escalationMgr: escalationMgr,
+		logger:        captured,
+		provider:      provider,
 	}
 }
 
@@ -315,39 +317,41 @@ func TestMultiTenantEscalation_SIEMLogQueued(t *testing.T) {
 	escalationErr := &shared.EscalationPendingError{Reason: "needs approval"}
 	_, _ = g.policyErrToResult(ctx, escalationErr, "my_tool", "trace-mt-2")
 
-	select {
-	case entry := <-g.logChan:
-		if entry.SessionID != "session-mt-abc" {
-			t.Errorf("expected session_id %q, got %q", "session-mt-abc", entry.SessionID)
-		}
-		if entry.TraceID != "trace-mt-2" {
-			t.Errorf("expected trace_id %q, got %q", "trace-mt-2", entry.TraceID)
-		}
-		if entry.UserID != "" {
-			t.Errorf("UserID must be empty in multi-tenant mode (Gate never parses tokens); got %q", entry.UserID)
-		}
-		if entry.Decision != "deny" {
-			t.Errorf("expected decision %q, got %q", "deny", entry.Decision)
-		}
-		if entry.ToolName != "my_tool" {
-			t.Errorf("expected tool_name %q, got %q", "my_tool", entry.ToolName)
-		}
-	default:
-		t.Error("expected a DecisionLogEntry to be queued, but logChan was empty")
+	captured := g.logger.(*captureLogger)
+	entries := captured.all()
+	if len(entries) == 0 {
+		t.Fatal("expected a DecisionLogEntry to be queued")
+	}
+	entry := entries[0]
+	if entry.SessionID != "session-mt-abc" {
+		t.Errorf("expected session_id %q, got %q", "session-mt-abc", entry.SessionID)
+	}
+	if entry.TraceID != "trace-mt-2" {
+		t.Errorf("expected trace_id %q, got %q", "trace-mt-2", entry.TraceID)
+	}
+	if entry.UserID != "" {
+		t.Errorf("UserID must be empty in multi-tenant mode (Gate never parses tokens); got %q", entry.UserID)
+	}
+	if entry.Decision != "deny" {
+		t.Errorf("expected decision %q, got %q", "deny", entry.Decision)
+	}
+	if entry.ToolName != "my_tool" {
+		t.Errorf("expected tool_name %q, got %q", "my_tool", entry.ToolName)
 	}
 }
 
 func TestMultiTenantEscalation_NoPendingStorageLeakage(t *testing.T) {
-	// maybeStorePendingEscalation must be a no-op in multi-tenant mode.
+	// StorePending must be a no-op in multi-tenant mode.
 	g := newMultiTenantGate("")
 	escalationErr := &shared.EscalationPendingError{
 		EscalationJTI: "jti-leak-check",
 		PendingJWT:    "h.p.s",
 	}
-	if err := g.maybeStorePendingEscalation(context.Background(), "server", "tool", escalationErr); err != nil {
+	if err := g.escalationMgr.StorePending(context.Background(), "server", "tool", escalationErr); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if _, ok := g.pending.Get("server/tool"); ok {
+	mgr := g.escalationMgr.(*DefaultEscalationManager)
+	if _, ok := mgr.pending.Get("server/tool"); ok {
 		t.Error("pending store must remain empty in multi-tenant mode (no state leakage)")
 	}
 }

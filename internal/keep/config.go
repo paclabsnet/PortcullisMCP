@@ -454,6 +454,8 @@ type BackendAPIKey struct {
 type BackendIdentityPlacement struct {
 	// Header, if non-empty, injects the identity value as an HTTP header of this
 	// name. Applies to http and sse backends only.
+	// For type "oauth", this overrides the default Authorization header so that
+	// vendors that expect the Bearer token in a non-standard header are supported.
 	Header string `yaml:"header"`
 	// JSONPath, if non-empty, injects the identity value at this dot-separated
 	// path in the tool call arguments. Applies to all backend types.
@@ -617,14 +619,14 @@ func validateBackendConfig(cfg *BackendConfig) error {
 		if o.ClientID == "" {
 			return fmt.Errorf("user_identity.oauth.client_id is required when type is \"oauth\"")
 		}
-		if o.AuthorizationEndpoint == "" {
-			return fmt.Errorf("user_identity.oauth.authorization_endpoint is required when type is \"oauth\"")
-		}
-		if o.TokenEndpoint == "" {
-			return fmt.Errorf("user_identity.oauth.token_endpoint is required when type is \"oauth\"")
-		}
 		if o.CallbackURL == "" {
 			return fmt.Errorf("user_identity.oauth.callback_url is required when type is \"oauth\"")
+		}
+		// authorization_endpoint and token_endpoint are optional: when both are absent,
+		// Keep discovers them at runtime from the backend's 401 WWW-Authenticate response
+		// (RFC 9728 PRM + RFC 8414 ASM chain).  Providing exactly one is a misconfiguration.
+		if (o.AuthorizationEndpoint == "") != (o.TokenEndpoint == "") {
+			return fmt.Errorf("user_identity.oauth: authorization_endpoint and token_endpoint must both be set or both be absent (set neither to use RFC 9728/8414 discovery)")
 		}
 	default:
 		return fmt.Errorf("user_identity.type %q is invalid; must be one of: none, exchange, api_key, oauth", cfg.UserIdentity.Type)
@@ -634,29 +636,36 @@ func validateBackendConfig(cfg *BackendConfig) error {
 		if cfg.ToolList.File == "" {
 			return fmt.Errorf("tool_list.file is required when source is 'file'")
 		}
-
-		attemptedPath, err := filepath.Abs(cfg.ToolList.File)
-		if err != nil {
-			return fmt.Errorf("failed to resolve absolute path for static tool list file: configured=%q: %w", cfg.ToolList.File, err)
-		}
-		cwd, err := os.Getwd()
-		if err != nil {
-			return fmt.Errorf("failed to determine current working directory for path resolution: %w", err)
-		}
-
-		data, err := os.ReadFile(attemptedPath)
-		if err != nil {
-			return fmt.Errorf("failed to read static tool list file: configured=%q attempted=%q base_dir=%q (cwd): %w", cfg.ToolList.File, attemptedPath, cwd, err)
-		}
-		var result mcp.ListToolsResult
-		if err := json.Unmarshal(data, &result); err != nil {
-			return fmt.Errorf("failed to parse static tool list file: configured=%q attempted=%q: %w", cfg.ToolList.File, attemptedPath, err)
-		}
-		cfg.StaticTools = result.Tools
 	} else if cfg.ToolList.Source != "" && cfg.ToolList.Source != "remote" {
 		return fmt.Errorf("tool_list.source %q is invalid; must be 'file' or 'remote'", cfg.ToolList.Source)
 	}
 
+	return nil
+}
+
+// loadStaticToolList reads and parses the tool list file for a backend whose
+// ToolList.Source is "file", populating cfg.StaticTools.  It must be called
+// during the initialization phase (e.g. Router.Reload) rather than during
+// config validation, because file I/O is a side effect that does not belong
+// in a structural correctness check.
+func loadStaticToolList(cfg *BackendConfig) error {
+	attemptedPath, err := filepath.Abs(cfg.ToolList.File)
+	if err != nil {
+		return fmt.Errorf("failed to resolve absolute path for static tool list file: configured=%q: %w", cfg.ToolList.File, err)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to determine current working directory for path resolution: %w", err)
+	}
+	data, err := os.ReadFile(attemptedPath)
+	if err != nil {
+		return fmt.Errorf("failed to read static tool list file: configured=%q attempted=%q base_dir=%q (cwd): %w", cfg.ToolList.File, attemptedPath, cwd, err)
+	}
+	var result mcp.ListToolsResult
+	if err := json.Unmarshal(data, &result); err != nil {
+		return fmt.Errorf("failed to parse static tool list file: configured=%q attempted=%q: %w", cfg.ToolList.File, attemptedPath, err)
+	}
+	cfg.StaticTools = result.Tools
 	return nil
 }
 

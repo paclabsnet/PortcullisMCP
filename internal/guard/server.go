@@ -16,7 +16,6 @@ package guard
 
 import (
 	"context"
-	"crypto/subtle"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -34,6 +33,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/mitchellh/mapstructure"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
+	"github.com/paclabsnet/PortcullisMCP/internal/shared/middleware"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared/tlsutil"
 )
 
@@ -296,28 +296,12 @@ func (s *Server) handleReadyz(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) machineAuthMiddleware(next http.HandlerFunc) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		apiEndpoint := s.cfg.Server.Endpoints["token_api"]
-
-		// 1. Check mTLS if configured
-		if apiEndpoint.TLS.ClientCA != "" && r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		// 2. Check Bearer Token
-		if apiEndpoint.Auth.Credentials.BearerToken != "" {
-			auth := r.Header.Get("Authorization")
-			expected := "Bearer " + apiEndpoint.Auth.Credentials.BearerToken
-			if subtle.ConstantTimeCompare([]byte(auth), []byte(expected)) == 1 {
-				next.ServeHTTP(w, r)
-				return
-			}
-		}
-
-		w.Header().Set("WWW-Authenticate", `Bearer realm="portcullis-guard"`)
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-	})
+	apiEndpoint := s.cfg.Server.Endpoints["token_api"]
+	return middleware.BearerAuth(middleware.AuthConfig{
+		BearerToken: apiEndpoint.Auth.Credentials.BearerToken,
+		ClientCA:    apiEndpoint.TLS.ClientCA,
+		Realm:       "portcullis-guard",
+	})(next)
 }
 
 // verifyRequest parses and verifies a Keep-signed escalation request JWT.

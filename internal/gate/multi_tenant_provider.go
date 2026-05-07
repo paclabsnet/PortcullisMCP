@@ -32,16 +32,16 @@ import (
 type MultiTenantProvider struct {
 	tokenHeader string
 	sessions    SessionStore
-	logChan     chan<- DecisionLogEntry
+	logger      DecisionLogger
 }
 
-// NewMultiTenantProvider creates a MultiTenantProvider. logChan may be nil at
-// construction time and set later (e.g. once the Gate's channel is allocated).
-func NewMultiTenantProvider(tokenHeader string, sessions SessionStore, logChan chan<- DecisionLogEntry) *MultiTenantProvider {
+// NewMultiTenantProvider creates a MultiTenantProvider. logger may be nil at
+// construction time and set later (e.g. once the Gate's logger is allocated).
+func NewMultiTenantProvider(tokenHeader string, sessions SessionStore, logger DecisionLogger) *MultiTenantProvider {
 	return &MultiTenantProvider{
 		tokenHeader: tokenHeader,
 		sessions:    sessions,
-		logChan:     logChan,
+		logger:      logger,
 	}
 }
 
@@ -111,9 +111,8 @@ func (p *MultiTenantProvider) MapPolicyError(ctx context.Context, err error, too
 	}
 
 	sid, _ := SessionIDFromContext(ctx)
-	if p.logChan != nil {
-		select {
-		case p.logChan <- DecisionLogEntry{
+	if p.logger != nil {
+		p.logger.Log(DecisionLogEntry{
 			Timestamp: time.Now().UTC(),
 			SessionID: sid,
 			TraceID:   traceID,
@@ -121,9 +120,7 @@ func (p *MultiTenantProvider) MapPolicyError(ctx context.Context, err error, too
 			Decision:  "deny",
 			Reason:    "multi-tenant: escalation intercepted",
 			Source:    "gate-multitenant",
-		}:
-		default:
-		}
+		})
 	}
 
 	marker := cfg.Responsibility.Escalation.NoEscalationMarker

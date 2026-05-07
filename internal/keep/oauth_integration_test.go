@@ -128,7 +128,10 @@ func TestOAuthIntegration(t *testing.T) {
 	srv.cfg.Responsibility.Backends[0].UserIdentity.OAuth.CallbackURL = callbackURL
 
 	// Step 1: Initiate the OAuth flow.
-	authResult, err := router.tryStartOAuthFlow(ctx, backendName, testUserID)
+	authResult, err := router.tryStartOAuthFlow(ctx, backendName, testUserID, oauthEndpoints{
+		AuthorizationEndpoint: "https://auth.example/authorize",
+		TokenEndpoint:         tokenServer.URL + "/token",
+	})
 	if err != nil {
 		t.Fatalf("tryStartOAuthFlow: %v", err)
 	}

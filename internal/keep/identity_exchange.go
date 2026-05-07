@@ -130,7 +130,7 @@ func newIdentityExchangeClient(ctx context.Context, cfg BackendConfig, storage c
 		timeoutSecs = defaultExchangeTimeoutSecs
 	}
 
-	httpClient := noRedirectHTTPClient()
+	httpClient := newHTTPClient(false)
 	httpClient.Timeout = time.Duration(timeoutSecs) * time.Second
 
 	cacheTTL := time.Duration(cfg.UserIdentity.Exchange.Cache.TTL) * time.Second

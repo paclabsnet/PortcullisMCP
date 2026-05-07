@@ -104,7 +104,7 @@ func newFailingExchangeServer(t *testing.T) *httptest.Server {
 // installExchanger replaces the IdentityExchanger for backendName on r with
 // a live IdentityExchangeClient pointed at exchangeSrvURL.
 func installExchanger(r *Router, backendName, exchangeSrvURL string) {
-	hc := noRedirectHTTPClient()
+	hc := newHTTPClient(false)
 	hc.Timeout = 5 * time.Second
 	client := &IdentityExchangeClient{
 		url:         exchangeSrvURL,

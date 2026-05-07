@@ -22,7 +22,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -70,27 +69,6 @@ func clientHeadersFromContext(ctx context.Context) map[string][]string {
 	return v
 }
 
-// DecisionLogEntry is a fast-path decision log entry sent to Keep.
-type DecisionLogEntry struct {
-	Timestamp time.Time      `json:"timestamp"`
-	SessionID string         `json:"session_id"`
-	TraceID   string         `json:"trace_id"`
-	UserID    string         `json:"user_id"`
-	ToolName  string         `json:"tool_name"`
-	Decision  string         `json:"decision"` // "allow" | "deny"
-	Reason    string         `json:"reason"`
-	Source    string         `json:"source"` // always "gate-fastpath"
-	Arguments map[string]any `json:"arguments,omitempty"`
-}
-
-// pendingEscalation tracks an in-flight escalation request.
-type pendingEscalation struct {
-	ServerName string
-	ToolName   string
-	JTI        string
-	ExpiresAt  time.Time
-}
-
 // KeepForwarder defines the interface for communicating with Portcullis Keep.
 type KeepForwarder interface {
 	CallTool(ctx context.Context, req shared.EnrichedMCPRequest) (*mcp.CallToolResult, error)
@@ -110,12 +88,12 @@ type GuardSource interface {
 // Gate is the portcullis-gate MCP proxy server.
 type Gate struct {
 	cfg             Config
-	sessions        SessionStore           // handles session state
-	escalations     EscalationTokenStore   // handles escalation JWTs
-	pending         PendingEscalationStore // handles in-flight requests
-	identity        IdentitySource         // handles user info resolution
+	sessions        SessionStore         // handles session state
+	escalations     EscalationTokenStore // handles escalation JWTs
+	identity        IdentitySource       // handles user info resolution
 	forwarder       KeepForwarder
-	guardClient     GuardSource // nil if Guard endpoint not configured
+	escalationMgr   EscalationManager  // abstracts Guard interactions and pending escalation state
+	logger          DecisionLogger     // async decision log shipping
 	server          *mcp.Server
 	localFS         *mcp.ClientSession // in-process filesystem backend
 	localFSServer   *localfs.Server    // nil when localFS is disabled
@@ -124,9 +102,6 @@ type Gate struct {
 	sessionID       string
 	toolServerMap   map[string]string // tool name → backend server name
 	localFSTools    map[string]bool   // tools served by local filesystem
-	logChan         chan DecisionLogEntry
-	logDone         chan struct{}
-	logWg           sync.WaitGroup
 	provider        TenancyProvider
 
 	stateMachine *StateMachine
@@ -261,18 +236,23 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 		return nil, err
 	}
 
-	var oidcLoginMgr *OIDCLoginManager
-	if cfg.Identity.Strategy == "oidc-login" {
-		mgmtEndpoint := cfg.Server.Endpoints[ManagementUIEndpoint]
-		mgmtPort := DefaultManagementAPIPort
-		if mgmtEndpoint.Listen != "" {
-			_, portStr, err := net.SplitHostPort(mgmtEndpoint.Listen)
-			if err == nil {
-				fmt.Sscanf(portStr, "%d", &mgmtPort)
-			}
-		}
-		oidcLoginMgr = nil // placeholder; we need the Gate struct first
-	} else {
+	// Build the decision logger before the Gate struct so it can be wired to the
+	// MultiTenantProvider (which also emits decision log entries).
+	logger := NewBatchDecisionLogger(cfg.Responsibility.DecisionLogs, fwd)
+	if mtp, ok := provider.(*MultiTenantProvider); ok {
+		mtp.logger = logger
+	}
+
+	escalationMgr := NewEscalationManager(
+		guardClient,
+		NewInMemoryPendingStore(),
+		tokenStore,
+		cfg.Responsibility.Escalation,
+		provider,
+		identityCache,
+	)
+
+	if cfg.Identity.Strategy != "oidc-login" {
 		sm.SetAuthenticated()
 	}
 
@@ -281,22 +261,17 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 		sessions:      sessionStore,
 		identity:      identityCache,
 		escalations:   tokenStore,
-		pending:       NewInMemoryPendingStore(),
 		forwarder:     fwd,
-		guardClient:   guardClient,
+		escalationMgr: escalationMgr,
+		logger:        logger,
 		localFS:       localFSSession,
 		localFSServer: localFSServer,
 		localFSPolicy: initialLocalFSPolicy,
 		sessionID:     uuid.New().String(),
 		toolServerMap: make(map[string]string),
 		localFSTools:  make(map[string]bool),
-		logChan:       make(chan DecisionLogEntry, 1000),
-		logDone:       make(chan struct{}),
 		stateMachine:  sm,
 		provider:      provider,
-	}
-	if mtp, ok := provider.(*MultiTenantProvider); ok {
-		mtp.logChan = g.logChan
 	}
 
 	if cfg.Identity.Strategy == "oidc-login" {
@@ -308,7 +283,7 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 				fmt.Sscanf(portStr, "%d", &mgmtPort)
 			}
 		}
-		oidcLoginMgr = NewOIDCLoginManager(
+		oidcLoginMgr := NewOIDCLoginManager(
 			cfg.Identity.OIDCLogin,
 			mgmtPort,
 			cfg.Identity.LoginCallbackTimeoutSecs,
@@ -331,9 +306,6 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 		)
 		g.oidcLogin = oidcLoginMgr
 	}
-
-	g.logWg.Add(1)
-	go g.logWorker()
 
 	g.server = mcp.NewServer(&mcp.Implementation{
 		Name:    shared.ServiceGate,
@@ -475,7 +447,16 @@ func (g *Gate) handleLoginTool(ctx context.Context, force bool) string {
 	return "Login is not necessary."
 }
 
+// isProactive reports whether the configured escalation strategy is "proactive".
+// Used by buildEscalationMessage to select the correct approval URL format.
+func (g *Gate) isProactive() bool {
+	return g.cfg.Responsibility.Escalation.Strategy == "proactive"
+}
+
 func (g *Gate) Run(ctx context.Context) error {
+	// Start the decision log worker. It flushes remaining entries on ctx cancellation.
+	g.logger.Start(ctx)
+
 	// Management server and guard polling are single-tenant concerns.
 	// Multi-tenant mode forbids both by config validation.
 	if g.provider.Capabilities().AllowManagementUI {
@@ -497,16 +478,9 @@ func (g *Gate) Run(ctx context.Context) error {
 			return fmt.Errorf("start management api: %w", err)
 		}
 
-		if g.guardClient != nil {
-			interval := 60 * time.Second
-			if g.cfg.Responsibility.Escalation.PollInterval > 0 {
-				interval = time.Duration(g.cfg.Responsibility.Escalation.PollInterval) * time.Second
-			}
-			slog.Info("guard poll worker starting", "endpoint", g.cfg.Peers.Guard.resolvedAPIEndpoint(), "interval", interval)
-			go func() {
-				g.claimAllUnclaimedTokens(ctx)
-				g.pollGuardWorker(ctx)
-			}()
+		if g.cfg.Peers.Guard.resolvedAPIEndpoint() != "" {
+			slog.Info("guard poll worker starting", "endpoint", g.cfg.Peers.Guard.resolvedAPIEndpoint())
+			g.escalationMgr.StartPolling(ctx)
 		} else {
 			slog.Warn("guard endpoint not configured; escalation tokens must be added manually")
 		}
@@ -523,12 +497,6 @@ func (g *Gate) Run(ctx context.Context) error {
 		}()
 		g.startLocalFSPolicyRefresh(ctx)
 	}
-
-	go func() {
-		<-ctx.Done()
-		close(g.logDone)
-		g.logWg.Wait()
-	}()
 
 	// HTTP transport if an MCP endpoint is configured; otherwise fall back to stdio.
 	mcpEp, hasHTTP := g.cfg.Server.Endpoints[MCPEndpoint]
@@ -570,12 +538,11 @@ func (g *Gate) registerTool(tool *mcp.Tool) {
 	g.server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		var args map[string]any
 		if req.Params.Arguments != nil {
-			data, err := json.Marshal(req.Params.Arguments)
-			if err != nil {
-				return nil, fmt.Errorf("marshal tool arguments: %w", err)
-			}
-			if err := json.Unmarshal(data, &args); err != nil {
-				return nil, fmt.Errorf("unmarshal tool arguments: %w", err)
+			// req.Params.Arguments is json.RawMessage — already raw JSON bytes.
+			// Unmarshal directly instead of marshaling to bytes first, eliminating
+			// one redundant allocation and copy on every tool call.
+			if err := json.Unmarshal(req.Params.Arguments, &args); err != nil {
+				return nil, fmt.Errorf("decode tool arguments: %w", err)
 			}
 		}
 		return g.handleToolCall(ctx, req.Params.Name, args)
@@ -641,8 +608,7 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 		span.SetAttributes(attribute.String("pdp.decision", "allow"), attribute.String("pdp.source", "fastpath"))
 		slog.InfoContext(ctx, "fast-path allow", "tool", toolName, "path", path, "trace_id", traceID)
 
-		select {
-		case g.logChan <- DecisionLogEntry{
+		g.logger.Log(DecisionLogEntry{
 			Timestamp: time.Now().UTC(),
 			SessionID: sessionID,
 			TraceID:   traceID,
@@ -652,9 +618,7 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 			Reason:    "sandbox",
 			Source:    "gate-fastpath",
 			Arguments: args,
-		}:
-		default:
-		}
+		})
 
 		if g.localFS == nil {
 			return nil, fmt.Errorf("local filesystem server not configured")
@@ -669,8 +633,7 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 		span.SetStatus(codes.Error, "fast-path deny")
 		slog.InfoContext(ctx, "fast-path deny", "tool", toolName, "path", path, "trace_id", traceID)
 
-		select {
-		case g.logChan <- DecisionLogEntry{
+		g.logger.Log(DecisionLogEntry{
 			Timestamp: time.Now().UTC(),
 			SessionID: sessionID,
 			TraceID:   traceID,
@@ -680,9 +643,7 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 			Reason:    "protected path",
 			Source:    "gate-fastpath",
 			Arguments: args,
-		}:
-		default:
-		}
+		})
 
 		return nil, shared.ErrDenied
 	}
@@ -696,12 +657,12 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 			ToolName:         toolName,
 			Arguments:        args,
 			UserIdentity:     currentIdentity,
-			EscalationTokens: g.collectEscalationTokens(ctx, shared.LocalFSServerName, toolName),
+			EscalationTokens: g.escalationMgr.CollectTokens(ctx, shared.LocalFSServerName, toolName),
 			SessionID:        sessionID,
 			TraceID:          traceID,
 		}
 		if err := g.forwarder.Authorize(ctx, enriched); err != nil {
-			if storeErr := g.maybeStorePendingEscalation(ctx, shared.LocalFSServerName, toolName, err); storeErr != nil {
+			if storeErr := g.escalationMgr.StorePending(ctx, shared.LocalFSServerName, toolName, err); storeErr != nil {
 				return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: storeErr.Error()}}}, nil
 			}
 			return g.policyErrToResult(ctx, err, toolName, traceID)
@@ -726,14 +687,14 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 		ToolName:         toolName,
 		Arguments:        args,
 		UserIdentity:     currentIdentity,
-		EscalationTokens: g.collectEscalationTokens(ctx, serverName, toolName),
+		EscalationTokens: g.escalationMgr.CollectTokens(ctx, serverName, toolName),
 		SessionID:        sessionID,
 		TraceID:          traceID,
 		ClientHeaders:    clientHeadersFromContext(ctx),
 	}
 	result, err := g.forwarder.CallTool(ctx, enriched)
 	if err != nil {
-		if storeErr := g.maybeStorePendingEscalation(ctx, serverName, toolName, err); storeErr != nil {
+		if storeErr := g.escalationMgr.StorePending(ctx, serverName, toolName, err); storeErr != nil {
 			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: storeErr.Error()}}}, nil
 		}
 		return g.policyErrToResult(ctx, err, toolName, traceID)
@@ -742,370 +703,4 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 		result = g.enrichBackendAuthChallenge(result, serverName, toolName)
 	}
 	return result, err
-}
-
-func (g *Gate) collectEscalationTokens(ctx context.Context, serverName, toolName string) []shared.EscalationToken {
-	tokens := g.escalations.All()
-
-	if g.guardClient == nil {
-		return tokens
-	}
-
-	key := serverName + "/" + toolName
-	pending, hasPending := g.pending.Get(key)
-
-	if !hasPending {
-		return tokens
-	}
-	if pending.ExpiresAt.Before(time.Now()) {
-		g.pending.Delete(key)
-		return tokens
-	}
-
-	claimCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	raw, err := g.guardClient.ClaimToken(claimCtx, pending.JTI)
-	if err != nil {
-		slog.Warn("guard claim token failed", "jti", pending.JTI, "error", err)
-		return tokens
-	}
-	if raw == "" {
-		return tokens
-	}
-
-	tok, err := g.escalations.Add(ctx, raw)
-	if err != nil {
-		slog.Warn("store claimed escalation token failed", "jti", pending.JTI, "error", err)
-		return tokens
-	}
-
-	slog.Info("claimed escalation token from guard",
-		"jti", pending.JTI, "token_id", tok.TokenID,
-		"server", serverName, "tool", toolName)
-
-	g.pending.Delete(key)
-
-	return g.escalations.All()
-}
-
-func (g *Gate) maybeStorePendingEscalation(ctx context.Context, serverName, toolName string, err error) error {
-	if !g.provider.Capabilities().AllowHumanInLoop {
-		return nil // block storage in PendingEscalationStore in multi-tenant mode
-	}
-
-	var escalationErr *shared.EscalationPendingError
-	if !errors.As(err, &escalationErr) {
-		return nil
-	}
-	if escalationErr.EscalationJTI == "" {
-		return nil
-	}
-	if g.guardClient == nil {
-		return nil
-	}
-
-	if g.isProactive() {
-		pushCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		defer cancel()
-		if regErr := g.guardClient.RegisterPending(pushCtx, escalationErr.EscalationJTI, escalationErr.PendingJWT); regErr != nil {
-			slog.Error("proactive: failed to register pending escalation with Guard",
-				"jti", escalationErr.EscalationJTI, "error", regErr)
-			return fmt.Errorf("escalation required but Guard is currently unreachable")
-		}
-		slog.Info("proactive: registered pending escalation with Guard",
-			"jti", escalationErr.EscalationJTI, "server", serverName, "tool", toolName)
-	}
-
-	key := serverName + "/" + toolName
-	expiry := time.Now().Add(24 * time.Hour)
-
-	g.pending.Store(key, pendingEscalation{
-		ServerName: serverName,
-		ToolName:   toolName,
-		JTI:        escalationErr.EscalationJTI,
-		ExpiresAt:  expiry,
-	})
-
-	slog.Info("stored pending escalation",
-		"server", serverName, "tool", toolName, "jti", escalationErr.EscalationJTI)
-	return nil
-}
-
-func (g *Gate) isProactive() bool {
-	return g.cfg.Responsibility.Escalation.Strategy == "proactive"
-}
-
-const defaultRequireApprovalInstructions = "Escalation required: {reason}\n\nPresent this complete URL to the user so they can click it to approve the request. Do not truncate or shorten the URL:\n{url}\n\nTrace ID: {trace_id}"
-const defaultDenyInstructions = "Access denied: {reason}\n\nIf you believe this is incorrect, contact your security team and reference trace ID: {trace_id}"
-
-func (g *Gate) buildDenyMessage(reason, traceID string) string {
-	instructions := g.cfg.Responsibility.AgentInteraction.Instructions.Deny
-	if instructions == "" {
-		instructions = defaultDenyInstructions
-	}
-	msg := strings.ReplaceAll(instructions, "{reason}", reason)
-	msg = strings.ReplaceAll(msg, "{trace_id}", traceID)
-	return msg
-}
-
-func (g *Gate) buildEscalationMessage(e *shared.EscalationPendingError, traceID string) string {
-	guardEndpoint := g.cfg.Peers.Guard.Endpoints.ApprovalUI
-
-	var approvalURL string
-	if guardEndpoint != "" {
-		if g.isProactive() && e.EscalationJTI != "" {
-			approvalURL = guardEndpoint + "/approve?jti=" + url.QueryEscape(e.EscalationJTI)
-		} else if e.PendingJWT != "" {
-			approvalURL = guardEndpoint + "/approve?token=" + url.QueryEscape(e.PendingJWT)
-		}
-	}
-	if approvalURL == "" && e.Reference != "" {
-		approvalURL = e.Reference
-	}
-
-	if approvalURL == "" {
-		slog.Warn("escalation required but no approval URL available", "reason", e.Reason)
-		msg := "Escalation required: " + e.Reason
-		if msg != "" {
-			msg += "\n\nNo approval URL is available. The system may be misconfigured. Please contact your administrator."
-		}
-		return msg
-	}
-
-	instructions := g.cfg.Responsibility.AgentInteraction.Instructions.RequireApproval
-	if instructions == "" {
-		instructions = defaultRequireApprovalInstructions
-	}
-
-	msg := strings.ReplaceAll(instructions, "{reason}", e.Reason)
-	msg = strings.ReplaceAll(msg, "{url}", approvalURL)
-	msg = strings.ReplaceAll(msg, "{trace_id}", traceID)
-	return msg
-}
-
-func (g *Gate) pollGuardWorker(ctx context.Context) {
-	interval := 60 * time.Second
-	if g.cfg.Responsibility.Escalation.PollInterval > 0 {
-		interval = time.Duration(g.cfg.Responsibility.Escalation.PollInterval) * time.Second
-	}
-
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			g.claimAllUnclaimedTokens(ctx)
-		}
-	}
-}
-
-func (g *Gate) claimAllUnclaimedTokens(ctx context.Context) {
-	userID := g.identity.Get(ctx).UserID
-	if userID == "" {
-		return
-	}
-
-	listCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	unclaimed, err := g.guardClient.ListUnclaimedTokens(listCtx, userID)
-	if err != nil {
-		slog.Warn("poll guard unclaimed tokens failed", "error", err)
-		return
-	}
-	slog.Info("polled guard for unclaimed tokens", "user_id", userID, "count", len(unclaimed))
-	if len(unclaimed) == 0 {
-		return
-	}
-
-	for _, entry := range unclaimed {
-		claimCtx, claimCancel := context.WithTimeout(ctx, 5*time.Second)
-		raw, claimErr := g.guardClient.ClaimToken(claimCtx, entry.JTI)
-		claimCancel()
-
-		if claimErr != nil {
-			slog.Warn("guard poll claim failed", "jti", entry.JTI, "error", claimErr)
-			continue
-		}
-		if raw == "" {
-			continue
-		}
-
-		tok, storeErr := g.escalations.Add(ctx, raw)
-		if storeErr != nil {
-			slog.Warn("store polled token failed", "jti", entry.JTI, "error", storeErr)
-			continue
-		}
-
-		slog.Info("claimed escalation token via poll", "jti", entry.JTI, "token_id", tok.TokenID)
-
-		g.pending.DeleteByJTI(entry.JTI)
-	}
-}
-
-// enrichBackendAuthChallenge checks whether result is an error CallToolResult
-// whose content contains a WWW-Authenticate header from a backend HTTP response.
-// If so, it replaces the raw header dump with a structured, agent-friendly
-// message that names the backend, explains the auth challenge, and tells the
-// agent what to do. The check is case-insensitive so it works regardless of
-// how the header name was canonicalized by the HTTP stack.
-func (g *Gate) enrichBackendAuthChallenge(result *mcp.CallToolResult, serverName, toolName string) *mcp.CallToolResult {
-	if len(result.Content) == 0 {
-		return result
-	}
-	text, ok := result.Content[0].(*mcp.TextContent)
-	if !ok || text.Text == "" {
-		return result
-	}
-	var wwwAuth string
-	for _, line := range strings.Split(text.Text, "\n") {
-		idx := strings.IndexByte(line, ':')
-		if idx < 0 {
-			continue
-		}
-		if strings.EqualFold(strings.TrimSpace(line[:idx]), "www-authenticate") {
-			wwwAuth = strings.TrimSpace(line[idx+1:])
-			break
-		}
-	}
-	if wwwAuth == "" {
-		return result
-	}
-	msg := fmt.Sprintf(
-		"Authentication required to call tool %q on backend %q.\n\n"+
-			"The backend issued an authentication challenge:\n"+
-			"  WWW-Authenticate: %s\n\n"+
-			"Obtain a valid credential for the %q backend and ensure it is "+
-			"configured in your Gate identity settings, or contact your administrator.",
-		toolName, serverName, wwwAuth, serverName,
-	)
-	return &mcp.CallToolResult{
-		IsError: true,
-		Content: []mcp.Content{&mcp.TextContent{Text: msg}},
-	}
-}
-
-func (g *Gate) policyErrToResult(ctx context.Context, err error, toolName, traceID string) (*mcp.CallToolResult, error) {
-	var escalationErr *shared.EscalationPendingError
-	var denyErr *shared.DenyError
-	var identityErr *shared.IdentityVerificationError
-
-	if result, handled := g.provider.MapPolicyError(ctx, err, toolName, traceID, &g.cfg); handled {
-		return result, nil
-	}
-
-	switch {
-	case errors.As(err, &escalationErr):
-		effectiveTraceID := escalationErr.TraceID
-		if effectiveTraceID == "" {
-			effectiveTraceID = traceID
-		}
-		if g.cfg.Peers.Guard.resolvedAPIEndpoint() == "" {
-			slog.Warn("escalation required but Guard is not configured", "tool", toolName, "reason", escalationErr.Reason)
-			return &mcp.CallToolResult{
-				IsError: true,
-				Content: []mcp.Content{&mcp.TextContent{Text: g.buildDenyMessage(escalationErr.Reason, effectiveTraceID)}},
-			}, nil
-		}
-		return &mcp.CallToolResult{
-			IsError: true,
-			Content: []mcp.Content{&mcp.TextContent{Text: g.buildEscalationMessage(escalationErr, effectiveTraceID)}},
-		}, nil
-	case errors.As(err, &denyErr):
-		effectiveTraceID := denyErr.TraceID
-		if effectiveTraceID == "" {
-			effectiveTraceID = traceID
-		}
-		return &mcp.CallToolResult{
-			IsError: true,
-			Content: []mcp.Content{&mcp.TextContent{Text: g.buildDenyMessage(denyErr.Reason, effectiveTraceID)}},
-		}, nil
-	case errors.As(err, &identityErr):
-		slog.Warn("identity verification failed", "error", identityErr.Reason, "trace_id", traceID)
-		if g.cfg.Identity.Strategy == "oidc-login" {
-			g.stateMachine.SetUnauthenticated()
-			g.identity.Clear()
-			loginMsg := g.handleLoginTool(ctx, false)
-			return &mcp.CallToolResult{
-				IsError: true,
-				Content: []mcp.Content{&mcp.TextContent{Text: "Your authentication has expired. " + loginMsg}},
-			}, nil
-		}
-		return nil, err
-	case errors.Is(err, shared.ErrDenied):
-		return &mcp.CallToolResult{
-			IsError: true,
-			Content: []mcp.Content{&mcp.TextContent{Text: g.buildDenyMessage("", traceID)}},
-		}, nil
-	}
-	slog.Error("keep call failed", "error", err, "tool", toolName, "request_id", traceID)
-	return nil, err
-}
-
-func (g *Gate) logWorker() {
-	defer g.logWg.Done()
-
-	flushInterval := 30 * time.Second
-	if g.cfg.Responsibility.DecisionLogs.FlushInterval > 0 {
-		flushInterval = time.Duration(g.cfg.Responsibility.DecisionLogs.FlushInterval) * time.Second
-	}
-
-	maxBatchSize := 100
-	if g.cfg.Responsibility.DecisionLogs.MaxBatchSize > 0 {
-		maxBatchSize = g.cfg.Responsibility.DecisionLogs.MaxBatchSize
-	}
-
-	ticker := time.NewTicker(flushInterval)
-	defer ticker.Stop()
-
-	var batch []DecisionLogEntry
-
-	for {
-		select {
-		case <-g.logDone:
-			for {
-				select {
-				case entry := <-g.logChan:
-					batch = append(batch, entry)
-				default:
-					if len(batch) > 0 {
-						g.flushLogs(batch)
-					}
-					return
-				}
-			}
-
-		case entry := <-g.logChan:
-			batch = append(batch, entry)
-			if len(batch) >= maxBatchSize {
-				g.flushLogs(batch)
-				batch = batch[:0]
-			}
-
-		case <-ticker.C:
-			if len(batch) > 0 {
-				g.flushLogs(batch)
-				batch = batch[:0]
-			}
-		}
-	}
-}
-
-func (g *Gate) flushLogs(entries []DecisionLogEntry) {
-	if len(entries) == 0 {
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	if err := g.forwarder.SendLogs(ctx, entries); err != nil {
-		slog.Warn("failed to send decision logs to keep", "error", err, "count", len(entries))
-	} else {
-		slog.Debug("sent decision logs to keep", "count", len(entries))
-	}
 }
