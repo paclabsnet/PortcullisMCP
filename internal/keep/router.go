@@ -275,7 +275,7 @@ func (r *Router) tryStartOAuthFlow(ctx context.Context, serverName, userID strin
 	if cs == nil {
 		return nil, fmt.Errorf("no credentials store configured")
 	}
-	if err := cs.StorePending(ctx, nonce, pending); err != nil {
+	if err := cs.StorePending(ctx, nonce, pending, oauthCfg.FlowTimeout()); err != nil {
 		return nil, fmt.Errorf("store pending auth: %w", err)
 	}
 

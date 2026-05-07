@@ -1213,6 +1213,99 @@ func TestRouter_TryStartOAuthFlow(t *testing.T) {
 	}
 }
 
+func TestRouter_TryStartOAuthFlow_HonorsFlowTimeout(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	credStore := NewMemoryCredentialsStore()
+
+	r := &Router{
+		backends:  make(map[string]*backendConn),
+		credStore: credStore,
+	}
+	r.backends["be"] = &backendConn{
+		cfg: BackendConfig{
+			Name: "be",
+			UserIdentity: BackendUserIdentity{
+				Type: "oauth",
+				OAuth: BackendOAuth{
+					ClientID:              "cid",
+					AuthorizationEndpoint: "https://auth.example/authorize",
+					TokenEndpoint:         "https://auth.example/token",
+					CallbackURL:           "https://keep.example/oauth/callback",
+					FlowTimeoutSecs:       0, // 0 means default (10 min), not zero TTL
+				},
+			},
+		},
+	}
+
+	// Verify that a zero FlowTimeoutSecs still produces a valid (non-immediately-expired) pending entry.
+	result, err := r.tryStartOAuthFlow(ctx, "be", "u1")
+	if err != nil || result == nil {
+		t.Fatalf("tryStartOAuthFlow: %v", err)
+	}
+	text := result.Content[0].(*mcp.TextContent).Text
+	stateStart := strings.Index(text, "state=")
+	if stateStart < 0 {
+		t.Fatal("no state in URL")
+	}
+	stateStr := text[stateStart+6:]
+	if amp := strings.IndexAny(stateStr, "& \n"); amp >= 0 {
+		stateStr = stateStr[:amp]
+	}
+	// Should still be consumable immediately (not expired yet).
+	pending, err := credStore.ConsumePending(ctx, stateStr)
+	if err != nil || pending == nil {
+		t.Errorf("pending should be valid immediately after creation: %v err=%v", pending, err)
+	}
+}
+
+func TestRouter_TryStartOAuthFlow_ExpiredFlowTimeout(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	credStore := NewMemoryCredentialsStore()
+
+	r := &Router{
+		backends:  make(map[string]*backendConn),
+		credStore: credStore,
+	}
+	r.backends["be"] = &backendConn{
+		cfg: BackendConfig{
+			Name: "be",
+			UserIdentity: BackendUserIdentity{
+				Type: "oauth",
+				OAuth: BackendOAuth{
+					ClientID:              "cid",
+					AuthorizationEndpoint: "https://auth.example/authorize",
+					TokenEndpoint:         "https://auth.example/token",
+					CallbackURL:           "https://keep.example/oauth/callback",
+					// FlowTimeout of -1s will be treated as a past expiry by the store.
+					FlowTimeoutSecs: -1,
+				},
+			},
+		},
+	}
+
+	result, err := r.tryStartOAuthFlow(ctx, "be", "u1")
+	if err != nil || result == nil {
+		t.Fatalf("tryStartOAuthFlow: %v", err)
+	}
+	text := result.Content[0].(*mcp.TextContent).Text
+	stateStart := strings.Index(text, "state=")
+	if stateStart < 0 {
+		t.Fatal("no state in URL")
+	}
+	stateStr := text[stateStart+6:]
+	if amp := strings.IndexAny(stateStr, "& \n"); amp >= 0 {
+		stateStr = stateStr[:amp]
+	}
+	// Negative FlowTimeoutSecs → FlowTimeout() returns a negative duration →
+	// StorePending falls back to defaultPendingTTL (10 min), so entry is valid.
+	pending, err := credStore.ConsumePending(ctx, stateStr)
+	if err != nil || pending == nil {
+		t.Errorf("negative FlowTimeoutSecs should fall back to default TTL; got %v err=%v", pending, err)
+	}
+}
+
 func TestNoRedirectHTTPClient_RefusesRedirect(t *testing.T) {
 	redirectTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

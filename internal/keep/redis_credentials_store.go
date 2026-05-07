@@ -24,10 +24,7 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-const (
-	defaultCredStorePrefix  = "portcullis:keep:creds:"
-	pendingFlowTTL          = 10 * time.Minute
-)
+const defaultCredStorePrefix = "portcullis:keep:creds:"
 
 // redisCredentialsStore is a cluster-safe CredentialsStore backed by Redis.
 // It requires Redis 6.2+ for GETDEL support (used by ConsumePending).
@@ -88,14 +85,18 @@ func (s *redisCredentialsStore) DeleteToken(ctx context.Context, backend, userID
 	return s.client.Del(ctx, s.redisTokenKey(backend, userID)).Err()
 }
 
-// StorePending stores the pending OAuth flow state for nonce with a fixed TTL.
+// StorePending stores the pending OAuth flow state for nonce with the given TTL.
+// A zero or negative ttl falls back to defaultPendingTTL (10 minutes).
 // The nonce doubles as the OAuth state parameter.
-func (s *redisCredentialsStore) StorePending(ctx context.Context, nonce string, p *pendingAuth) error {
+func (s *redisCredentialsStore) StorePending(ctx context.Context, nonce string, p *pendingAuth, ttl time.Duration) error {
+	if ttl <= 0 {
+		ttl = defaultPendingTTL
+	}
 	data, err := json.Marshal(p)
 	if err != nil {
 		return fmt.Errorf("marshal pending: %w", err)
 	}
-	return s.client.Set(ctx, s.redisPendingKey(nonce), data, pendingFlowTTL).Err()
+	return s.client.Set(ctx, s.redisPendingKey(nonce), data, ttl).Err()
 }
 
 // ConsumePending atomically fetches and deletes the pending state for nonce

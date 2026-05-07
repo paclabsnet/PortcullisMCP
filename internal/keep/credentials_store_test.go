@@ -55,7 +55,7 @@ func TestMemoryCredentialsStore(t *testing.T) {
 
 	t.Run("pending ops (consume deletes)", func(t *testing.T) {
 		p := &pendingAuth{CodeVerifier: "v1", BackendName: "be", UserID: "u1"}
-		if err := s.StorePending(ctx, "n1", p); err != nil {
+		if err := s.StorePending(ctx, "n1", p, time.Minute); err != nil {
 			t.Fatalf("StorePending: %v", err)
 		}
 		gotP, err := s.ConsumePending(ctx, "n1")
@@ -76,6 +76,20 @@ func TestMemoryCredentialsStore(t *testing.T) {
 		got, err := s.ConsumePending(ctx, "nonexistent-nonce")
 		if err != nil || got != nil {
 			t.Errorf("Expected (nil,nil) for unknown nonce, got %v err=%v", got, err)
+		}
+	})
+
+	t.Run("pending entry expired by TTL", func(t *testing.T) {
+		fresh := NewMemoryCredentialsStore()
+		p := &pendingAuth{CodeVerifier: "exp-verifier"}
+		// Store with a tiny TTL; sleep until it has definitely passed.
+		if err := fresh.StorePending(ctx, "exp-nonce", p, time.Millisecond); err != nil {
+			t.Fatalf("StorePending: %v", err)
+		}
+		time.Sleep(5 * time.Millisecond)
+		got, err := fresh.ConsumePending(ctx, "exp-nonce")
+		if err != nil || got != nil {
+			t.Errorf("Expected (nil,nil) for expired nonce, got %v err=%v", got, err)
 		}
 	})
 

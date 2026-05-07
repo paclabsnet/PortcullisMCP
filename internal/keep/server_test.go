@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
@@ -480,7 +481,7 @@ func TestHandleOAuthCallback(t *testing.T) {
 		ClientID:      clientID,
 		RedirectURI:   "http://keep.example/oauth/callback",
 	}
-	_ = credStore.StorePending(context.Background(), nonce, pending)
+	_ = credStore.StorePending(context.Background(), nonce, pending, 5*time.Minute)
 
 	srv := &Server{
 		cfg: Config{

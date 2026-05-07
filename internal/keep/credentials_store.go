@@ -51,12 +51,24 @@ type CredentialsStore interface {
 	GetToken(ctx context.Context, backend, userID string) (*userToken, error)
 	SetToken(ctx context.Context, backend, userID string, token *userToken) error
 	DeleteToken(ctx context.Context, backend, userID string) error
-	StorePending(ctx context.Context, nonce string, p *pendingAuth) error
+	// StorePending stores the pending OAuth flow keyed by nonce.
+	// ttl controls how long the entry lives; implementations must enforce it so
+	// that the replay window matches the configured flow_timeout_secs.
+	// A zero or negative ttl falls back to a safe default (10 minutes).
+	StorePending(ctx context.Context, nonce string, p *pendingAuth, ttl time.Duration) error
 	// ConsumePending atomically returns and deletes the pending flow for nonce.
-	// Returns (nil, nil) if the nonce is unknown or already consumed.
+	// Returns (nil, nil) if the nonce is unknown, already consumed, or expired.
 	ConsumePending(ctx context.Context, nonce string) (*pendingAuth, error)
 	GetClientReg(ctx context.Context, backend string) (*clientReg, error)
 	SetClientReg(ctx context.Context, backend string, reg *clientReg) error
+}
+
+const defaultPendingTTL = 10 * time.Minute
+
+// pendingEntry wraps a pendingAuth with an expiry time for the memory store.
+type pendingEntry struct {
+	auth   *pendingAuth
+	expiry time.Time
 }
 
 // memoryCredentialsStore is a single-process, non-persistent CredentialsStore.
@@ -64,7 +76,7 @@ type CredentialsStore interface {
 type memoryCredentialsStore struct {
 	mu      sync.RWMutex
 	tokens  map[string]*userToken
-	pending map[string]*pendingAuth
+	pending map[string]*pendingEntry
 	clients map[string]*clientReg
 }
 
@@ -72,7 +84,7 @@ type memoryCredentialsStore struct {
 func NewMemoryCredentialsStore() CredentialsStore {
 	return &memoryCredentialsStore{
 		tokens:  make(map[string]*userToken),
-		pending: make(map[string]*pendingAuth),
+		pending: make(map[string]*pendingEntry),
 		clients: make(map[string]*clientReg),
 	}
 }
@@ -105,22 +117,28 @@ func (s *memoryCredentialsStore) DeleteToken(_ context.Context, backend, userID 
 	return nil
 }
 
-func (s *memoryCredentialsStore) StorePending(_ context.Context, nonce string, p *pendingAuth) error {
+func (s *memoryCredentialsStore) StorePending(_ context.Context, nonce string, p *pendingAuth, ttl time.Duration) error {
+	if ttl <= 0 {
+		ttl = defaultPendingTTL
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.pending[nonce] = p
+	s.pending[nonce] = &pendingEntry{auth: p, expiry: time.Now().Add(ttl)}
 	return nil
 }
 
 func (s *memoryCredentialsStore) ConsumePending(_ context.Context, nonce string) (*pendingAuth, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	p, ok := s.pending[nonce]
+	entry, ok := s.pending[nonce]
 	if !ok {
 		return nil, nil
 	}
 	delete(s.pending, nonce)
-	return p, nil
+	if time.Now().After(entry.expiry) {
+		return nil, nil // expired
+	}
+	return entry.auth, nil
 }
 
 func (s *memoryCredentialsStore) GetClientReg(_ context.Context, backend string) (*clientReg, error) {
