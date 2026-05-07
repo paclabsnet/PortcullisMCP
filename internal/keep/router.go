@@ -16,6 +16,9 @@ package keep
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
 	"log/slog"
 	"net"
@@ -25,6 +28,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -51,6 +55,8 @@ type Router struct {
 	exchangeMu    sync.RWMutex
 	exchangers    map[string]IdentityExchanger
 	storageConfig cfgloader.StorageConfig
+	credStoreMu   sync.RWMutex
+	credStore     CredentialsStore
 }
 
 type backendConn struct {
@@ -88,6 +94,22 @@ func NewRouter(backends []BackendConfig, storage ...cfgloader.StorageConfig) *Ro
 	return r
 }
 
+// SetCredentialsStore attaches a CredentialsStore to the Router for OAuth token
+// lookups and pending-flow state management.
+func (r *Router) SetCredentialsStore(cs CredentialsStore) {
+	r.credStoreMu.Lock()
+	r.credStore = cs
+	r.credStoreMu.Unlock()
+}
+
+// getCredStore returns the configured CredentialsStore or nil if not set.
+func (r *Router) getCredStore() CredentialsStore {
+	r.credStoreMu.RLock()
+	cs := r.credStore
+	r.credStoreMu.RUnlock()
+	return cs
+}
+
 // CallTool routes a tool call to the named backend server.
 // toolName is the alias as seen by the agent and PDP; it is un-aliased to the
 // real backend tool name before dispatch so the PDP always evaluates the alias.
@@ -101,10 +123,24 @@ func (r *Router) CallTool(ctx context.Context, serverName, toolName string, args
 
 	backendToolName := r.resolveToolName(serverName, toolName)
 
-	// Apply identity exchange if configured for this backend. This replaces the
-	// raw token in the context with the backend-specific exchanged value, or
-	// clears it on failure so that neither header nor path injection occurs.
+	// Apply identity exchange if configured for this backend (type "" or "exchange").
+	// This replaces the raw token in the context with the backend-specific exchanged
+	// value, or clears it on failure so that neither header nor path injection occurs.
 	ctx = r.applyIdentityExchange(ctx, serverName)
+
+	// For OAuth backends, pre-fetch a valid token from the CredentialsStore and
+	// stash it in the context so the RoundTripper can inject it as a Bearer header.
+	if r.backendType(serverName) == "oauth" {
+		userID := userIDFromContext(ctx)
+		if userID != "" {
+			if cs := r.getCredStore(); cs != nil {
+				tok, err := cs.GetToken(ctx, serverName, userID)
+				if err == nil && tok != nil && time.Now().Before(tok.Expiry) {
+					ctx = withOAuthToken(ctx, tok.AccessToken)
+				}
+			}
+		}
+	}
 
 	// Apply identity path injection before dispatch. A shallow copy of args is
 	// created so the original map (referenced by the async decision log) is
@@ -153,6 +189,21 @@ func (r *Router) CallTool(ctx context.Context, serverName, toolName string, args
 		headers := respCap.headers
 		respCap.mu.Unlock()
 		if statusCode != 0 {
+			// For OAuth backends a 401 means the stored token is missing or
+			// expired.  Initiate a new authorization flow and return the auth
+			// URL to the agent so it can prompt the user.
+			if statusCode == http.StatusUnauthorized && r.backendType(serverName) == "oauth" {
+				userID := userIDFromContext(ctx)
+				authResult, flowErr := r.tryStartOAuthFlow(ctx, serverName, userID)
+				if flowErr != nil {
+					slog.Warn("keep: failed to start OAuth flow after 401", "backend", serverName, "error", flowErr)
+					// Fall through to the generic error path below.
+				} else {
+					span.SetStatus(codes.Error, "oauth flow required")
+					return authResult, nil
+				}
+			}
+
 			var sb strings.Builder
 			fmt.Fprintf(&sb, "Backend returned HTTP %d %s\n", statusCode, http.StatusText(statusCode))
 			for k, vs := range headers {
@@ -169,6 +220,114 @@ func (r *Router) CallTool(ctx context.Context, serverName, toolName string, args
 		span.SetStatus(codes.Error, err.Error())
 	}
 	return result, err
+}
+
+// backendType returns the UserIdentity.Type for the named backend, or "" if unknown.
+func (r *Router) backendType(serverName string) string {
+	r.mu.Lock()
+	conn, ok := r.backends[serverName]
+	r.mu.Unlock()
+	if !ok {
+		return ""
+	}
+	conn.cfgMu.RLock()
+	t := conn.cfg.UserIdentity.Type
+	conn.cfgMu.RUnlock()
+	return t
+}
+
+// tryStartOAuthFlow generates a PKCE authorization URL for the named backend
+// and returns a CallToolResult that instructs the agent to prompt the user to
+// visit the URL.  The pending PKCE state is stored in the CredentialsStore.
+func (r *Router) tryStartOAuthFlow(ctx context.Context, serverName, userID string) (*mcp.CallToolResult, error) {
+	r.mu.Lock()
+	conn, ok := r.backends[serverName]
+	r.mu.Unlock()
+	if !ok {
+		return nil, fmt.Errorf("unknown backend %q", serverName)
+	}
+
+	conn.cfgMu.RLock()
+	oauthCfg := conn.cfg.UserIdentity.OAuth
+	conn.cfgMu.RUnlock()
+
+	codeVerifier, err := generatePKCEVerifier()
+	if err != nil {
+		return nil, fmt.Errorf("generate pkce verifier: %w", err)
+	}
+	codeChallenge := pkceChallenge(codeVerifier)
+
+	nonce, err := generateNonce()
+	if err != nil {
+		return nil, fmt.Errorf("generate nonce: %w", err)
+	}
+
+	pending := &pendingAuth{
+		CodeVerifier:  codeVerifier,
+		BackendName:   serverName,
+		UserID:        userID,
+		TokenEndpoint: oauthCfg.TokenEndpoint,
+		ClientID:      oauthCfg.ClientID,
+		RedirectURI:   oauthCfg.CallbackURL,
+	}
+
+	cs := r.getCredStore()
+	if cs == nil {
+		return nil, fmt.Errorf("no credentials store configured")
+	}
+	if err := cs.StorePending(ctx, nonce, pending); err != nil {
+		return nil, fmt.Errorf("store pending auth: %w", err)
+	}
+
+	authURL := buildAuthURL(oauthCfg.AuthorizationEndpoint, oauthCfg.ClientID, oauthCfg.CallbackURL, oauthCfg.Scopes, nonce, codeChallenge)
+	slog.Info("keep: OAuth flow initiated", "backend", serverName, "user_id", userID)
+
+	return &mcp.CallToolResult{
+		IsError: true,
+		Content: []mcp.Content{&mcp.TextContent{
+			Text: fmt.Sprintf("Authentication required for backend %q. Please open the following URL to authorize:\n\n%s\n\nAfter authorizing, retry the request.", serverName, authURL),
+		}},
+	}, nil
+}
+
+// generatePKCEVerifier creates a high-entropy code verifier for PKCE (RFC 7636).
+// The verifier is 32 random bytes encoded as base64url without padding.
+func generatePKCEVerifier() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// pkceChallenge computes the S256 code challenge for a given code verifier.
+func pkceChallenge(verifier string) string {
+	h := sha256.Sum256([]byte(verifier))
+	return base64.RawURLEncoding.EncodeToString(h[:])
+}
+
+// generateNonce generates a 16-byte random state/nonce parameter.
+func generateNonce() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// buildAuthURL constructs the authorization endpoint URL with PKCE and state parameters.
+func buildAuthURL(authEndpoint, clientID, redirectURI string, scopes []string, state, codeChallenge string) string {
+	params := url.Values{}
+	params.Set("response_type", "code")
+	params.Set("client_id", clientID)
+	params.Set("redirect_uri", redirectURI)
+	if len(scopes) > 0 {
+		params.Set("scope", strings.Join(scopes, " "))
+	}
+	params.Set("state", state)
+	params.Set("code_challenge", codeChallenge)
+	params.Set("code_challenge_method", "S256")
+	return authEndpoint + "?" + params.Encode()
 }
 
 // identityPathFor returns the IdentityPath configured for the named backend, or
@@ -562,12 +721,21 @@ func (t *headerInjectingRoundTripper) RoundTrip(req *http.Request) (*http.Respon
 	fwdHeaders := t.conn.cfg.ForwardHeaders
 	dropHeaders := t.conn.cfg.DropHeaders
 	identityHeader := t.conn.cfg.UserIdentity.Placement.Header
+	identityType := t.conn.cfg.UserIdentity.Type
+	apiKeyValue := t.conn.cfg.UserIdentity.APIKey.Source
 	t.conn.cfgMu.RUnlock()
+
+	oauthToken := oauthTokenFromContext(req.Context())
 
 	var resp *http.Response
 	var err error
 
-	if len(clientHeaders) == 0 && (identityHeader == "" || identity == nil) {
+	needsInjection := len(clientHeaders) > 0 ||
+		(identityHeader != "" && identity != nil) ||
+		(identityType == "api_key" && identityHeader != "" && apiKeyValue != "") ||
+		(identityType == "oauth" && oauthToken != "")
+
+	if !needsInjection {
 		// Nothing to inject; skip cloning.
 		resp, err = t.inner.RoundTrip(req)
 	} else {
@@ -605,15 +773,29 @@ func (t *headerInjectingRoundTripper) RoundTrip(req *http.Request) (*http.Respon
 		// Inject identity header last so it overrides any forwarded client header
 		// of the same name. JSON object/array identities cannot be header values —
 		// skip with a warning so the request still proceeds (non-fatal).
-		if identityHeader != "" {
-			if identity == nil {
-				slog.Warn("keep: identity injection configured but no identity token in context — skipping header injection", "backend", t.conn.cfg.Name, "header", identityHeader)
-			} else if identity.Structured != nil {
-				slog.Warn("keep: identity exchange returned a JSON object/array; cannot inject as HTTP header, skipping header injection",
-					"backend", t.conn.cfg.Name, "header", identityHeader)
-			} else {
-				outReq.Header.Set(identityHeader, identity.Str)
-				slog.Info("keep: injected identity into request header", "backend", t.conn.cfg.Name, "header", identityHeader)
+		switch identityType {
+		case "api_key":
+			if identityHeader != "" && apiKeyValue != "" {
+				outReq.Header.Set(identityHeader, apiKeyValue)
+				slog.Info("keep: injected api_key into request header", "backend", t.conn.cfg.Name, "header", identityHeader)
+			}
+		case "oauth":
+			if oauthToken != "" {
+				outReq.Header.Set("Authorization", "Bearer "+oauthToken)
+				slog.Info("keep: injected OAuth token into request header", "backend", t.conn.cfg.Name)
+			}
+		default:
+			// "" or "exchange" — use the exchanged identity (existing behaviour).
+			if identityHeader != "" {
+				if identity == nil {
+					slog.Warn("keep: identity injection configured but no identity token in context — skipping header injection", "backend", t.conn.cfg.Name, "header", identityHeader)
+				} else if identity.Structured != nil {
+					slog.Warn("keep: identity exchange returned a JSON object/array; cannot inject as HTTP header, skipping header injection",
+						"backend", t.conn.cfg.Name, "header", identityHeader)
+				} else {
+					outReq.Header.Set(identityHeader, identity.Str)
+					slog.Info("keep: injected identity into request header", "backend", t.conn.cfg.Name, "header", identityHeader)
+				}
 			}
 		}
 

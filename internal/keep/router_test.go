@@ -1106,6 +1106,113 @@ func TestValidateBackendConfig_UnifiedIdentityTypes(t *testing.T) {
 	}
 }
 
+func TestPKCEHelpers(t *testing.T) {
+	t.Parallel()
+
+	verifier, err := generatePKCEVerifier()
+	if err != nil {
+		t.Fatalf("generatePKCEVerifier: %v", err)
+	}
+	if len(verifier) < 40 {
+		t.Errorf("verifier too short: %q", verifier)
+	}
+
+	challenge := pkceChallenge(verifier)
+	if len(challenge) == 0 {
+		t.Error("empty challenge")
+	}
+	// Different verifiers must produce different challenges.
+	v2, _ := generatePKCEVerifier()
+	if pkceChallenge(v2) == challenge {
+		t.Error("different verifiers should produce different challenges")
+	}
+
+	nonce, err := generateNonce()
+	if err != nil {
+		t.Fatalf("generateNonce: %v", err)
+	}
+	if len(nonce) == 0 {
+		t.Error("empty nonce")
+	}
+}
+
+func TestBuildAuthURL(t *testing.T) {
+	t.Parallel()
+	u := buildAuthURL("https://auth.example/authorize", "client-id", "https://keep.example/cb",
+		[]string{"read", "write"}, "state-123", "challenge-abc")
+	if !strings.Contains(u, "response_type=code") {
+		t.Errorf("missing response_type: %s", u)
+	}
+	if !strings.Contains(u, "code_challenge_method=S256") {
+		t.Errorf("missing code_challenge_method: %s", u)
+	}
+	if !strings.Contains(u, "state=state-123") {
+		t.Errorf("missing state: %s", u)
+	}
+	if !strings.Contains(u, "scope=read+write") && !strings.Contains(u, "scope=read%20write") {
+		t.Errorf("missing scope: %s", u)
+	}
+}
+
+func TestRouter_TryStartOAuthFlow(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	credStore := NewMemoryCredentialsStore()
+
+	r := &Router{
+		backends:  make(map[string]*backendConn),
+		credStore: credStore,
+	}
+	r.backends["my-backend"] = &backendConn{
+		cfg: BackendConfig{
+			Name: "my-backend",
+			UserIdentity: BackendUserIdentity{
+				Type: "oauth",
+				OAuth: BackendOAuth{
+					ClientID:              "cid",
+					AuthorizationEndpoint: "https://auth.example/authorize",
+					TokenEndpoint:         "https://auth.example/token",
+					CallbackURL:           "https://keep.example/oauth/callback",
+					Scopes:                []string{"openid", "api"},
+				},
+			},
+		},
+	}
+
+	result, err := r.tryStartOAuthFlow(ctx, "my-backend", "user-1")
+	if err != nil {
+		t.Fatalf("tryStartOAuthFlow: %v", err)
+	}
+	if !result.IsError {
+		t.Error("expected IsError=true for auth URL result")
+	}
+	text := result.Content[0].(*mcp.TextContent).Text
+	if !strings.Contains(text, "https://auth.example/authorize") {
+		t.Errorf("result text missing auth URL: %q", text)
+	}
+	if !strings.Contains(text, "code_challenge_method=S256") {
+		t.Errorf("result text missing PKCE challenge method: %q", text)
+	}
+
+	// Verify pending state was stored.
+	// Extract the state parameter from the URL in the text.
+	stateStart := strings.Index(text, "state=")
+	if stateStart < 0 {
+		t.Fatal("no state parameter in URL")
+	}
+	stateStr := text[stateStart+6:]
+	if amp := strings.IndexAny(stateStr, "& \n"); amp >= 0 {
+		stateStr = stateStr[:amp]
+	}
+	pending, err := credStore.ConsumePending(ctx, stateStr)
+	if err != nil || pending == nil {
+		t.Fatalf("pending state not found for nonce %q: %v", stateStr, err)
+	}
+	if pending.BackendName != "my-backend" || pending.UserID != "user-1" {
+		t.Errorf("pending mismatch: %+v", pending)
+	}
+}
+
 func TestNoRedirectHTTPClient_RefusesRedirect(t *testing.T) {
 	redirectTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
