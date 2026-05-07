@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/mitchellh/mapstructure"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -385,11 +386,67 @@ type ToolListConfig struct {
 }
 
 // BackendUserIdentity groups all per-backend identity injection and exchange settings.
+//
+// Type selects the authentication strategy:
+//   - "" or "none"     – no identity injection (default / legacy)
+//   - "exchange"       – exchange raw token via an HTTP service (legacy explicit form)
+//   - "api_key"        – inject a static API key from APIKey.Source
+//   - "oauth"          – OAuth 2.1 PKCE flow managed by Keep
+//
+// Placement controls where the resolved identity value is injected into outgoing
+// requests.  Exchange configures the optional token-exchange service (used when
+// Type is "" or "exchange").
 type BackendUserIdentity struct {
-	// Placement controls where the identity value is injected.
+	Type      string                   `yaml:"type"` // none | exchange | api_key | oauth
 	Placement BackendIdentityPlacement `yaml:"placement"`
-	// Exchange, if non-zero, enables identity exchange for this backend.
-	Exchange BackendIdentityExchange `yaml:"exchange"`
+	Exchange  BackendIdentityExchange  `yaml:"exchange"`
+	OAuth     BackendOAuth             `yaml:"oauth"`
+	APIKey    BackendAPIKey            `yaml:"api_key"`
+}
+
+// BackendOAuth configures an OAuth 2.1 PKCE authorization-code flow for a backend.
+type BackendOAuth struct {
+	// ClientID is the OAuth client identifier registered with the authorization server.
+	ClientID string `yaml:"client_id"`
+	// AuthorizationEndpoint is the URL of the authorization endpoint.
+	AuthorizationEndpoint string `yaml:"authorization_endpoint"`
+	// TokenEndpoint is the URL used for code-for-token exchange.
+	TokenEndpoint string `yaml:"token_endpoint"`
+	// CallbackURL is the redirect URI registered with the authorization server.
+	// Keep's /oauth/callback handler must be reachable at this URL.
+	CallbackURL string `yaml:"callback_url"`
+	// Scopes is the list of OAuth scopes to request.
+	Scopes []string `yaml:"scopes"`
+	// RefreshWindowSecs is the number of seconds before expiry at which Keep will
+	// proactively refresh the access token.  0 disables proactive refresh.
+	RefreshWindowSecs int `yaml:"refresh_window_secs"`
+	// FlowTimeoutSecs is the maximum number of seconds to wait for the user to
+	// complete the browser-based authorization flow.  0 uses the store default (10 min).
+	FlowTimeoutSecs int `yaml:"flow_timeout_secs"`
+	// StoreRefreshTokens controls whether Keep persists the refresh token in the
+	// CredentialsStore.  Set to false if the authorization server does not issue them.
+	StoreRefreshTokens bool `yaml:"store_refresh_tokens"`
+}
+
+// RefreshWindow returns RefreshWindowSecs as a time.Duration.
+func (o *BackendOAuth) RefreshWindow() time.Duration {
+	return time.Duration(o.RefreshWindowSecs) * time.Second
+}
+
+// FlowTimeout returns FlowTimeoutSecs as a time.Duration, defaulting to 10 minutes.
+func (o *BackendOAuth) FlowTimeout() time.Duration {
+	if o.FlowTimeoutSecs <= 0 {
+		return 10 * time.Minute
+	}
+	return time.Duration(o.FlowTimeoutSecs) * time.Second
+}
+
+// BackendAPIKey configures static API key injection for a backend.
+// The Source field contains the resolved API key value (supports ${VAR} syntax at
+// config load time).  Use Placement.Header to specify the destination header name.
+type BackendAPIKey struct {
+	// Source is the API key value to inject (e.g. "Bearer ${MY_SECRET_KEY}").
+	Source string `yaml:"source"`
 }
 
 // BackendIdentityPlacement specifies where the identity value is placed in outgoing requests.
@@ -502,8 +559,8 @@ func (l *LimitsConfig) ApplyDefaults() {
 	}
 }
 
-// validateBackendConfig checks that user_identity placement, exchange, and
-// tool_list settings are well-formed and safe when set on a BackendConfig.
+// validateBackendConfig checks that user_identity placement, exchange, OAuth,
+// api_key, and tool_list settings are well-formed and safe when set on a BackendConfig.
 func validateBackendConfig(cfg *BackendConfig) error {
 	h := cfg.UserIdentity.Placement.Header
 	p := cfg.UserIdentity.Placement.JSONPath
@@ -525,13 +582,52 @@ func validateBackendConfig(cfg *BackendConfig) error {
 			return fmt.Errorf("user_identity.placement.json_path: %w", err)
 		}
 	}
-	if u := cfg.UserIdentity.Exchange.URL; u != "" {
+
+	switch cfg.UserIdentity.Type {
+	case "", "none":
+		// No identity injection; exchange URL may still be set (legacy zero-type behaviour).
+		if u := cfg.UserIdentity.Exchange.URL; u != "" {
+			if h == "" && p == "" {
+				return fmt.Errorf("user_identity.exchange.url is set but neither header nor json_path is configured — at least one placement must be set")
+			}
+			if err := checkBackendURL(u, cfg.AllowPrivateAddresses); err != nil {
+				return fmt.Errorf("user_identity.exchange.url: %w", err)
+			}
+		}
+	case "exchange":
+		u := cfg.UserIdentity.Exchange.URL
+		if u == "" {
+			return fmt.Errorf("user_identity.type \"exchange\" requires user_identity.exchange.url to be set")
+		}
 		if h == "" && p == "" {
 			return fmt.Errorf("user_identity.exchange.url is set but neither header nor json_path is configured — at least one placement must be set")
 		}
 		if err := checkBackendURL(u, cfg.AllowPrivateAddresses); err != nil {
 			return fmt.Errorf("user_identity.exchange.url: %w", err)
 		}
+	case "api_key":
+		if cfg.UserIdentity.APIKey.Source == "" {
+			return fmt.Errorf("user_identity.type \"api_key\" requires user_identity.api_key.source to be set")
+		}
+		if h == "" {
+			return fmt.Errorf("user_identity.type \"api_key\" requires user_identity.placement.header to specify the destination header")
+		}
+	case "oauth":
+		o := cfg.UserIdentity.OAuth
+		if o.ClientID == "" {
+			return fmt.Errorf("user_identity.oauth.client_id is required when type is \"oauth\"")
+		}
+		if o.AuthorizationEndpoint == "" {
+			return fmt.Errorf("user_identity.oauth.authorization_endpoint is required when type is \"oauth\"")
+		}
+		if o.TokenEndpoint == "" {
+			return fmt.Errorf("user_identity.oauth.token_endpoint is required when type is \"oauth\"")
+		}
+		if o.CallbackURL == "" {
+			return fmt.Errorf("user_identity.oauth.callback_url is required when type is \"oauth\"")
+		}
+	default:
+		return fmt.Errorf("user_identity.type %q is invalid; must be one of: none, exchange, api_key, oauth", cfg.UserIdentity.Type)
 	}
 
 	if cfg.ToolList.Source == "file" {

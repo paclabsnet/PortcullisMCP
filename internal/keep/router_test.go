@@ -972,6 +972,140 @@ func TestValidateBackendConfig_EnforceAuthToolList(t *testing.T) {
 	t.Logf("loaded %d tools from enforceauth_mcp.json", len(cfg.StaticTools))
 }
 
+func TestValidateBackendConfig_UnifiedIdentityTypes(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		cfg     BackendConfig
+		wantErr bool
+		errFrag string
+	}{
+		{
+			name: "type oauth valid",
+			cfg: BackendConfig{
+				AllowPrivateAddresses: true,
+				UserIdentity: BackendUserIdentity{
+					Type: "oauth",
+					OAuth: BackendOAuth{
+						ClientID:              "cid",
+						AuthorizationEndpoint: "https://auth.example/authorize",
+						TokenEndpoint:         "https://auth.example/token",
+						CallbackURL:           "https://keep.example/oauth/callback",
+					},
+				},
+			},
+		},
+		{
+			name: "type oauth missing client_id",
+			cfg: BackendConfig{
+				UserIdentity: BackendUserIdentity{
+					Type: "oauth",
+					OAuth: BackendOAuth{
+						AuthorizationEndpoint: "https://auth.example/authorize",
+						TokenEndpoint:         "https://auth.example/token",
+						CallbackURL:           "https://keep.example/oauth/callback",
+					},
+				},
+			},
+			wantErr: true,
+			errFrag: "client_id",
+		},
+		{
+			name: "type oauth missing authorization_endpoint",
+			cfg: BackendConfig{
+				UserIdentity: BackendUserIdentity{
+					Type: "oauth",
+					OAuth: BackendOAuth{
+						ClientID:    "cid",
+						TokenEndpoint: "https://auth.example/token",
+						CallbackURL:  "https://keep.example/oauth/callback",
+					},
+				},
+			},
+			wantErr: true,
+			errFrag: "authorization_endpoint",
+		},
+		{
+			name: "type api_key valid",
+			cfg: BackendConfig{
+				UserIdentity: BackendUserIdentity{
+					Type:      "api_key",
+					Placement: BackendIdentityPlacement{Header: "X-Api-Key"},
+					APIKey:    BackendAPIKey{Source: "my-secret-key"},
+				},
+			},
+		},
+		{
+			name: "type api_key missing source",
+			cfg: BackendConfig{
+				UserIdentity: BackendUserIdentity{
+					Type:      "api_key",
+					Placement: BackendIdentityPlacement{Header: "X-Api-Key"},
+				},
+			},
+			wantErr: true,
+			errFrag: "api_key.source",
+		},
+		{
+			name: "type api_key missing header",
+			cfg: BackendConfig{
+				UserIdentity: BackendUserIdentity{
+					Type:   "api_key",
+					APIKey: BackendAPIKey{Source: "secret"},
+				},
+			},
+			wantErr: true,
+			errFrag: "placement.header",
+		},
+		{
+			name: "type exchange valid",
+			cfg: BackendConfig{
+				AllowPrivateAddresses: true,
+				UserIdentity: BackendUserIdentity{
+					Type:      "exchange",
+					Placement: BackendIdentityPlacement{Header: "X-Identity"},
+					Exchange:  BackendIdentityExchange{URL: "http://exchange.internal/v1"},
+				},
+			},
+		},
+		{
+			name: "type exchange missing url",
+			cfg: BackendConfig{
+				UserIdentity: BackendUserIdentity{
+					Type:      "exchange",
+					Placement: BackendIdentityPlacement{Header: "X-Identity"},
+				},
+			},
+			wantErr: true,
+			errFrag: "exchange.url",
+		},
+		{
+			name: "invalid type",
+			cfg: BackendConfig{
+				UserIdentity: BackendUserIdentity{Type: "magic"},
+			},
+			wantErr: true,
+			errFrag: "invalid",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateBackendConfig(&tc.cfg)
+			if tc.wantErr {
+				if err == nil {
+					t.Errorf("expected error containing %q, got nil", tc.errFrag)
+				} else if tc.errFrag != "" && !strings.Contains(err.Error(), tc.errFrag) {
+					t.Errorf("error %q does not contain %q", err, tc.errFrag)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+			}
+		})
+	}
+}
+
 func TestNoRedirectHTTPClient_RefusesRedirect(t *testing.T) {
 	redirectTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
