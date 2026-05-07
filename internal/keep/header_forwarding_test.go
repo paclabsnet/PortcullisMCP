@@ -411,3 +411,73 @@ func TestValidateClientHeaders_ExactlyAtLimit(t *testing.T) {
 		t.Errorf("headers exactly at limit should pass: %v", err)
 	}
 }
+
+func makeConn(cfg BackendConfig) *backendConn {
+	return &backendConn{cfg: cfg}
+}
+
+func TestHeaderInjectingRoundTripper_APIKey(t *testing.T) {
+	backend, received, mu := roundTripperTestServer(t)
+
+	conn := makeConn(BackendConfig{
+		Name: "api-be",
+		UserIdentity: BackendUserIdentity{
+			Type:      "api_key",
+			Placement: BackendIdentityPlacement{Header: "X-Api-Key"},
+			APIKey:    BackendAPIKey{Source: "my-secret-key"},
+		},
+	})
+	rt := &headerInjectingRoundTripper{conn: conn, inner: http.DefaultTransport}
+	doRoundTrip(t, rt, backend.URL, context.Background())
+
+	mu.Lock()
+	got := (*received).Get("X-Api-Key")
+	mu.Unlock()
+	if got != "my-secret-key" {
+		t.Errorf("X-Api-Key: got %q, want %q", got, "my-secret-key")
+	}
+}
+
+func TestHeaderInjectingRoundTripper_OAuthToken(t *testing.T) {
+	backend, received, mu := roundTripperTestServer(t)
+
+	conn := makeConn(BackendConfig{
+		Name: "oauth-be",
+		UserIdentity: BackendUserIdentity{
+			Type: "oauth",
+		},
+	})
+	rt := &headerInjectingRoundTripper{conn: conn, inner: http.DefaultTransport}
+
+	ctx := withOAuthToken(context.Background(), "tok-xyz")
+	doRoundTrip(t, rt, backend.URL, ctx)
+
+	mu.Lock()
+	got := (*received).Get("Authorization")
+	mu.Unlock()
+	if got != "Bearer tok-xyz" {
+		t.Errorf("Authorization: got %q, want %q", got, "Bearer tok-xyz")
+	}
+}
+
+func TestHeaderInjectingRoundTripper_OAuthToken_Missing_NoInject(t *testing.T) {
+	backend, received, mu := roundTripperTestServer(t)
+
+	conn := makeConn(BackendConfig{
+		Name: "oauth-be",
+		UserIdentity: BackendUserIdentity{
+			Type: "oauth",
+		},
+	})
+	rt := &headerInjectingRoundTripper{conn: conn, inner: http.DefaultTransport}
+
+	// No OAuth token in context — Authorization header should not be injected.
+	doRoundTrip(t, rt, backend.URL, context.Background())
+
+	mu.Lock()
+	got := (*received).Get("Authorization")
+	mu.Unlock()
+	if got != "" {
+		t.Errorf("Authorization should not be set without token, got %q", got)
+	}
+}
