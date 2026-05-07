@@ -16,6 +16,7 @@ package keep
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -23,6 +24,7 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"time"
 	"sync"
 	"testing"
 
@@ -1304,6 +1306,194 @@ func TestRouter_TryStartOAuthFlow_ExpiredFlowTimeout(t *testing.T) {
 	if err != nil || pending == nil {
 		t.Errorf("negative FlowTimeoutSecs should fall back to default TTL; got %v err=%v", pending, err)
 	}
+}
+
+func TestRefreshOAuthToken(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	const (
+		oldAccess  = "old-at"
+		oldRefresh = "rt-abc"
+		newAccess  = "new-at"
+		newRefresh = "new-rt"
+		backendN   = "refresh-backend"
+		userN      = "u-refresh"
+	)
+
+	// Mock token endpoint that accepts refresh_token grants.
+	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil || r.FormValue("grant_type") != "refresh_token" {
+			http.Error(w, "expected refresh_token grant", http.StatusBadRequest)
+			return
+		}
+		if r.FormValue("refresh_token") != oldRefresh {
+			http.Error(w, "wrong refresh_token", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"access_token":  newAccess,
+			"refresh_token": newRefresh,
+			"token_type":    "Bearer",
+			"expires_in":    3600,
+		})
+	}))
+	defer tokenSrv.Close()
+
+	credStore := NewMemoryCredentialsStore()
+	r := &Router{backends: make(map[string]*backendConn), credStore: credStore}
+
+	oauthCfg := BackendOAuth{
+		ClientID:           "cid",
+		TokenEndpoint:      tokenSrv.URL + "/token",
+		StoreRefreshTokens: true,
+	}
+	current := &userToken{
+		AccessToken:  oldAccess,
+		RefreshToken: oldRefresh,
+		Expiry:       time.Now().Add(time.Hour),
+	}
+
+	t.Run("successful refresh updates store", func(t *testing.T) {
+		ut, err := r.refreshOAuthToken(ctx, backendN, userN, current, oauthCfg)
+		if err != nil {
+			t.Fatalf("refreshOAuthToken: %v", err)
+		}
+		if ut.AccessToken != newAccess {
+			t.Errorf("access token: got %q want %q", ut.AccessToken, newAccess)
+		}
+		if ut.RefreshToken != newRefresh {
+			t.Errorf("refresh token: got %q want %q", ut.RefreshToken, newRefresh)
+		}
+		// Token should be persisted in the store.
+		stored, _ := credStore.GetToken(ctx, backendN, userN)
+		if stored == nil || stored.AccessToken != newAccess {
+			t.Errorf("refreshed token not persisted: %v", stored)
+		}
+	})
+
+	t.Run("StoreRefreshTokens=false strips refresh token", func(t *testing.T) {
+		noStoreCfg := oauthCfg
+		noStoreCfg.StoreRefreshTokens = false
+		// Use a fresh current token with the old refresh token so the mock endpoint accepts it.
+		cur2 := &userToken{AccessToken: oldAccess, RefreshToken: oldRefresh, Expiry: time.Now().Add(time.Hour)}
+		ut, err := r.refreshOAuthToken(ctx, backendN+"2", userN, cur2, noStoreCfg)
+		if err != nil {
+			t.Fatalf("refreshOAuthToken: %v", err)
+		}
+		if ut.RefreshToken != "" {
+			t.Errorf("expected empty refresh token, got %q", ut.RefreshToken)
+		}
+	})
+
+	t.Run("no refresh token returns error", func(t *testing.T) {
+		noRT := &userToken{AccessToken: oldAccess, Expiry: time.Now().Add(time.Hour)}
+		_, err := r.refreshOAuthToken(ctx, backendN, userN, noRT, oauthCfg)
+		if err == nil {
+			t.Error("expected error when no refresh token is stored")
+		}
+	})
+}
+
+func TestMaybeRefreshToken(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	const (
+		backendN  = "maybe-refresh-be"
+		userN     = "u-maybe"
+		oldAccess = "at-old"
+		newAccess = "at-new"
+	)
+
+	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"access_token": newAccess,
+			"token_type":   "Bearer",
+			"expires_in":   3600,
+		})
+	}))
+	defer tokenSrv.Close()
+
+	makeBE := func(refreshWindowSecs int, storeRT bool) *backendConn {
+		return &backendConn{cfg: BackendConfig{
+			Name: backendN,
+			UserIdentity: BackendUserIdentity{
+				Type: "oauth",
+				OAuth: BackendOAuth{
+					ClientID:           "cid",
+					TokenEndpoint:      tokenSrv.URL + "/token",
+					RefreshWindowSecs:  refreshWindowSecs,
+					StoreRefreshTokens: storeRT,
+				},
+			},
+		}}
+	}
+
+	t.Run("token outside window is not refreshed", func(t *testing.T) {
+		r := &Router{backends: map[string]*backendConn{backendN: makeBE(60, true)}, credStore: NewMemoryCredentialsStore()}
+		// Expiry is 10 min away; window is 60 s → no refresh needed.
+		tok := &userToken{AccessToken: oldAccess, RefreshToken: "rt", Expiry: time.Now().Add(10 * time.Minute)}
+		out := r.maybeRefreshToken(ctx, backendN, userN, tok)
+		if out.AccessToken != oldAccess {
+			t.Errorf("token should not be refreshed outside window: got %q", out.AccessToken)
+		}
+	})
+
+	t.Run("token inside window is refreshed", func(t *testing.T) {
+		r := &Router{backends: map[string]*backendConn{backendN: makeBE(300, true)}, credStore: NewMemoryCredentialsStore()}
+		// Expiry is 1 min away; window is 5 min → refresh.
+		tok := &userToken{AccessToken: oldAccess, RefreshToken: "rt", Expiry: time.Now().Add(time.Minute)}
+		out := r.maybeRefreshToken(ctx, backendN, userN, tok)
+		if out.AccessToken != newAccess {
+			t.Errorf("expected refreshed token %q, got %q", newAccess, out.AccessToken)
+		}
+	})
+
+	t.Run("zero refresh window skips refresh", func(t *testing.T) {
+		r := &Router{backends: map[string]*backendConn{backendN: makeBE(0, true)}, credStore: NewMemoryCredentialsStore()}
+		tok := &userToken{AccessToken: oldAccess, RefreshToken: "rt", Expiry: time.Now().Add(time.Minute)}
+		out := r.maybeRefreshToken(ctx, backendN, userN, tok)
+		if out.AccessToken != oldAccess {
+			t.Errorf("zero window: expected original token, got %q", out.AccessToken)
+		}
+	})
+
+	t.Run("no refresh token skips refresh", func(t *testing.T) {
+		r := &Router{backends: map[string]*backendConn{backendN: makeBE(300, true)}, credStore: NewMemoryCredentialsStore()}
+		tok := &userToken{AccessToken: oldAccess, RefreshToken: "", Expiry: time.Now().Add(time.Minute)}
+		out := r.maybeRefreshToken(ctx, backendN, userN, tok)
+		if out.AccessToken != oldAccess {
+			t.Errorf("no RT: expected original token, got %q", out.AccessToken)
+		}
+	})
+
+	t.Run("refresh failure returns original token (fail-degraded)", func(t *testing.T) {
+		// Point token endpoint at a closed server.
+		closed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		closed.Close()
+		be := &backendConn{cfg: BackendConfig{
+			Name: backendN,
+			UserIdentity: BackendUserIdentity{
+				Type: "oauth",
+				OAuth: BackendOAuth{
+					ClientID:          "cid",
+					TokenEndpoint:     closed.URL + "/token",
+					RefreshWindowSecs: 300,
+				},
+			},
+		}}
+		r := &Router{backends: map[string]*backendConn{backendN: be}, credStore: NewMemoryCredentialsStore()}
+		tok := &userToken{AccessToken: oldAccess, RefreshToken: "rt", Expiry: time.Now().Add(time.Minute)}
+		out := r.maybeRefreshToken(ctx, backendN, userN, tok)
+		if out.AccessToken != oldAccess {
+			t.Errorf("refresh failure should return original token, got %q", out.AccessToken)
+		}
+	})
 }
 
 func TestNoRedirectHTTPClient_RefusesRedirect(t *testing.T) {

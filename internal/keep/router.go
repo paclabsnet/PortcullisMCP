@@ -33,6 +33,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"golang.org/x/oauth2"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
@@ -130,12 +131,15 @@ func (r *Router) CallTool(ctx context.Context, serverName, toolName string, args
 
 	// For OAuth backends, pre-fetch a valid token from the CredentialsStore and
 	// stash it in the context so the RoundTripper can inject it as a Bearer header.
+	// If the token is within the configured refresh window, proactively refresh it
+	// now so that the backend never sees a token that is about to expire mid-request.
 	if r.backendType(serverName) == "oauth" {
 		userID := userIDFromContext(ctx)
 		if userID != "" {
 			if cs := r.getCredStore(); cs != nil {
 				tok, err := cs.GetToken(ctx, serverName, userID)
 				if err == nil && tok != nil && time.Now().Before(tok.Expiry) {
+					tok = r.maybeRefreshToken(ctx, serverName, userID, tok)
 					ctx = withOAuthToken(ctx, tok.AccessToken)
 				}
 			}
@@ -234,6 +238,96 @@ func (r *Router) backendType(serverName string) string {
 	t := conn.cfg.UserIdentity.Type
 	conn.cfgMu.RUnlock()
 	return t
+}
+
+// backendOAuthCfg returns a copy of the BackendOAuth config for the named backend,
+// or nil if the backend is not found or is not of type "oauth".
+func (r *Router) backendOAuthCfg(serverName string) *BackendOAuth {
+	r.mu.Lock()
+	conn, ok := r.backends[serverName]
+	r.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	conn.cfgMu.RLock()
+	defer conn.cfgMu.RUnlock()
+	if conn.cfg.UserIdentity.Type != "oauth" {
+		return nil
+	}
+	cfg := conn.cfg.UserIdentity.OAuth
+	return &cfg
+}
+
+// maybeRefreshToken returns a (possibly refreshed) token. If the token is still
+// valid but within the configured refresh window and a refresh token is available,
+// it calls refreshOAuthToken and returns the new token on success. On refresh
+// failure the original token is returned so the request can still proceed with
+// the current access token (fail-degraded).
+func (r *Router) maybeRefreshToken(ctx context.Context, serverName, userID string, tok *userToken) *userToken {
+	oauthCfg := r.backendOAuthCfg(serverName)
+	if oauthCfg == nil {
+		return tok
+	}
+	rw := oauthCfg.RefreshWindow()
+	if rw <= 0 || tok.RefreshToken == "" {
+		return tok
+	}
+	if time.Until(tok.Expiry) >= rw {
+		return tok // outside window; no refresh needed yet
+	}
+	refreshed, err := r.refreshOAuthToken(ctx, serverName, userID, tok, *oauthCfg)
+	if err != nil {
+		slog.Warn("keep: proactive OAuth token refresh failed; using existing token",
+			"backend", serverName, "user_id", userID, "error", err)
+		return tok
+	}
+	return refreshed
+}
+
+// refreshOAuthToken performs a refresh-token grant and stores the resulting token.
+// It uses golang.org/x/oauth2 for the HTTP exchange. The current access token is
+// marked as expired before passing it to the token source so that oauth2 always
+// performs a network round-trip rather than returning the cached value.
+// If StoreRefreshTokens is false the refresh token is stripped before storage.
+func (r *Router) refreshOAuthToken(ctx context.Context, serverName, userID string, current *userToken, oauthCfg BackendOAuth) (*userToken, error) {
+	if current.RefreshToken == "" {
+		return nil, fmt.Errorf("no refresh token stored for backend %q user %q", serverName, userID)
+	}
+
+	cfg := &oauth2.Config{
+		ClientID: oauthCfg.ClientID,
+		Endpoint: oauth2.Endpoint{
+			TokenURL: oauthCfg.TokenEndpoint,
+		},
+	}
+
+	// Mark the token as already expired so oauth2 always issues the refresh grant.
+	stale := &oauth2.Token{
+		AccessToken:  current.AccessToken,
+		RefreshToken: current.RefreshToken,
+		Expiry:       time.Now().Add(-time.Second),
+	}
+	newTok, err := cfg.TokenSource(ctx, stale).Token()
+	if err != nil {
+		return nil, fmt.Errorf("refresh token grant for backend %q: %w", serverName, err)
+	}
+
+	ut := &userToken{
+		AccessToken:  newTok.AccessToken,
+		RefreshToken: newTok.RefreshToken,
+		Expiry:       newTok.Expiry,
+	}
+	if !oauthCfg.StoreRefreshTokens {
+		ut.RefreshToken = ""
+	}
+
+	if cs := r.getCredStore(); cs != nil {
+		if err := cs.SetToken(ctx, serverName, userID, ut); err != nil {
+			slog.Warn("keep: failed to persist refreshed OAuth token", "backend", serverName, "user_id", userID, "error", err)
+		}
+	}
+	slog.Info("keep: proactively refreshed OAuth token", "backend", serverName, "user_id", userID)
+	return ut, nil
 }
 
 // tryStartOAuthFlow generates a PKCE authorization URL for the named backend
