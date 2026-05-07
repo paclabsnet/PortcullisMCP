@@ -444,6 +444,109 @@ func (m *mockConfigPDP) GetStaticPolicy(_ context.Context, _ string) (json.RawMe
 	return m.result, nil
 }
 
+func TestHandleOAuthCallback(t *testing.T) {
+	const (
+		backendName  = "test-be"
+		testUserID   = "u-42"
+		accessToken  = "at-secret"
+		authCode     = "code-xyz"
+		clientID     = "client-abc"
+	)
+
+	// Mock authorization server token endpoint.
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/token" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"access_token": accessToken,
+			"token_type":   "Bearer",
+			"expires_in":   3600,
+		})
+	}))
+	defer tokenServer.Close()
+
+	credStore := NewMemoryCredentialsStore()
+
+	// Pre-store a pending auth so the callback can consume it.
+	nonce := "test-nonce-abc"
+	pending := &pendingAuth{
+		CodeVerifier:  "verifier-xyz",
+		BackendName:   backendName,
+		UserID:        testUserID,
+		TokenEndpoint: tokenServer.URL + "/token",
+		ClientID:      clientID,
+		RedirectURI:   "http://keep.example/oauth/callback",
+	}
+	_ = credStore.StorePending(context.Background(), nonce, pending)
+
+	srv := &Server{
+		cfg: Config{
+			Responsibility: ResponsibilityConfig{
+				Backends: []BackendConfig{
+					{
+						Name: backendName,
+						UserIdentity: BackendUserIdentity{
+							Type: "oauth",
+							OAuth: BackendOAuth{
+								ClientID:           clientID,
+								StoreRefreshTokens: false,
+							},
+						},
+					},
+				},
+			},
+		},
+		credStore: credStore,
+	}
+
+	t.Run("valid callback stores token", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code="+authCode+"&state="+nonce, nil)
+		w := httptest.NewRecorder()
+		srv.handleOAuthCallback(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+		tok, err := credStore.GetToken(context.Background(), backendName, testUserID)
+		if err != nil || tok == nil {
+			t.Fatalf("token not stored: tok=%v err=%v", tok, err)
+		}
+		if tok.AccessToken != accessToken {
+			t.Errorf("access token mismatch: got %q want %q", tok.AccessToken, accessToken)
+		}
+	})
+
+	t.Run("missing code returns 400", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/oauth/callback?state=somestate", nil)
+		w := httptest.NewRecorder()
+		srv.handleOAuthCallback(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("expected 400, got %d", w.Code)
+		}
+	})
+
+	t.Run("unknown nonce returns 400", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code=x&state=no-such-nonce", nil)
+		w := httptest.NewRecorder()
+		srv.handleOAuthCallback(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("expected 400, got %d", w.Code)
+		}
+	})
+
+	t.Run("provider error returns 400", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/oauth/callback?error=access_denied&error_description=user+cancelled", nil)
+		w := httptest.NewRecorder()
+		srv.handleOAuthCallback(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("expected 400, got %d", w.Code)
+		}
+	})
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
 		func() bool {

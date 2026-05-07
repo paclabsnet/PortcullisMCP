@@ -23,11 +23,13 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/mitchellh/mapstructure"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
+	"golang.org/x/oauth2"
 
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared/tlsutil"
@@ -39,6 +41,8 @@ type keepCtxKey string
 const clientHeadersKey keepCtxKey = "clientHeaders"
 const rawTokenKey keepCtxKey = "rawToken"
 const exchangedIdentityKey keepCtxKey = "exchangedIdentity"
+const userIDKey keepCtxKey = "userID"
+const oauthTokenKey keepCtxKey = "oauthToken"
 
 // withClientHeaders returns a new context carrying the validated client headers.
 func withClientHeaders(ctx context.Context, headers map[string][]string) context.Context {
@@ -77,6 +81,30 @@ func exchangedIdentityFromContext(ctx context.Context) *ExchangedIdentity {
 	return v
 }
 
+// withUserID returns a context carrying the authenticated user's ID for use by
+// the Router when performing CredentialsStore lookups.
+func withUserID(ctx context.Context, userID string) context.Context {
+	return context.WithValue(ctx, userIDKey, userID)
+}
+
+// userIDFromContext returns the user ID stored in ctx, or "" if absent.
+func userIDFromContext(ctx context.Context) string {
+	v, _ := ctx.Value(userIDKey).(string)
+	return v
+}
+
+// withOAuthToken returns a context carrying a resolved OAuth access token to be
+// injected by the headerInjectingRoundTripper for the current backend call.
+func withOAuthToken(ctx context.Context, accessToken string) context.Context {
+	return context.WithValue(ctx, oauthTokenKey, accessToken)
+}
+
+// oauthTokenFromContext returns the OAuth access token, or "" if none was pre-fetched.
+func oauthTokenFromContext(ctx context.Context) string {
+	v, _ := ctx.Value(oauthTokenKey).(string)
+	return v
+}
+
 // MCPRouter defines the interface for routing MCP tool calls to backends.
 type MCPRouter interface {
 	CallTool(ctx context.Context, serverName, toolName string, args map[string]any) (*mcp.CallToolResult, error)
@@ -90,6 +118,7 @@ type Server struct {
 	pdp           PolicyDecisionPoint
 	gateStaticPDP PolicyDecisionPoint
 	router        MCPRouter
+	credStore     CredentialsStore
 	workflow      WorkflowHandler
 	signer        *EscalationSigner
 	decisionLog   *DecisionLogger
@@ -121,7 +150,9 @@ func NewServer(ctx context.Context, cfg Config) (*Server, error) {
 		return nil, fmt.Errorf("unknown gate_static_policy strategy %q; supported: opa, noop", staticCfg.Strategy)
 	}
 
+	credStore := buildCredentialsStore(ctx, cfg)
 	router := NewRouter(cfg.Responsibility.Backends, cfg.Operations.Storage)
+	router.SetCredentialsStore(credStore)
 
 	wf, err := NewWorkflowHandler(cfg.Responsibility.Workflow)
 	if err != nil {
@@ -147,11 +178,46 @@ func NewServer(ctx context.Context, cfg Config) (*Server, error) {
 		pdp:           pdp,
 		gateStaticPDP: gateStaticPDP,
 		router:        router,
+		credStore:     credStore,
 		workflow:      wf,
 		signer:        signer,
 		decisionLog:   NewDecisionLogger(cfg.DecisionLog),
 		normalizer:    normalizer,
 	}, nil
+}
+
+// buildCredentialsStore constructs the appropriate CredentialsStore for cfg.
+// If Redis storage is configured it builds a Redis-backed store; otherwise it
+// returns a MemoryCredentialsStore and warns if any backend uses OAuth.
+func buildCredentialsStore(ctx context.Context, cfg Config) CredentialsStore {
+	if cfg.Operations.Storage.Backend == "redis" {
+		var redisCfg RedisConfig
+		if err := decodeRedisConfig(cfg.Operations.Storage.Config, &redisCfg); err == nil {
+			client, err := newKeepRedisClient(ctx, redisCfg)
+			if err == nil {
+				prefix := redisCfg.KeyPrefix
+				if prefix == "" {
+					prefix = defaultCredStorePrefix
+				}
+				return NewRedisCredentialsStore(client, prefix)
+			}
+			slog.Warn("keep: failed to connect Redis for CredentialsStore; falling back to memory store", "error", err)
+		} else {
+			slog.Warn("keep: failed to decode Redis config for CredentialsStore; falling back to memory store", "error", err)
+		}
+	}
+
+	hasOAuthBackends := false
+	for _, b := range cfg.Responsibility.Backends {
+		if b.UserIdentity.Type == "oauth" {
+			hasOAuthBackends = true
+			break
+		}
+	}
+	if hasOAuthBackends {
+		slog.Warn("keep: backend OAuth state is process-local; restarts and failover will lose pending auth flows and tokens")
+	}
+	return NewMemoryCredentialsStore()
 }
 
 // Run starts the HTTPS server and blocks until ctx is cancelled.
@@ -176,6 +242,9 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("POST /tools", s.handleListTools)
 	mux.HandleFunc("POST /log", s.handleLog)
 	mux.HandleFunc("GET /config/{resource}", s.handleGetConfig)
+	// OAuth callback is intentionally unauthenticated: it is reached by the
+	// user's browser after the authorization server redirects them back.
+	mux.HandleFunc("GET /oauth/callback", s.handleOAuthCallback)
 
 	var handler http.Handler = mux
 	if mainEndpoint.Auth.Credentials.BearerToken != "" {
@@ -279,6 +348,9 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 
 	if rawReq.UserIdentity.RawToken != "" {
 		ctx = withRawToken(ctx, rawReq.UserIdentity.RawToken)
+	}
+	if principal.UserID != "" {
+		ctx = withUserID(ctx, principal.UserID)
 	}
 
 	req := NewAuthorizedRequest(rawReq, principal)
@@ -684,9 +756,103 @@ func checkAPIVersion(v string) error {
 	return nil
 }
 
+// handleOAuthCallback receives the authorization code from the OAuth provider
+// after the user completes the browser-based consent flow.
+func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	errParam := r.URL.Query().Get("error")
+	if errParam != "" {
+		errDesc := r.URL.Query().Get("error_description")
+		slog.Warn("keep: OAuth callback received error from provider", "error", errParam, "description", errDesc)
+		http.Error(w, "authorization failed: "+errParam, http.StatusBadRequest)
+		return
+	}
+
+	code := r.URL.Query().Get("code")
+	state := r.URL.Query().Get("state")
+	if code == "" || state == "" {
+		http.Error(w, "missing required code or state parameters", http.StatusBadRequest)
+		return
+	}
+
+	pending, err := s.credStore.ConsumePending(ctx, state)
+	if err != nil {
+		slog.Error("keep: OAuth callback: failed to consume pending state", "error", err)
+		http.Error(w, "internal error processing OAuth state", http.StatusInternalServerError)
+		return
+	}
+	if pending == nil {
+		http.Error(w, "invalid or expired OAuth state — the authorization flow may have timed out or already completed", http.StatusBadRequest)
+		return
+	}
+
+	token, err := s.exchangeOAuthCode(ctx, pending, code)
+	if err != nil {
+		slog.Error("keep: OAuth callback: code exchange failed", "error", err, "backend", pending.BackendName)
+		http.Error(w, "token exchange failed", http.StatusInternalServerError)
+		return
+	}
+
+	// Honour StoreRefreshTokens setting: strip the refresh token if not configured.
+	if oauthCfg := s.backendOAuthConfig(pending.BackendName); oauthCfg != nil && !oauthCfg.StoreRefreshTokens {
+		token.RefreshToken = ""
+	}
+
+	if err := s.credStore.SetToken(ctx, pending.BackendName, pending.UserID, token); err != nil {
+		slog.Error("keep: OAuth callback: failed to store token", "error", err, "backend", pending.BackendName)
+		http.Error(w, "failed to store token", http.StatusInternalServerError)
+		return
+	}
+
+	slog.Info("keep: OAuth token stored after successful callback", "backend", pending.BackendName, "user_id", pending.UserID)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprint(w, "<html><body><p>Authorization successful. You may close this window and retry your request.</p></body></html>")
+}
+
+// exchangeOAuthCode performs the authorization-code-for-token exchange using PKCE.
+func (s *Server) exchangeOAuthCode(ctx context.Context, pending *pendingAuth, code string) (*userToken, error) {
+	oauthCfg := &oauth2.Config{
+		ClientID:    pending.ClientID,
+		RedirectURL: pending.RedirectURI,
+		Endpoint: oauth2.Endpoint{
+			TokenURL: pending.TokenEndpoint,
+		},
+	}
+	tok, err := oauthCfg.Exchange(ctx, code,
+		oauth2.SetAuthURLParam("code_verifier", pending.CodeVerifier),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("oauth exchange: %w", err)
+	}
+	return &userToken{
+		AccessToken:  tok.AccessToken,
+		RefreshToken: tok.RefreshToken,
+		Expiry:       tok.Expiry,
+	}, nil
+}
+
+// backendOAuthConfig returns the BackendOAuth config for the named backend,
+// or nil if not found or not an OAuth backend.
+func (s *Server) backendOAuthConfig(name string) *BackendOAuth {
+	for i := range s.cfg.Responsibility.Backends {
+		b := &s.cfg.Responsibility.Backends[i]
+		if b.Name == name && b.UserIdentity.Type == "oauth" {
+			cfg := b.UserIdentity.OAuth
+			return &cfg
+		}
+	}
+	return nil
+}
+
+// decodeRedisConfig decodes the StorageConfig.Config map into a RedisConfig.
+func decodeRedisConfig(raw map[string]interface{}, out *RedisConfig) error {
+	return mapstructure.Decode(raw, out)
+}
+
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
+		if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" || r.URL.Path == "/oauth/callback" {
 			next.ServeHTTP(w, r)
 			return
 		}
