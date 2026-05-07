@@ -85,6 +85,7 @@ responsibility:
       #     auth_headers:
       #       Authorization: "Bearer envvar://EXCHANGE_API_TOKEN"
 
+
     - name: "enforce-auth"
       type: "http"
       url: "https://mcp.enforceauth.dev/t/026730a0-b4cc-4cf7-bdd2-a79a73ca4772"

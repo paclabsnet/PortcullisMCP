@@ -151,6 +151,89 @@ validation.
 - HA deployment blueprint and failure-mode matrix.
 - Roadmap items for distributed-state improvements where applicable.
 
+## Objection 9: "This is a single point of failure for all our AI tooling"
+
+**Short response**
+Yes, it is — and that is the correct security posture. A governance layer that fails open is not a governance layer.
+
+**Technical response**
+- Portcullis fails closed: if Keep is unavailable, tool calls are denied, not passed through.
+- This means the governance cannot be bypassed by taking down the enforcer.
+- HA is solved operationally (clustering, load balancing, redundant deployments), not by weakening the fail-closed guarantee.
+- The implicit alternative — AI agents calling MCP tools with no policy enforcement — is not a resilience improvement, it is an ungoverned system.
+
+**Evidence to show**
+- Fail-closed behavior under Keep unavailability (tests and/or demonstrated behavior).
+- HA deployment blueprint in ops documentation.
+
+**Common follow-up**
+- "What happens to in-flight escalations if Keep restarts?"
+  Response: pending escalation state is currently held in memory; a Keep restart will lose pending approvals. This is a
+  known limitation and a planned improvement. Operators should treat Keep as critical infrastructure and provision
+  accordingly — the same way they treat an IAM service or a policy engine.
+- "Is governance really necessary if we trust our models?"
+  Response: governance is not about distrusting the model. It is about providing an auditable, policy-driven control
+  plane that the organization owns, regardless of model behavior. You cannot govern what you cannot observe and enforce.
+
+## Objection 10: "We already have fine-grained authorization in our IdP — why add another layer?"
+
+**Short response**
+IdPs govern human-to-service authentication. They have no model of an AI agent calling a specific MCP tool with
+specific parameters on behalf of a user. Portcullis adds a layer IdPs do not provide, and it uses your IdP rather than
+replacing it.
+
+**Technical response**
+- Portcullis delegates identity verification to your existing IdP (via OIDC). It does not replace it.
+- What IdPs cannot do: evaluate policy against AI agent tool calls, enforce tool-level authorization, produce
+  MCP-scoped audit trails, or trigger approval workflows for sensitive tool invocations.
+- The question conflates authentication (who is this person?) with MCP-layer authorization (what can this person's AI
+  agent do with these tools, right now, given this context?).
+- Conditional access and PIM in Entra ID / Okta govern access to applications. They do not govern `delete_order` being
+  called by an AI agent at 2am with a parameter set that bypasses normal human review.
+
+**Evidence to show**
+- Example OPA policy showing tool-name and argument-level authorization that no IdP can express natively.
+- Decision log showing per-tool-call authorization decisions with full context.
+
+**Common follow-up**
+- "Can we use our IdP's app roles to restrict MCP access?"
+  Response: yes, and Portcullis can consume those roles via OIDC claims. But app-role granularity stops at the
+  application boundary. Tool-call-level policy, argument inspection, and cross-backend audit trails require the
+  MCP-aware layer that Portcullis provides.
+
+## Objection 11: "Why are there two different OAuth callback endpoints — one at Gate and one at Keep?"
+
+**Short response**
+They serve two completely different trust relationships and are deliberately isolated from each other.
+
+**Technical response**
+- Gate's callback handles the user authenticating *to Portcullis* — proving who they are so Keep can make
+  policy decisions on their behalf. Gate is the right place because it is the component that manages the user session.
+- Keep's callback handles Portcullis authenticating *to a downstream MCP backend* — obtaining credentials to call
+  that backend on the user's behalf. Keep is the right place because it is the only component that holds backend
+  credentials; Gate must never see them.
+- This is the same isolation principle as a zero-trust broker: the user-facing surface and the backend-facing surface
+  are separated by design, not by accident.
+- Operationally, this means registering two redirect URIs: one with your IdP (Gate) and one per backend OAuth
+  app (Keep). This is a one-time setup cost, not ongoing operational overhead.
+
+**Evidence to show**
+- Architecture diagram showing Gate/Keep isolation boundary.
+- Config examples showing the two registration points.
+
+**Common follow-up**
+- "Can we consolidate to a single callback URL?"
+  Response: only in a multi-tenant daemon deployment of Gate, where Gate is a hardened, centrally operated service.
+  In the stdio deployment model — where Gate runs as a per-user process launched by the MCP client — proxying Keep's
+  backend OAuth callback through Gate would allow end users to inject arbitrary credentials into Keep, which is a
+  critical security boundary violation. The two-callback design is not an oversight; in the stdio model it is a
+  required isolation guarantee.
+
+  Note for implementers: consolidating to a single callback via Gate-as-proxy is not pursued even in the daemon model.
+  The implementation cost is substantial — correlated pending auth state in Redis, a new authenticated Gate→Keep
+  channel for exchange completion, and careful credential expiry — all to avoid a one-time operator registration step.
+  The two-URL design is an intentional tradeoff, not a roadmap item.
+
 ## Enterprise readiness checklist (meeting close-out)
 
 Use this at the end of review meetings:
@@ -179,6 +262,8 @@ These are typically better received when stated up front:
 - Some enterprise integrations may require adapter work.
   - PAC.Labs provides technical & helpdesk support, and consulting services for integration support
 - Large-scale HA/performance claims should be validated with environment-specific testing.
+- Pending escalation state is held in memory; a Keep restart loses in-flight approval requests. Operators must treat
+  Keep as critical infrastructure and provision for HA accordingly.
 
 ## Appendix: mapping objections to artifacts
 
@@ -192,3 +277,6 @@ These are typically better received when stated up front:
 | Integration fit | Config examples, policy examples, workflow plugin docs |
 | Open-source operability | Build/test docs, security policy docs, runbooks |
 | Scale readiness | Roadmap and load/resilience test plans |
+| Single point of failure / fail-closed | Fail-closed behavior tests, HA deployment blueprint |
+| IdP vs MCP-layer authorization | OPA policy examples with tool/argument-level rules, decision log samples |
+| Dual OAuth callback endpoints | Architecture diagram, Gate/Keep config examples |
