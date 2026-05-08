@@ -31,10 +31,12 @@ const (
 )
 
 
-// oauthEndpoints holds the resolved authorization and token endpoint URLs.
+// oauthEndpoints holds the resolved authorization and token endpoint URLs,
+// and the optional RFC 7591 registration endpoint discovered from ASM metadata.
 type oauthEndpoints struct {
 	AuthorizationEndpoint string
 	TokenEndpoint         string
+	RegistrationEndpoint  string // populated when DCR is enabled and supported by the IdP
 }
 
 // resolveOAuthEndpoints returns the OAuth endpoints for a backend.
@@ -50,14 +52,36 @@ type oauthEndpoints struct {
 //  3. ASM (RFC 8414 / OIDC Discovery) provides authorization_endpoint and token_endpoint.
 func resolveOAuthEndpoints(ctx context.Context, cfg BackendOAuth, wwwAuthenticate string) (oauthEndpoints, error) {
 	if cfg.AuthorizationEndpoint != "" && cfg.TokenEndpoint != "" {
-		return oauthEndpoints{
+		eps := oauthEndpoints{
 			AuthorizationEndpoint: cfg.AuthorizationEndpoint,
 			TokenEndpoint:         cfg.TokenEndpoint,
-		}, nil
+		}
+		// When DCR is enabled and the registration endpoint is explicitly configured,
+		// use it directly; skip any ASM discovery for the registration endpoint.
+		if cfg.DCR.Enabled && cfg.DCR.RegistrationEndpoint != "" {
+			eps.RegistrationEndpoint = cfg.DCR.RegistrationEndpoint
+		}
+		if cfg.DCR.Enabled && eps.RegistrationEndpoint == "" {
+			return oauthEndpoints{}, fmt.Errorf("dcr is enabled but registration_endpoint is not configured and cannot be discovered when authorization_endpoint is set statically")
+		}
+		return eps, nil
 	}
 	client := newHTTPClient(true)
 	client.Timeout = discoveryHTTPTimeout
-	return discoverOAuthEndpoints(ctx, client, wwwAuthenticate)
+	eps, err := discoverOAuthEndpoints(ctx, client, wwwAuthenticate)
+	if err != nil {
+		return oauthEndpoints{}, err
+	}
+	// If DCR is enabled and the static config provides a registration_endpoint, prefer it.
+	if cfg.DCR.Enabled && cfg.DCR.RegistrationEndpoint != "" {
+		eps.RegistrationEndpoint = cfg.DCR.RegistrationEndpoint
+	}
+	// Validate that DCR can proceed.
+	if cfg.DCR.Enabled && eps.RegistrationEndpoint == "" {
+		return oauthEndpoints{}, fmt.Errorf("dcr is enabled but the IdP did not advertise a registration_endpoint in its metadata; " +
+			"set dcr.registration_endpoint explicitly or disable dcr")
+	}
+	return eps, nil
 }
 
 // discoverOAuthEndpoints parses the WWW-Authenticate header from a 401 response
@@ -213,6 +237,7 @@ type asmDocument struct {
 	Issuer                string `json:"issuer"`
 	AuthorizationEndpoint string `json:"authorization_endpoint"`
 	TokenEndpoint         string `json:"token_endpoint"`
+	RegistrationEndpoint  string `json:"registration_endpoint"` // RFC 7591
 }
 
 // fetchASM fetches the Authorization Server Metadata from the standard well-known
@@ -234,6 +259,7 @@ func fetchASM(ctx context.Context, client *http.Client, issuer string) (oauthEnd
 			return oauthEndpoints{
 				AuthorizationEndpoint: asm.AuthorizationEndpoint,
 				TokenEndpoint:         asm.TokenEndpoint,
+				RegistrationEndpoint:  asm.RegistrationEndpoint,
 			}, nil
 		}
 	}

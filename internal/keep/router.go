@@ -19,6 +19,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -34,6 +35,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"golang.org/x/oauth2"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
@@ -58,6 +60,7 @@ type Router struct {
 	storageConfig cfgloader.StorageConfig
 	credStoreMu   sync.RWMutex
 	credStore     CredentialsStore
+	dcrGroup      singleflight.Group // deduplicate concurrent DCR attempts per backend
 }
 
 type backendConn struct {
@@ -312,8 +315,19 @@ func (r *Router) refreshOAuthToken(ctx context.Context, serverName, userID strin
 		return nil, fmt.Errorf("no refresh token stored for backend %q user %q", serverName, userID)
 	}
 
+	// Prefer dynamic client credentials when available.
+	clientID := oauthCfg.ClientID
+	clientSecret := ""
+	if cs := r.getCredStore(); cs != nil {
+		if reg, err := cs.GetClientReg(ctx, serverName); err == nil && reg != nil {
+			clientID = reg.ClientID
+			clientSecret = reg.ClientSecret
+		}
+	}
+
 	cfg := &oauth2.Config{
-		ClientID: oauthCfg.ClientID,
+		ClientID:     clientID,
+		ClientSecret: clientSecret,
 		Endpoint: oauth2.Endpoint{
 			TokenURL: oauthCfg.TokenEndpoint,
 		},
@@ -365,6 +379,19 @@ func (r *Router) tryStartOAuthFlow(ctx context.Context, serverName, userID strin
 	oauthCfg := conn.cfg.UserIdentity.OAuth
 	conn.cfgMu.RUnlock()
 
+	cs := r.getCredStore()
+	if cs == nil {
+		return nil, fmt.Errorf("no credentials store configured")
+	}
+
+	// Resolve the client ID and effective scopes.
+	// For dynamic clients the clientReg takes precedence; for static clients
+	// we fall back to the configured ClientID and Scopes.
+	clientID, effectiveScopes, err := r.resolveOAuthClientCredentials(ctx, serverName, oauthCfg, eps, cs)
+	if err != nil {
+		return nil, err
+	}
+
 	codeVerifier, err := generatePKCEVerifier()
 	if err != nil {
 		return nil, fmt.Errorf("generate pkce verifier: %w", err)
@@ -381,19 +408,15 @@ func (r *Router) tryStartOAuthFlow(ctx context.Context, serverName, userID strin
 		BackendName:   serverName,
 		UserID:        userID,
 		TokenEndpoint: eps.TokenEndpoint,
-		ClientID:      oauthCfg.ClientID,
+		ClientID:      clientID,
 		RedirectURI:   oauthCfg.CallbackURL,
 	}
 
-	cs := r.getCredStore()
-	if cs == nil {
-		return nil, fmt.Errorf("no credentials store configured")
-	}
 	if err := cs.StorePending(ctx, nonce, pending, oauthCfg.FlowTimeout()); err != nil {
 		return nil, fmt.Errorf("store pending auth: %w", err)
 	}
 
-	authURL := buildAuthURL(eps.AuthorizationEndpoint, oauthCfg.ClientID, oauthCfg.CallbackURL, oauthCfg.Scopes, nonce, codeChallenge)
+	authURL := buildAuthURL(eps.AuthorizationEndpoint, clientID, oauthCfg.CallbackURL, effectiveScopes, nonce, codeChallenge)
 	slog.Info("keep: OAuth flow initiated", "backend", serverName, "user_id", userID)
 
 	return &mcp.CallToolResult{
@@ -402,6 +425,146 @@ func (r *Router) tryStartOAuthFlow(ctx context.Context, serverName, userID strin
 			Text: fmt.Sprintf("Authentication required for backend %q. Please open the following URL to authorize:\n\n%s\n\nAfter authorizing, retry the request.", serverName, authURL),
 		}},
 	}, nil
+}
+
+// resolveOAuthClientCredentials returns the client_id and effective scopes to use
+// for an OAuth flow. If DCR is enabled and no valid registration exists, it
+// performs dynamic client registration (with singleflight + distributed locking
+// to avoid thundering-herd and protect single-use Initial Access Tokens).
+func (r *Router) resolveOAuthClientCredentials(ctx context.Context, serverName string, oauthCfg BackendOAuth, eps oauthEndpoints, cs CredentialsStore) (clientID string, scopes []string, err error) {
+	reg, err := cs.GetClientReg(ctx, serverName)
+	if err != nil {
+		return "", nil, fmt.Errorf("get client reg: %w", err)
+	}
+
+	// Treat an expired dynamic secret the same as no registration.
+	if reg != nil && reg.ClientSecretExpiresAt > 0 {
+		expiresAt := time.Unix(reg.ClientSecretExpiresAt, 0)
+		refreshBefore := expiresAt.Add(-oauthCfg.RefreshWindow())
+		if time.Now().After(refreshBefore) {
+			slog.Info("keep: dynamic client secret expired or within refresh window; re-registering",
+				"backend", serverName, "expires_at", expiresAt)
+			reg = nil
+		}
+	}
+
+	if reg != nil {
+		// Dynamic client exists — intersect configured scopes with IdP-granted scopes.
+		effectiveScopes := oauthCfg.Scopes
+		if reg.Scopes != "" {
+			effectiveScopes = intersectScopes(oauthCfg.Scopes, reg.Scopes)
+		}
+		return reg.ClientID, effectiveScopes, nil
+	}
+
+	// Static client path.
+	if !oauthCfg.DCR.Enabled {
+		return oauthCfg.ClientID, oauthCfg.Scopes, nil
+	}
+
+	// DCR path — use singleflight to deduplicate concurrent registration attempts
+	// on this instance. The work function also acquires a distributed lock so that
+	// only one instance globally communicates with the IdP.
+	v, regErr, _ := r.dcrGroup.Do(serverName, func() (any, error) {
+		return r.performDCR(ctx, serverName, oauthCfg, eps, cs)
+	})
+	if regErr != nil {
+		return "", nil, regErr
+	}
+	reg = v.(*clientReg)
+	effectiveScopes := oauthCfg.Scopes
+	if reg.Scopes != "" {
+		effectiveScopes = intersectScopes(oauthCfg.Scopes, reg.Scopes)
+	}
+	return reg.ClientID, effectiveScopes, nil
+}
+
+// performDCR is the inner function executed inside the singleflight group.
+// It handles local re-checks, negative cache, distributed locking, and the
+// actual RegisterDynamicClient HTTP call.
+func (r *Router) performDCR(ctx context.Context, serverName string, oauthCfg BackendOAuth, eps oauthEndpoints, cs CredentialsStore) (*clientReg, error) {
+	// Local re-check: another goroutine on this instance may have already registered.
+	if reg, err := cs.GetClientReg(ctx, serverName); err == nil && reg != nil {
+		return reg, nil
+	}
+
+	// Negative cache check: a recent failure is still fresh.
+	if reason, err := cs.GetDCRFailure(ctx, serverName); err == nil && reason != "" {
+		return nil, fmt.Errorf("dcr previously failed for backend %q: %s", serverName, reason)
+	}
+
+	// Acquire a distributed lock to protect single-use Initial Access Tokens.
+	unlock, err := cs.LockDCR(ctx, serverName)
+	if err != nil {
+		return nil, fmt.Errorf("acquire dcr lock for %q: %w", serverName, err)
+	}
+	defer unlock()
+
+	// Global re-check: the lock-winner from another instance may have already stored the result.
+	if reg, err := cs.GetClientReg(ctx, serverName); err == nil && reg != nil {
+		return reg, nil
+	}
+
+	// Set registration_endpoint from eps (populated by resolveOAuthEndpoints).
+	oauthCfg.DCR.RegistrationEndpoint = eps.RegistrationEndpoint
+
+	// Use a conservative HTTP client for DCR; private address access is not needed
+	// since registration endpoints must be reachable from the public internet.
+	httpClient := newHTTPClient(false)
+	reg, dcrErr := RegisterDynamicClient(ctx, httpClient, &oauthCfg)
+	if dcrErr != nil {
+		// Choose TTL based on error type.
+		cacheTTL := oauthCfg.DCR.FailureCacheTTL
+		if cacheTTL <= 0 {
+			cacheTTL = 5 * time.Minute
+		}
+		if errors.Is(dcrErr, ErrDCRNotSupported) {
+			cacheTTL = dcrProtocolMismatchTTL
+			slog.Error("keep: DCR is enabled but IdP does not support RFC 7591; register the client manually and provide a static client_id",
+				"backend", serverName)
+		}
+		_ = cs.SetDCRFailure(ctx, serverName, dcrErr.Error(), cacheTTL)
+		return nil, fmt.Errorf("dynamic client registration for %q: %w", serverName, dcrErr)
+	}
+
+	// Atomically persist the registration; another instance may have won the race
+	// despite the lock (e.g. lock timeout / split-brain).
+	set, err := cs.SetClientRegNX(ctx, serverName, reg)
+	if err != nil {
+		return nil, fmt.Errorf("persist client reg for %q: %w", serverName, err)
+	}
+	if !set {
+		// Another instance stored a registration first — use theirs.
+		winner, getErr := cs.GetClientReg(ctx, serverName)
+		if getErr != nil || winner == nil {
+			// Fallback: use what we registered (it will be orphaned but functional).
+			slog.Warn("keep: DCR race: could not retrieve winner's registration; using local result", "backend", serverName)
+			return reg, nil
+		}
+		return winner, nil
+	}
+
+	slog.Info("keep: dynamic client registration succeeded", "backend", serverName, "client_id", reg.ClientID)
+	return reg, nil
+}
+
+// intersectScopes returns the subset of want that is present in grantedSpace
+// (a space-separated scope string as returned by the IdP).
+func intersectScopes(want []string, grantedSpace string) []string {
+	granted := make(map[string]struct{})
+	for _, s := range strings.Fields(grantedSpace) {
+		granted[s] = struct{}{}
+	}
+	var result []string
+	for _, s := range want {
+		if _, ok := granted[s]; ok {
+			result = append(result, s)
+		}
+	}
+	if len(result) == 0 {
+		return want // fall back to configured scopes if intersection is empty
+	}
+	return result
 }
 
 // generatePKCEVerifier creates a high-entropy code verifier for PKCE (RFC 7636).

@@ -811,13 +811,44 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 }
 
 // exchangeOAuthCode performs the authorization-code-for-token exchange using PKCE.
+// It resolves the client secret and token_endpoint_auth_method from the
+// CredentialsStore (for dynamically registered clients) and applies the
+// appropriate authentication method per RFC 7591.
 func (s *Server) exchangeOAuthCode(ctx context.Context, pending *pendingAuth, code string) (*userToken, error) {
+	clientID := pending.ClientID
+	clientSecret := ""
+	authMethod := "client_secret_basic" // RFC 7591 default
+
+	// Prefer dynamic client credentials stored after DCR.
+	if reg, err := s.credStore.GetClientReg(ctx, pending.BackendName); err == nil && reg != nil {
+		clientID = reg.ClientID
+		clientSecret = reg.ClientSecret
+		if reg.TokenEndpointAuthMethod != "" {
+			authMethod = reg.TokenEndpointAuthMethod
+		}
+	}
+
+	endpoint := oauth2.Endpoint{
+		TokenURL: pending.TokenEndpoint,
+	}
+
+	// Select the auth style based on the token_endpoint_auth_method.
+	switch authMethod {
+	case "client_secret_post":
+		endpoint.AuthStyle = oauth2.AuthStyleInParams
+	case "none":
+		// Public client; no secret.
+		clientSecret = ""
+		endpoint.AuthStyle = oauth2.AuthStyleInParams
+	default: // "client_secret_basic" and any unknown method (fallback)
+		endpoint.AuthStyle = oauth2.AuthStyleInHeader
+	}
+
 	oauthCfg := &oauth2.Config{
-		ClientID:    pending.ClientID,
-		RedirectURL: pending.RedirectURI,
-		Endpoint: oauth2.Endpoint{
-			TokenURL: pending.TokenEndpoint,
-		},
+		ClientID:     clientID,
+		ClientSecret: clientSecret,
+		RedirectURL:  pending.RedirectURI,
+		Endpoint:     endpoint,
 	}
 	tok, err := oauthCfg.Exchange(ctx, code,
 		oauth2.SetAuthURLParam("code_verifier", pending.CodeVerifier),
