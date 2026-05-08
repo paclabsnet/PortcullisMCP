@@ -821,12 +821,32 @@ func (s *Server) exchangeOAuthCode(ctx context.Context, pending *pendingAuth, co
 
 	// Prefer dynamic client credentials stored after DCR.
 	if reg, err := s.credStore.GetClientReg(ctx, pending.BackendName); err == nil && reg != nil {
+		slog.Debug("keep: token exchange using dynamic client registration",
+			"backend", pending.BackendName,
+			"client_id", reg.ClientID,
+			"token_endpoint_auth_method", reg.TokenEndpointAuthMethod,
+			"has_secret", reg.ClientSecret != "",
+		)
 		clientID = reg.ClientID
 		clientSecret = reg.ClientSecret
 		if reg.TokenEndpointAuthMethod != "" {
 			authMethod = reg.TokenEndpointAuthMethod
 		}
+	} else {
+		slog.Debug("keep: token exchange using static client credentials",
+			"backend", pending.BackendName,
+			"client_id", clientID,
+		)
 	}
+
+	slog.Debug("keep: token exchange request",
+		"backend", pending.BackendName,
+		"token_endpoint", pending.TokenEndpoint,
+		"client_id", clientID,
+		"auth_method", authMethod,
+		"redirect_uri", pending.RedirectURI,
+		"resource", pending.Resource,
+	)
 
 	endpoint := oauth2.Endpoint{
 		TokenURL: pending.TokenEndpoint,
@@ -850,17 +870,46 @@ func (s *Server) exchangeOAuthCode(ctx context.Context, pending *pendingAuth, co
 		RedirectURL:  pending.RedirectURI,
 		Endpoint:     endpoint,
 	}
-	tok, err := oauthCfg.Exchange(ctx, code,
+	exchangeOpts := []oauth2.AuthCodeOption{
 		oauth2.SetAuthURLParam("code_verifier", pending.CodeVerifier),
-	)
+	}
+	if pending.Resource != "" {
+		exchangeOpts = append(exchangeOpts, oauth2.SetAuthURLParam("resource", pending.Resource)) // RFC 8707
+	}
+	tok, err := oauthCfg.Exchange(ctx, code, exchangeOpts...)
 	if err != nil {
+		// Surface the raw token endpoint response body when available.
+		var retrieveErr *oauth2.RetrieveError
+		if errors.As(err, &retrieveErr) {
+			slog.Debug("keep: token exchange failed",
+				"backend", pending.BackendName,
+				"http_status", retrieveErr.Response.StatusCode,
+				"response_body", string(retrieveErr.Body),
+				"error", err,
+			)
+		} else {
+			slog.Debug("keep: token exchange failed", "backend", pending.BackendName, "error", err)
+		}
 		return nil, fmt.Errorf("oauth exchange: %w", err)
 	}
-	return &userToken{
-		AccessToken:  tok.AccessToken,
-		RefreshToken: tok.RefreshToken,
-		Expiry:       tok.Expiry,
-	}, nil
+
+	ut := &userToken{
+		AccessToken:   tok.AccessToken,
+		RefreshToken:  tok.RefreshToken,
+		Expiry:        tok.Expiry,
+		TokenEndpoint: pending.TokenEndpoint,
+	}
+	slog.Debug("keep: token exchange succeeded",
+		"backend", pending.BackendName,
+		"expiry", tok.Expiry,
+		"expiry_is_zero", tok.Expiry.IsZero(),
+		"has_refresh_token", tok.RefreshToken != "",
+	)
+	debugLogBearerToken("keep: token exchange← access token", tok.AccessToken, "backend", pending.BackendName)
+	if tok.RefreshToken != "" {
+		debugLogBearerToken("keep: token exchange← refresh token", tok.RefreshToken, "backend", pending.BackendName)
+	}
+	return ut, nil
 }
 
 // backendOAuthConfig returns the BackendOAuth config for the named backend,

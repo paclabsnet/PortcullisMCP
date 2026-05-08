@@ -90,7 +90,7 @@ func RegisterDynamicClient(ctx context.Context, httpClient *http.Client, oauthCf
 		ResponseTypes:           []string{"code"},
 		GrantTypes:              grantTypes,
 		TokenEndpointAuthMethod: "client_secret_basic",
-		Scope:                   strings.Join(oauthCfg.Scopes, " "),
+		Scope:                   strings.Join(oauthCfg.EffectiveScopes(), " "),
 	}
 	if oauthCfg.DCR.SoftwareStatement != "" {
 		payload.SoftwareStatement = oauthCfg.DCR.SoftwareStatement
@@ -114,6 +114,12 @@ func RegisterDynamicClient(ctx context.Context, httpClient *http.Client, oauthCf
 		req.Header.Set("Authorization", "Bearer "+oauthCfg.DCR.InitialAccessToken)
 	}
 
+	debugLogDCRRequest("keep: DCR→ registration request", payload, oauthCfg.DCR.RegistrationEndpoint,
+		oauthCfg.DCR.InitialAccessToken != "", oauthCfg.DCR.SoftwareStatement != "")
+	if oauthCfg.DCR.InitialAccessToken != "" {
+		debugLogBearerToken("keep: DCR→ Initial Access Token", oauthCfg.DCR.InitialAccessToken)
+	}
+
 	// 4. Send the request.
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -134,8 +140,10 @@ func RegisterDynamicClient(ctx context.Context, httpClient *http.Client, oauthCf
 	// 6. Parse the JSON response.
 	var regResp dcrRegistrationResponse
 	if err := json.Unmarshal(respBody, &regResp); err != nil {
+		slog.Debug("keep: DCR← failed to parse response body", "status", resp.StatusCode, "body", string(respBody))
 		return nil, fmt.Errorf("dcr: parse response (status %d): %w", resp.StatusCode, err)
 	}
+	debugLogDCRResponse("keep: DCR← registration response", regResp, resp.StatusCode)
 
 	// 7. Surface IdP-level errors (RFC 7591 section 3.2.2).
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {

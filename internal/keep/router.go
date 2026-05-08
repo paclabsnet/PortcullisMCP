@@ -141,12 +141,46 @@ func (r *Router) CallTool(ctx context.Context, serverName, toolName string, args
 	// now so that the backend never sees a token that is about to expire mid-request.
 	if identityType == "oauth" {
 		userID := userIDFromContext(ctx)
+		slog.Debug("keep: oauth token lookup", "backend", serverName, "user_id", userID)
 		if userID != "" {
 			if cs := r.getCredStore(); cs != nil {
 				tok, err := cs.GetToken(ctx, serverName, userID)
-				if err == nil && tok != nil && time.Now().Before(tok.Expiry) {
-					tok = r.maybeRefreshToken(ctx, serverName, userID, tok)
-					ctx = withOAuthToken(ctx, tok.AccessToken)
+				if err != nil {
+					slog.Debug("keep: oauth token lookup error", "backend", serverName, "error", err)
+				} else if tok == nil {
+					slog.Debug("keep: oauth token not found in store (flow not yet completed)", "backend", serverName, "user_id", userID)
+				} else {
+					debugLogOAuthToken("keep: oauth token found in store", tok, "backend", serverName, "user_id", userID)
+					// Treat a zero Expiry (no expires_in in the token response) as valid
+					// indefinitely — RFC 6749 permits servers to omit expires_in.
+					tokenValid := tok.Expiry.IsZero() || time.Now().Before(tok.Expiry)
+					slog.Debug("keep: oauth token validity check",
+						"backend", serverName,
+						"expiry", tok.Expiry,
+						"expiry_is_zero", tok.Expiry.IsZero(),
+						"now", time.Now(),
+						"valid", tokenValid,
+					)
+					if tokenValid {
+						tok = r.maybeRefreshToken(ctx, serverName, userID, tok)
+						ctx = withOAuthToken(ctx, tok.AccessToken)
+						slog.Debug("keep: oauth token injected into context", "backend", serverName, "user_id", userID)
+					} else if tok.RefreshToken != "" {
+						// Token is expired but a refresh token is available — attempt silent
+						// recovery before forcing the user through the browser OAuth flow again.
+						if oauthCfg := r.backendOAuthCfg(serverName); oauthCfg != nil {
+							if refreshed, rErr := r.refreshOAuthToken(ctx, serverName, userID, tok, *oauthCfg); rErr == nil {
+								ctx = withOAuthToken(ctx, refreshed.AccessToken)
+								slog.Debug("keep: expired token recovered via refresh; oauth token injected", "backend", serverName, "user_id", userID)
+							} else {
+								slog.Warn("keep: expired token refresh failed; will trigger new OAuth flow", "backend", serverName, "user_id", userID, "error", rErr)
+							}
+						} else {
+							slog.Debug("keep: oauth token expired; will trigger new OAuth flow", "backend", serverName, "user_id", userID, "expiry", tok.Expiry)
+						}
+					} else {
+						slog.Debug("keep: oauth token expired; will trigger new OAuth flow", "backend", serverName, "user_id", userID, "expiry", tok.Expiry)
+					}
 				}
 			}
 		}
@@ -182,10 +216,39 @@ func (r *Router) CallTool(ctx context.Context, serverName, toolName string, args
 	// response headers if the backend returns a non-2xx response. This lets us
 	// return a structured CallToolResult (isError: true) with the headers intact
 	// rather than a generic error that discards useful auth information.
+	// This must be set before sessionFor so that a 401 during MCP initialize
+	// (e.g. when the backend requires OAuth before the handshake) is also captured.
 	ctx, respCap := withBackendRespCapture(ctx)
 
 	session, err := r.sessionFor(ctx, serverName)
 	if err != nil {
+		// A 401 during session establishment (MCP initialize) must trigger the
+		// same OAuth flow as a 401 from a tool call. Check the capture.
+		respCap.mu.Lock()
+		initStatus := respCap.statusCode
+		initHeaders := respCap.headers
+		respCap.mu.Unlock()
+
+		if initStatus == http.StatusUnauthorized && r.backendType(serverName) == "oauth" {
+			userID := userIDFromContext(ctx)
+			oauthCfg := r.backendOAuthCfg(serverName)
+			if oauthCfg != nil {
+				wwwAuth := initHeaders.Get("WWW-Authenticate")
+				eps, discErr := resolveOAuthEndpoints(ctx, *oauthCfg, wwwAuth)
+				if discErr != nil {
+					slog.Warn("keep: OAuth endpoint discovery failed after initialize 401", "backend", serverName, "error", discErr)
+				} else {
+					authResult, flowErr := r.tryStartOAuthFlow(ctx, serverName, userID, eps)
+					if flowErr != nil {
+						slog.Warn("keep: failed to start OAuth flow after initialize 401", "backend", serverName, "error", flowErr)
+					} else {
+						span.SetStatus(codes.Error, "oauth flow required")
+						return authResult, nil
+					}
+				}
+			}
+		}
+
 		span.SetStatus(codes.Error, err.Error())
 		return nil, err
 	}
@@ -193,6 +256,20 @@ func (r *Router) CallTool(ctx context.Context, serverName, toolName string, args
 		Name:      backendToolName,
 		Arguments: args,
 	})
+	if err != nil && isDeadSessionError(err) {
+		// The cached session is dead (SSE stream dropped, server-side timeout, etc.).
+		// Drop it and retry once with a fresh session.
+		slog.Warn("keep: MCP session appears dead; dropping and reconnecting", "backend", serverName, "error", err)
+		r.dropSession(serverName)
+		if session2, sessErr := r.sessionFor(ctx, serverName); sessErr == nil {
+			result, err = session2.CallTool(ctx, &mcp.CallToolParams{
+				Name:      backendToolName,
+				Arguments: args,
+			})
+		} else {
+			slog.Warn("keep: reconnect after dead session failed", "backend", serverName, "error", sessErr)
+		}
+	}
 	if err != nil {
 		// If the backend sent a non-2xx HTTP response, surface the status and
 		// headers to the agent as a structured error result so it can act on
@@ -293,6 +370,10 @@ func (r *Router) maybeRefreshToken(ctx context.Context, serverName, userID strin
 	if rw <= 0 || tok.RefreshToken == "" {
 		return tok
 	}
+	// No expiry info means the server didn't set expires_in; skip proactive refresh.
+	if tok.Expiry.IsZero() {
+		return tok
+	}
 	if time.Until(tok.Expiry) >= rw {
 		return tok // outside window; no refresh needed yet
 	}
@@ -325,11 +406,18 @@ func (r *Router) refreshOAuthToken(ctx context.Context, serverName, userID strin
 		}
 	}
 
+	// Prefer the endpoint that was discovered during the original OAuth flow and
+	// persisted with the token; fall back to the static config value.
+	tokenEndpoint := current.TokenEndpoint
+	if tokenEndpoint == "" {
+		tokenEndpoint = oauthCfg.TokenEndpoint
+	}
+
 	cfg := &oauth2.Config{
 		ClientID:     clientID,
 		ClientSecret: clientSecret,
 		Endpoint: oauth2.Endpoint{
-			TokenURL: oauthCfg.TokenEndpoint,
+			TokenURL: tokenEndpoint,
 		},
 	}
 
@@ -410,13 +498,14 @@ func (r *Router) tryStartOAuthFlow(ctx context.Context, serverName, userID strin
 		TokenEndpoint: eps.TokenEndpoint,
 		ClientID:      clientID,
 		RedirectURI:   oauthCfg.CallbackURL,
+		Resource:      eps.Resource, // RFC 8707: carried into the token exchange
 	}
 
 	if err := cs.StorePending(ctx, nonce, pending, oauthCfg.FlowTimeout()); err != nil {
 		return nil, fmt.Errorf("store pending auth: %w", err)
 	}
 
-	authURL := buildAuthURL(eps.AuthorizationEndpoint, clientID, oauthCfg.CallbackURL, effectiveScopes, nonce, codeChallenge)
+	authURL := buildAuthURL(eps.AuthorizationEndpoint, clientID, oauthCfg.CallbackURL, effectiveScopes, nonce, codeChallenge, eps.Resource)
 	slog.Info("keep: OAuth flow initiated", "backend", serverName, "user_id", userID)
 
 	return &mcp.CallToolResult{
@@ -432,9 +521,17 @@ func (r *Router) tryStartOAuthFlow(ctx context.Context, serverName, userID strin
 // performs dynamic client registration (with singleflight + distributed locking
 // to avoid thundering-herd and protect single-use Initial Access Tokens).
 func (r *Router) resolveOAuthClientCredentials(ctx context.Context, serverName string, oauthCfg BackendOAuth, eps oauthEndpoints, cs CredentialsStore) (clientID string, scopes []string, err error) {
+	slog.Debug("keep: resolving OAuth client credentials", "backend", serverName, "dcr_enabled", oauthCfg.DCR.Enabled)
+
 	reg, err := cs.GetClientReg(ctx, serverName)
 	if err != nil {
 		return "", nil, fmt.Errorf("get client reg: %w", err)
+	}
+
+	if reg != nil {
+		debugLogClientReg("keep: found existing dynamic client registration", reg, "backend", serverName)
+	} else {
+		slog.Debug("keep: no dynamic client registration found", "backend", serverName)
 	}
 
 	// Treat an expired dynamic secret the same as no registration.
@@ -449,17 +546,22 @@ func (r *Router) resolveOAuthClientCredentials(ctx context.Context, serverName s
 	}
 
 	if reg != nil {
-		// Dynamic client exists — intersect configured scopes with IdP-granted scopes.
-		effectiveScopes := oauthCfg.Scopes
+		// Dynamic client exists — intersect effective scopes with IdP-granted scopes.
+		effectiveScopes := oauthCfg.EffectiveScopes()
 		if reg.Scopes != "" {
-			effectiveScopes = intersectScopes(oauthCfg.Scopes, reg.Scopes)
+			effectiveScopes = intersectScopes(effectiveScopes, reg.Scopes)
 		}
+		slog.Debug("keep: using dynamic client credentials", "backend", serverName,
+			"client_id", reg.ClientID, "effective_scopes", effectiveScopes)
 		return reg.ClientID, effectiveScopes, nil
 	}
 
 	// Static client path.
 	if !oauthCfg.DCR.Enabled {
-		return oauthCfg.ClientID, oauthCfg.Scopes, nil
+		effectiveScopes := oauthCfg.EffectiveScopes()
+		slog.Debug("keep: using static client credentials", "backend", serverName,
+			"client_id", oauthCfg.ClientID, "scopes", effectiveScopes)
+		return oauthCfg.ClientID, effectiveScopes, nil
 	}
 
 	// DCR path — use singleflight to deduplicate concurrent registration attempts
@@ -472,9 +574,9 @@ func (r *Router) resolveOAuthClientCredentials(ctx context.Context, serverName s
 		return "", nil, regErr
 	}
 	reg = v.(*clientReg)
-	effectiveScopes := oauthCfg.Scopes
+	effectiveScopes := oauthCfg.EffectiveScopes()
 	if reg.Scopes != "" {
-		effectiveScopes = intersectScopes(oauthCfg.Scopes, reg.Scopes)
+		effectiveScopes = intersectScopes(effectiveScopes, reg.Scopes)
 	}
 	return reg.ClientID, effectiveScopes, nil
 }
@@ -483,30 +585,46 @@ func (r *Router) resolveOAuthClientCredentials(ctx context.Context, serverName s
 // It handles local re-checks, negative cache, distributed locking, and the
 // actual RegisterDynamicClient HTTP call.
 func (r *Router) performDCR(ctx context.Context, serverName string, oauthCfg BackendOAuth, eps oauthEndpoints, cs CredentialsStore) (*clientReg, error) {
+	slog.Debug("keep: entering DCR singleflight", "backend", serverName)
+
 	// Local re-check: another goroutine on this instance may have already registered.
 	if reg, err := cs.GetClientReg(ctx, serverName); err == nil && reg != nil {
+		slog.Debug("keep: DCR local re-check found existing registration (won by peer goroutine)", "backend", serverName, "client_id", reg.ClientID)
 		return reg, nil
 	}
 
 	// Negative cache check: a recent failure is still fresh.
 	if reason, err := cs.GetDCRFailure(ctx, serverName); err == nil && reason != "" {
+		slog.Debug("keep: DCR negative cache hit — skipping registration", "backend", serverName, "cached_reason", reason)
 		return nil, fmt.Errorf("dcr previously failed for backend %q: %s", serverName, reason)
 	}
+	slog.Debug("keep: DCR negative cache miss — proceeding to registration", "backend", serverName)
 
 	// Acquire a distributed lock to protect single-use Initial Access Tokens.
+	slog.Debug("keep: acquiring DCR distributed lock", "backend", serverName)
 	unlock, err := cs.LockDCR(ctx, serverName)
 	if err != nil {
 		return nil, fmt.Errorf("acquire dcr lock for %q: %w", serverName, err)
 	}
 	defer unlock()
+	slog.Debug("keep: DCR lock acquired", "backend", serverName)
 
 	// Global re-check: the lock-winner from another instance may have already stored the result.
 	if reg, err := cs.GetClientReg(ctx, serverName); err == nil && reg != nil {
+		slog.Debug("keep: DCR global re-check found existing registration (won by peer instance)", "backend", serverName, "client_id", reg.ClientID)
 		return reg, nil
 	}
 
 	// Set registration_endpoint from eps (populated by resolveOAuthEndpoints).
 	oauthCfg.DCR.RegistrationEndpoint = eps.RegistrationEndpoint
+	slog.Debug("keep: beginning DCR HTTP registration",
+		"backend", serverName,
+		"registration_endpoint", oauthCfg.DCR.RegistrationEndpoint,
+		"client_name", oauthCfg.DCR.ClientName,
+		"has_iat", oauthCfg.DCR.InitialAccessToken != "",
+		"has_software_statement", oauthCfg.DCR.SoftwareStatement != "",
+		"scopes", oauthCfg.EffectiveScopes(),
+	)
 
 	// Use a conservative HTTP client for DCR; private address access is not needed
 	// since registration endpoints must be reachable from the public internet.
@@ -523,9 +641,14 @@ func (r *Router) performDCR(ctx context.Context, serverName string, oauthCfg Bac
 			slog.Error("keep: DCR is enabled but IdP does not support RFC 7591; register the client manually and provide a static client_id",
 				"backend", serverName)
 		}
+		slog.Debug("keep: DCR registration failed; caching failure", "backend", serverName, "error", dcrErr, "cache_ttl", cacheTTL)
 		_ = cs.SetDCRFailure(ctx, serverName, dcrErr.Error(), cacheTTL)
 		return nil, fmt.Errorf("dynamic client registration for %q: %w", serverName, dcrErr)
 	}
+
+	slog.Debug("keep: DCR registration HTTP call succeeded", "backend", serverName, "client_id", reg.ClientID,
+		"token_endpoint_auth_method", reg.TokenEndpointAuthMethod, "scopes", reg.Scopes,
+		"secret_expires_at", reg.ClientSecretExpiresAt)
 
 	// Atomically persist the registration; another instance may have won the race
 	// despite the lock (e.g. lock timeout / split-brain).
@@ -537,10 +660,10 @@ func (r *Router) performDCR(ctx context.Context, serverName string, oauthCfg Bac
 		// Another instance stored a registration first — use theirs.
 		winner, getErr := cs.GetClientReg(ctx, serverName)
 		if getErr != nil || winner == nil {
-			// Fallback: use what we registered (it will be orphaned but functional).
 			slog.Warn("keep: DCR race: could not retrieve winner's registration; using local result", "backend", serverName)
 			return reg, nil
 		}
+		slog.Debug("keep: DCR race: using winner's registration from peer instance", "backend", serverName, "client_id", winner.ClientID)
 		return winner, nil
 	}
 
@@ -593,7 +716,8 @@ func generateNonce() (string, error) {
 }
 
 // buildAuthURL constructs the authorization endpoint URL with PKCE and state parameters.
-func buildAuthURL(authEndpoint, clientID, redirectURI string, scopes []string, state, codeChallenge string) string {
+// resource is the RFC 8707 resource indicator; pass "" to omit it.
+func buildAuthURL(authEndpoint, clientID, redirectURI string, scopes []string, state, codeChallenge, resource string) string {
 	params := url.Values{}
 	params.Set("response_type", "code")
 	params.Set("client_id", clientID)
@@ -604,6 +728,9 @@ func buildAuthURL(authEndpoint, clientID, redirectURI string, scopes []string, s
 	params.Set("state", state)
 	params.Set("code_challenge", codeChallenge)
 	params.Set("code_challenge_method", "S256")
+	if resource != "" {
+		params.Set("resource", resource) // RFC 8707
+	}
 	return authEndpoint + "?" + params.Encode()
 }
 
@@ -893,6 +1020,39 @@ func describeToolEntry(backendName, effectiveName, realName string) string {
 	return fmt.Sprintf("backend %q exposes %q as its real name", backendName, effectiveName)
 }
 
+// isDeadSessionError reports whether err indicates a stale or closed MCP
+// client session that should be dropped and re-established.
+func isDeadSessionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "connection closed") ||
+		strings.Contains(s, "client is closing") ||
+		strings.Contains(s, "exceeded 5 retries")
+}
+
+// dropSession removes the cached MCP session for the named backend so that the
+// next call to sessionFor will establish a fresh connection.
+// The old session is closed asynchronously (best-effort) since it may already
+// be in a broken state.
+func (r *Router) dropSession(serverName string) {
+	r.mu.Lock()
+	conn, ok := r.backends[serverName]
+	if !ok {
+		r.mu.Unlock()
+		return
+	}
+	oldSession := conn.session
+	conn.session = nil
+	conn.client = nil
+	r.mu.Unlock()
+	if oldSession != nil {
+		go func() { _ = oldSession.Close() }()
+	}
+	slog.Info("keep: dropped stale MCP session", "backend", serverName)
+}
+
 // sessionFor returns an active MCP client session for the named backend,
 // establishing the connection if it does not yet exist.
 func (r *Router) sessionFor(ctx context.Context, serverName string) (*mcp.ClientSession, error) {
@@ -904,8 +1064,11 @@ func (r *Router) sessionFor(ctx context.Context, serverName string) (*mcp.Client
 		return nil, fmt.Errorf("unknown backend %q", serverName)
 	}
 	if conn.session != nil {
+		slog.Debug("keep: reusing existing MCP session", "backend", serverName)
 		return conn.session, nil
 	}
+
+	slog.Debug("keep: establishing new MCP session", "backend", serverName, "type", conn.cfg.Type, "url", conn.cfg.URL)
 
 	transport, err := buildBackendTransport(conn)
 	if err != nil {
@@ -917,10 +1080,13 @@ func (r *Router) sessionFor(ctx context.Context, serverName string) (*mcp.Client
 		Version: version.Version,
 	}, nil)
 
+	slog.Debug("keep: sending MCP initialize to backend", "backend", serverName)
 	session, err := conn.client.Connect(ctx, transport, nil)
 	if err != nil {
+		slog.Debug("keep: MCP initialize failed", "backend", serverName, "error", err)
 		return nil, fmt.Errorf("connect to backend %q: %w", serverName, err)
 	}
+	slog.Debug("keep: MCP session established", "backend", serverName)
 	conn.session = session
 	return session, nil
 }
@@ -1014,6 +1180,11 @@ func (t *headerInjectingRoundTripper) RoundTrip(req *http.Request) (*http.Respon
 
 	oauthToken := oauthTokenFromContext(req.Context())
 
+	debugLogRequest("keep: backend→ request", req)
+	if oauthToken != "" {
+		debugLogBearerToken("keep: backend→ outgoing Bearer token", oauthToken, "backend", t.conn.cfg.Name)
+	}
+
 	var resp *http.Response
 	var err error
 
@@ -1095,6 +1266,20 @@ func (t *headerInjectingRoundTripper) RoundTrip(req *http.Request) (*http.Respon
 		}
 
 		resp, err = t.inner.RoundTrip(outReq)
+	}
+
+	if resp != nil {
+		debugLogResponse("keep: backend← response", resp, "backend", t.conn.cfg.Name)
+		if wwwAuth := resp.Header.Get("WWW-Authenticate"); wwwAuth != "" {
+			slog.Debug("keep: backend← WWW-Authenticate header present", "backend", t.conn.cfg.Name, "www_authenticate", wwwAuth)
+		}
+		// Log error response bodies at debug level so we can see IdP error messages.
+		if resp.StatusCode >= 400 {
+			debugLogResponseBody("keep: backend← error response body", resp, 4096)
+		}
+	}
+	if err != nil {
+		slog.Debug("keep: backend← transport error", "backend", t.conn.cfg.Name, "error", err)
 	}
 
 	// Capture the HTTP status and response headers from the first non-2xx

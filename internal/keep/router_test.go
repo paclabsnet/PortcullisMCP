@@ -1153,7 +1153,7 @@ func TestPKCEHelpers(t *testing.T) {
 func TestBuildAuthURL(t *testing.T) {
 	t.Parallel()
 	u := buildAuthURL("https://auth.example/authorize", "client-id", "https://keep.example/cb",
-		[]string{"read", "write"}, "state-123", "challenge-abc")
+		[]string{"read", "write"}, "state-123", "challenge-abc", "")
 	if !strings.Contains(u, "response_type=code") {
 		t.Errorf("missing response_type: %s", u)
 	}

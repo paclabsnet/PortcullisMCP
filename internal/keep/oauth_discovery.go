@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -32,11 +33,13 @@ const (
 
 
 // oauthEndpoints holds the resolved authorization and token endpoint URLs,
-// and the optional RFC 7591 registration endpoint discovered from ASM metadata.
+// the optional RFC 7591 registration endpoint discovered from ASM metadata,
+// and the optional RFC 8707 resource indicator from the PRM.
 type oauthEndpoints struct {
 	AuthorizationEndpoint string
 	TokenEndpoint         string
 	RegistrationEndpoint  string // populated when DCR is enabled and supported by the IdP
+	Resource              string // RFC 8707 resource indicator; set when discovered via PRM or static config
 }
 
 // resolveOAuthEndpoints returns the OAuth endpoints for a backend.
@@ -51,10 +54,18 @@ type oauthEndpoints struct {
 //  2. Follow resource_metadata (RFC 9728) → PRM → ASM, or as_uri / realm → ASM.
 //  3. ASM (RFC 8414 / OIDC Discovery) provides authorization_endpoint and token_endpoint.
 func resolveOAuthEndpoints(ctx context.Context, cfg BackendOAuth, wwwAuthenticate string) (oauthEndpoints, error) {
+	slog.Debug("keep: resolving OAuth endpoints",
+		"has_static_auth_endpoint", cfg.AuthorizationEndpoint != "",
+		"has_static_token_endpoint", cfg.TokenEndpoint != "",
+		"dcr_enabled", cfg.DCR.Enabled,
+		"www_authenticate", wwwAuthenticate,
+	)
+
 	if cfg.AuthorizationEndpoint != "" && cfg.TokenEndpoint != "" {
 		eps := oauthEndpoints{
 			AuthorizationEndpoint: cfg.AuthorizationEndpoint,
 			TokenEndpoint:         cfg.TokenEndpoint,
+			Resource:              cfg.Resource, // RFC 8707 static override
 		}
 		// When DCR is enabled and the registration endpoint is explicitly configured,
 		// use it directly; skip any ASM discovery for the registration endpoint.
@@ -64,12 +75,16 @@ func resolveOAuthEndpoints(ctx context.Context, cfg BackendOAuth, wwwAuthenticat
 		if cfg.DCR.Enabled && eps.RegistrationEndpoint == "" {
 			return oauthEndpoints{}, fmt.Errorf("dcr is enabled but registration_endpoint is not configured and cannot be discovered when authorization_endpoint is set statically")
 		}
+		debugLogOAuthEndpoints("keep: OAuth endpoints resolved from static config", eps, "static")
 		return eps, nil
 	}
+
+	slog.Debug("keep: static endpoints not set; running RFC 9728/8414 discovery chain")
 	client := newHTTPClient(true)
 	client.Timeout = discoveryHTTPTimeout
 	eps, err := discoverOAuthEndpoints(ctx, client, wwwAuthenticate)
 	if err != nil {
+		slog.Debug("keep: OAuth endpoint discovery failed", "error", err)
 		return oauthEndpoints{}, err
 	}
 	// If DCR is enabled and the static config provides a registration_endpoint, prefer it.
@@ -81,6 +96,7 @@ func resolveOAuthEndpoints(ctx context.Context, cfg BackendOAuth, wwwAuthenticat
 		return oauthEndpoints{}, fmt.Errorf("dcr is enabled but the IdP did not advertise a registration_endpoint in its metadata; " +
 			"set dcr.registration_endpoint explicitly or disable dcr")
 	}
+	debugLogOAuthEndpoints("keep: OAuth endpoints resolved via discovery", eps, "discovery")
 	return eps, nil
 }
 
@@ -95,6 +111,7 @@ func discoverOAuthEndpoints(ctx context.Context, client *http.Client, wwwAuthent
 	}
 
 	params := parseBearerParams(wwwAuthenticate)
+	slog.Debug("keep: parsed WWW-Authenticate Bearer params", "params", params)
 	if len(params) == 0 {
 		return oauthEndpoints{}, fmt.Errorf("WWW-Authenticate header %q does not contain a Bearer challenge — " +
 			"set authorization_endpoint and token_endpoint in config to skip discovery", wwwAuthenticate)
@@ -102,27 +119,35 @@ func discoverOAuthEndpoints(ctx context.Context, client *http.Client, wwwAuthent
 
 	// Priority 1: resource_metadata URL (RFC 9728).
 	if prmURL := params["resource_metadata"]; prmURL != "" {
+		slog.Debug("keep: following resource_metadata (RFC 9728 PRM)", "prm_url", prmURL)
 		eps, err := fetchFromPRM(ctx, client, prmURL)
 		if err == nil {
+			debugLogOAuthEndpoints("keep: OAuth endpoints from PRM", eps, "prm")
 			return eps, nil
 		}
-		// Non-fatal: fall through to other discovery methods and report at the end.
+		slog.Debug("keep: PRM fetch failed; trying next discovery method", "prm_url", prmURL, "error", err)
 	}
 
 	// Priority 2: as_uri — direct authorization server issuer URI.
 	if asURI := params["as_uri"]; asURI != "" {
+		slog.Debug("keep: trying as_uri for ASM discovery", "as_uri", asURI)
 		eps, err := fetchASM(ctx, client, asURI)
 		if err == nil {
+			debugLogOAuthEndpoints("keep: OAuth endpoints from as_uri ASM", eps, "as_uri")
 			return eps, nil
 		}
+		slog.Debug("keep: as_uri ASM discovery failed", "as_uri", asURI, "error", err)
 	}
 
 	// Priority 3: realm — treat as issuer for ASM discovery.
 	if realm := params["realm"]; realm != "" {
+		slog.Debug("keep: trying realm for ASM discovery", "realm", realm)
 		eps, err := fetchASM(ctx, client, realm)
 		if err == nil {
+			debugLogOAuthEndpoints("keep: OAuth endpoints from realm ASM", eps, "realm")
 			return eps, nil
 		}
+		slog.Debug("keep: realm ASM discovery failed", "realm", realm, "error", err)
 	}
 
 	return oauthEndpoints{}, fmt.Errorf(
@@ -223,12 +248,19 @@ func fetchFromPRM(ctx context.Context, client *http.Client, prmURL string) (oaut
 		return oauthEndpoints{
 			AuthorizationEndpoint: prm.AuthorizationEndpoint,
 			TokenEndpoint:         prm.TokenEndpoint,
+			Resource:              prm.Resource, // RFC 8707
 		}, nil
 	}
 	if len(prm.AuthorizationServers) == 0 {
 		return oauthEndpoints{}, fmt.Errorf("PRM at %q lists no authorization_servers", prmURL)
 	}
-	return fetchASM(ctx, client, prm.AuthorizationServers[0])
+	eps, err := fetchASM(ctx, client, prm.AuthorizationServers[0])
+	if err != nil {
+		return oauthEndpoints{}, err
+	}
+	// The resource identifier lives in the PRM, not the ASM — propagate it.
+	eps.Resource = prm.Resource
+	return eps, nil
 }
 
 // asmDocument is the JSON shape of an OAuth 2.0 Authorization Server Metadata

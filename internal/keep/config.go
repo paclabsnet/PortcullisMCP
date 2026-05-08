@@ -445,13 +445,51 @@ type BackendOAuth struct {
 	// StoreRefreshTokens controls whether Keep persists the refresh token in the
 	// CredentialsStore.  Set to false if the authorization server does not issue them.
 	StoreRefreshTokens bool `yaml:"store_refresh_tokens"`
+	// Resource is the RFC 8707 resource indicator sent to the authorization server
+	// so that issued tokens carry the correct aud claim.  When discovery via PRM
+	// (RFC 9728) is used this is populated automatically from the PRM resource field;
+	// set it explicitly here only when using static authorization_endpoint / token_endpoint.
+	Resource string `yaml:"resource"`
 	// DCR configures dynamic client registration. If enabled, ClientID may be empty.
 	DCR BackendDCR `yaml:"dcr"`
 }
 
-// RefreshWindow returns RefreshWindowSecs as a time.Duration.
+// defaultRefreshWindowSecs is used when RefreshWindowSecs is zero and
+// StoreRefreshTokens is true — proactive refresh should be on by default
+// when the user has opted in to storing refresh tokens.
+const defaultRefreshWindowSecs = 30
+
+// RefreshWindow returns the proactive token refresh window.
+// When RefreshWindowSecs is 0 and StoreRefreshTokens is true, it defaults
+// to defaultRefreshWindowSecs so that callers do not need to know the
+// magic value to get sensible refresh behaviour.
+// Set RefreshWindowSecs to -1 to explicitly disable proactive refresh.
 func (o *BackendOAuth) RefreshWindow() time.Duration {
+	if o.RefreshWindowSecs == 0 && o.StoreRefreshTokens {
+		return defaultRefreshWindowSecs * time.Second
+	}
+	if o.RefreshWindowSecs < 0 {
+		return 0
+	}
 	return time.Duration(o.RefreshWindowSecs) * time.Second
+}
+
+// EffectiveScopes returns the scopes to request, automatically adding
+// "offline_access" when StoreRefreshTokens is true and the scope is not
+// already present.  This mirrors what a well-behaved MCP client would do —
+// the user should not need to know the magic scope name.
+func (o *BackendOAuth) EffectiveScopes() []string {
+	scopes := make([]string, len(o.Scopes))
+	copy(scopes, o.Scopes)
+	if o.StoreRefreshTokens {
+		for _, s := range scopes {
+			if s == "offline_access" {
+				return scopes // already present
+			}
+		}
+		scopes = append(scopes, "offline_access")
+	}
+	return scopes
 }
 
 // FlowTimeout returns FlowTimeoutSecs as a time.Duration, defaulting to 10 minutes.

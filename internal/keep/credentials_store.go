@@ -23,9 +23,10 @@ import (
 
 // userToken holds an OAuth access/refresh token pair for a specific backend+user combination.
 type userToken struct {
-	AccessToken  string    `json:"access_token"`
-	RefreshToken string    `json:"refresh_token,omitempty"`
-	Expiry       time.Time `json:"expiry"`
+	AccessToken   string    `json:"access_token"`
+	RefreshToken  string    `json:"refresh_token,omitempty"`
+	Expiry        time.Time `json:"expiry"`
+	TokenEndpoint string    `json:"token_endpoint,omitempty"` // discovered endpoint; may be empty for static configs
 }
 
 // pendingAuth holds the PKCE and metadata for an in-progress OAuth authorization flow.
@@ -37,6 +38,7 @@ type pendingAuth struct {
 	TokenEndpoint string `json:"token_endpoint"`
 	ClientID      string `json:"client_id"`
 	RedirectURI   string `json:"redirect_uri"`
+	Resource      string `json:"resource,omitempty"` // RFC 8707 resource indicator; empty when not required
 }
 
 // clientReg holds dynamic client registration credentials for a backend.

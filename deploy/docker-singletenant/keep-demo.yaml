@@ -84,6 +84,21 @@ responsibility:
     - name: "enforceauth"
       type: "http"
       url: "https://mcp.enforceauth.dev/t/026730a0-b4cc-4cf7-bdd2-a79a73ca4772"
+      user_identity:
+        type: oauth
+        oauth:
+          client_id: "portcullis-keep"
+          callback_url: "http://localhost:8080/oauth/callback"
+          scopes:
+          - openid
+          - offline_access
+          store_refresh_tokens: true
+          dcr:
+            enabled: true
+            client_name: Portcullis Keep
+            timeout: 10s
+            failure_cache_ttl: 5m
+
       tool_list:
         source: file
         file: tools/enforceauth_mcp.json

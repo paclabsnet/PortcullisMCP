@@ -276,6 +276,11 @@
                                         "groups" : ["*"]
                                 }
                         },
+                        "ea_list_my_tenants": {
+                                "allow" : {
+                                        "groups" : ["*"]
+                                }
+                        },
                         "ea_list_entities" : {
                                 "allow" : {
                                         "groups" : ["*"]
@@ -290,7 +295,32 @@
                                             { "type":"prefix", "key_path": "resource.arguments.type", "data": "environment_config" }
                                         ]
                                 }
+                        }, 
+                        "ea_list_entity_configs" : {
+                                "allow" : {
+                                        "groups" : ["*"]
+                                }
+                        },
+                        "ea_get_effective_config" : {
+                                "allow" : {
+                                        "groups" : ["*"]
+                                }
+                        },
+                        "ea_get_entity_environments" : {
+                                "escalate" : {
+                                        "arg_restrictions" : [
+                                                { "type":"any","key_path":"resource.arguments.id"}
+                                        ]
+                                }
+                        },
+                        "ea_list_entity_users" : {
+                                "escalate": {
+                                        "arg_restrictions" : [
+                                                { "type":"any","key_path":"resource.arguments.id"}
+                                        ]
+                                }
                         }
+
                 },
                 "gitmcp" : {
                         "fetch_PortcullisMCP_documentation" : {
