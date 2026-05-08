@@ -434,6 +434,77 @@ func TestConfigValidate_PostureWarnings(t *testing.T) {
 		}
 	})
 
+	// --- DCR (Dynamic Client Registration) ---
+	t.Run("oauth with dcr enabled does not require static client_id", func(t *testing.T) {
+		cfg := validBaseConfig()
+		cfg.Responsibility.Backends = []BackendConfig{
+			{
+				Name: "test-backend",
+				Type: "http",
+				URL:  "http://backend.internal/mcp",
+				UserIdentity: BackendUserIdentity{
+					Type: "oauth",
+					OAuth: BackendOAuth{
+						CallbackURL: "https://keep.example.com/oauth/callback",
+						Scopes:      []string{"openid"},
+						DCR: BackendDCR{
+							Enabled:              true,
+							RegistrationEndpoint: "https://idp.example.com/connect/register",
+							ClientName:           "Portcullis",
+						},
+					},
+				},
+			},
+		}
+		if _, err := cfg.Validate(nil); err != nil {
+			t.Errorf("oauth with dcr enabled should be valid without client_id, got: %v", err)
+		}
+	})
+
+	t.Run("oauth without dcr still requires static client_id", func(t *testing.T) {
+		cfg := validBaseConfig()
+		cfg.Responsibility.Backends = []BackendConfig{
+			{
+				Name: "test-backend",
+				Type: "http",
+				URL:  "http://backend.internal/mcp",
+				UserIdentity: BackendUserIdentity{
+					Type: "oauth",
+					OAuth: BackendOAuth{
+						CallbackURL: "https://keep.example.com/oauth/callback",
+						Scopes:      []string{"openid"},
+						// DCR not enabled; client_id is empty
+					},
+				},
+			},
+		}
+		_, err := cfg.Validate(nil)
+		if err == nil || !strings.Contains(err.Error(), "client_id") {
+			t.Errorf("oauth without dcr should require client_id, got: %v", err)
+		}
+	})
+
+	t.Run("dcr struct fields are parsed correctly", func(t *testing.T) {
+		dcr := BackendDCR{
+			Enabled:              true,
+			RegistrationEndpoint: "https://idp.example.com/connect/register",
+			InitialAccessToken:   "iat-token",
+			SoftwareStatement:    "eyJhbGciOiJSUzI1NiJ9.e30.sig",
+			ClientName:           "Portcullis Keep",
+			Timeout:              15 * 1000000000, // 15s in nanoseconds
+			FailureCacheTTL:      300 * 1000000000,
+		}
+		if !dcr.Enabled {
+			t.Error("expected Enabled to be true")
+		}
+		if dcr.RegistrationEndpoint != "https://idp.example.com/connect/register" {
+			t.Errorf("unexpected RegistrationEndpoint: %q", dcr.RegistrationEndpoint)
+		}
+		if dcr.ClientName != "Portcullis Keep" {
+			t.Errorf("unexpected ClientName: %q", dcr.ClientName)
+		}
+	})
+
 	t.Run("absent gate_static_policy block is valid (feature disabled)", func(t *testing.T) {
 		cfg := validBaseConfig()
 		// GateStaticPolicy is zero-valued — strategy is empty.

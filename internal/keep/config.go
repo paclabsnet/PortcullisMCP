@@ -404,9 +404,28 @@ type BackendUserIdentity struct {
 	APIKey    BackendAPIKey            `yaml:"api_key"`
 }
 
+// BackendDCR configures RFC 7591 Dynamic Client Registration for a backend.
+type BackendDCR struct {
+	// Enabled determines if DCR should be attempted when no client registration exists.
+	Enabled bool `yaml:"enabled"`
+	// RegistrationEndpoint is the IdP's RFC 7591 endpoint.
+	RegistrationEndpoint string `yaml:"registration_endpoint"`
+	// InitialAccessToken (IAT) is the Bearer token used to authenticate the registration request (optional).
+	InitialAccessToken string `yaml:"initial_access_token"`
+	// SoftwareStatement is a JWT asserting client metadata (optional).
+	SoftwareStatement string `yaml:"software_statement"`
+	// ClientName is the human-readable name to register with the IdP.
+	ClientName string `yaml:"client_name"`
+	// Timeout is the maximum time to wait for the DCR request to complete (optional, defaults to 10s).
+	Timeout time.Duration `yaml:"timeout"`
+	// FailureCacheTTL is the duration to cache a DCR failure (optional, defaults to 5m).
+	FailureCacheTTL time.Duration `yaml:"failure_cache_ttl"`
+}
+
 // BackendOAuth configures an OAuth 2.1 PKCE authorization-code flow for a backend.
 type BackendOAuth struct {
 	// ClientID is the OAuth client identifier registered with the authorization server.
+	// May be empty when DCR.Enabled is true; Keep will register dynamically.
 	ClientID string `yaml:"client_id"`
 	// AuthorizationEndpoint is the URL of the authorization endpoint.
 	AuthorizationEndpoint string `yaml:"authorization_endpoint"`
@@ -426,6 +445,8 @@ type BackendOAuth struct {
 	// StoreRefreshTokens controls whether Keep persists the refresh token in the
 	// CredentialsStore.  Set to false if the authorization server does not issue them.
 	StoreRefreshTokens bool `yaml:"store_refresh_tokens"`
+	// DCR configures dynamic client registration. If enabled, ClientID may be empty.
+	DCR BackendDCR `yaml:"dcr"`
 }
 
 // RefreshWindow returns RefreshWindowSecs as a time.Duration.
@@ -616,8 +637,8 @@ func validateBackendConfig(cfg *BackendConfig) error {
 		}
 	case "oauth":
 		o := cfg.UserIdentity.OAuth
-		if o.ClientID == "" {
-			return fmt.Errorf("user_identity.oauth.client_id is required when type is \"oauth\"")
+		if o.ClientID == "" && !o.DCR.Enabled {
+			return fmt.Errorf("user_identity.oauth.client_id is required when type is \"oauth\" and dcr is not enabled")
 		}
 		if o.CallbackURL == "" {
 			return fmt.Errorf("user_identity.oauth.callback_url is required when type is \"oauth\"")
