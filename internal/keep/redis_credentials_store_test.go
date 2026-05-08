@@ -102,14 +102,35 @@ func TestRedisCredentialsStore_ClientReg(t *testing.T) {
 	ctx := context.Background()
 	s := newTestRedisCredStore(t)
 
-	reg := &clientReg{ClientID: "cid", ClientSecret: "sec"}
-	if err := s.SetClientReg(ctx, "my-backend", reg); err != nil {
-		t.Fatalf("SetClientReg: %v", err)
+	reg := &clientReg{
+		ClientID:                "cid",
+		ClientSecret:            "sec",
+		TokenEndpointAuthMethod: "client_secret_basic",
+		Scopes:                  "openid profile",
+	}
+	set, err := s.SetClientRegNX(ctx, "my-backend", reg)
+	if err != nil {
+		t.Fatalf("SetClientRegNX: %v", err)
+	}
+	if !set {
+		t.Error("SetClientRegNX: expected true on first set")
 	}
 
 	got, err := s.GetClientReg(ctx, "my-backend")
 	if err != nil || got == nil || got.ClientID != "cid" {
 		t.Errorf("GetClientReg: got %v, err=%v", got, err)
+	}
+	if got.TokenEndpointAuthMethod != "client_secret_basic" {
+		t.Errorf("GetClientReg: want TokenEndpointAuthMethod=client_secret_basic, got %q", got.TokenEndpointAuthMethod)
+	}
+
+	// Second NX set should not overwrite
+	set2, err := s.SetClientRegNX(ctx, "my-backend", &clientReg{ClientID: "other"})
+	if err != nil {
+		t.Fatalf("SetClientRegNX (second): %v", err)
+	}
+	if set2 {
+		t.Error("SetClientRegNX: expected false on second set")
 	}
 
 	miss, err := s.GetClientReg(ctx, "unknown")

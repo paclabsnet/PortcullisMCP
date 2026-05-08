@@ -93,11 +93,22 @@ func TestMemoryCredentialsStore(t *testing.T) {
 		}
 	})
 
-	t.Run("client reg ops", func(t *testing.T) {
-		reg := &clientReg{ClientID: "cid", ClientSecret: "sec"}
-		if err := s.SetClientReg(ctx, "backend-a", reg); err != nil {
-			t.Fatalf("SetClientReg: %v", err)
+	t.Run("client reg ops (SetClientRegNX)", func(t *testing.T) {
+		reg := &clientReg{
+			ClientID:                "cid",
+			ClientSecret:            "sec",
+			TokenEndpointAuthMethod: "client_secret_basic",
+			Scopes:                  "openid profile",
 		}
+		// First set should succeed (NX = not exists)
+		set, err := s.SetClientRegNX(ctx, "backend-a", reg)
+		if err != nil {
+			t.Fatalf("SetClientRegNX: %v", err)
+		}
+		if !set {
+			t.Error("SetClientRegNX: expected true on first set")
+		}
+
 		got, err := s.GetClientReg(ctx, "backend-a")
 		if err != nil {
 			t.Fatalf("GetClientReg error: %v", err)
@@ -105,10 +116,80 @@ func TestMemoryCredentialsStore(t *testing.T) {
 		if got == nil || got.ClientID != "cid" {
 			t.Errorf("GetClientReg: want ClientID=cid, got %v", got)
 		}
+		if got.TokenEndpointAuthMethod != "client_secret_basic" {
+			t.Errorf("GetClientReg: want TokenEndpointAuthMethod=client_secret_basic, got %q", got.TokenEndpointAuthMethod)
+		}
+		if got.Scopes != "openid profile" {
+			t.Errorf("GetClientReg: want Scopes='openid profile', got %q", got.Scopes)
+		}
+
+		// Second set should be a no-op
+		set2, err := s.SetClientRegNX(ctx, "backend-a", &clientReg{ClientID: "other"})
+		if err != nil {
+			t.Fatalf("SetClientRegNX (second): %v", err)
+		}
+		if set2 {
+			t.Error("SetClientRegNX: expected false on second set (already exists)")
+		}
+		// Original should still be there
+		got2, _ := s.GetClientReg(ctx, "backend-a")
+		if got2 == nil || got2.ClientID != "cid" {
+			t.Errorf("GetClientReg after no-op SetNX: want cid, got %v", got2)
+		}
+
 		// Miss
 		miss, err := s.GetClientReg(ctx, "unknown-backend")
 		if err != nil || miss != nil {
 			t.Errorf("GetClientReg miss: want nil, got %v", miss)
+		}
+	})
+
+	t.Run("LockDCR", func(t *testing.T) {
+		unlock, err := s.LockDCR(ctx, "backend-lock")
+		if err != nil {
+			t.Fatalf("LockDCR: %v", err)
+		}
+		// Unlock should not panic
+		unlock()
+		// Re-locking after unlock should work
+		unlock2, err := s.LockDCR(ctx, "backend-lock")
+		if err != nil {
+			t.Fatalf("LockDCR (second): %v", err)
+		}
+		unlock2()
+	})
+
+	t.Run("DCR failure cache", func(t *testing.T) {
+		// No failure initially
+		reason, err := s.GetDCRFailure(ctx, "backend-dcr-fail")
+		if err != nil || reason != "" {
+			t.Errorf("GetDCRFailure: want empty, got %q err=%v", reason, err)
+		}
+
+		// Set a failure
+		if err := s.SetDCRFailure(ctx, "backend-dcr-fail", "invalid_software_statement", 10*time.Minute); err != nil {
+			t.Fatalf("SetDCRFailure: %v", err)
+		}
+
+		// Should be visible
+		reason, err = s.GetDCRFailure(ctx, "backend-dcr-fail")
+		if err != nil {
+			t.Fatalf("GetDCRFailure error: %v", err)
+		}
+		if reason != "invalid_software_statement" {
+			t.Errorf("GetDCRFailure: want 'invalid_software_statement', got %q", reason)
+		}
+	})
+
+	t.Run("DCR failure cache expiry", func(t *testing.T) {
+		fresh := NewMemoryCredentialsStore()
+		if err := fresh.SetDCRFailure(ctx, "b", "err", time.Millisecond); err != nil {
+			t.Fatalf("SetDCRFailure: %v", err)
+		}
+		time.Sleep(5 * time.Millisecond)
+		reason, err := fresh.GetDCRFailure(ctx, "b")
+		if err != nil || reason != "" {
+			t.Errorf("GetDCRFailure after expiry: want empty, got %q err=%v", reason, err)
 		}
 	})
 }

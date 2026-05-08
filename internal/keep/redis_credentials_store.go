@@ -116,6 +116,14 @@ func (s *redisCredentialsStore) ConsumePending(ctx context.Context, nonce string
 	return &p, nil
 }
 
+func (s *redisCredentialsStore) redisClientLockKey(backend string) string {
+	return s.prefix + "dcr_lock:" + backend
+}
+
+func (s *redisCredentialsStore) redisDCRFailKey(backend string) string {
+	return s.prefix + "dcr_fail:" + backend
+}
+
 func (s *redisCredentialsStore) GetClientReg(ctx context.Context, backend string) (*clientReg, error) {
 	data, err := s.client.Get(ctx, s.redisClientKey(backend)).Bytes()
 	if err != nil {
@@ -131,11 +139,51 @@ func (s *redisCredentialsStore) GetClientReg(ctx context.Context, backend string
 	return &r, nil
 }
 
-func (s *redisCredentialsStore) SetClientReg(ctx context.Context, backend string, reg *clientReg) error {
+// SetClientRegNX atomically sets the client registration only if no entry exists.
+// Uses Redis SET NX (not-exists) to prevent overwriting a concurrent winner.
+// Client registrations do not expire (TTL=0).
+func (s *redisCredentialsStore) SetClientRegNX(ctx context.Context, backend string, reg *clientReg) (bool, error) {
 	data, err := json.Marshal(reg)
 	if err != nil {
-		return fmt.Errorf("marshal client reg: %w", err)
+		return false, fmt.Errorf("marshal client reg: %w", err)
 	}
-	// Client registrations do not expire.
-	return s.client.Set(ctx, s.redisClientKey(backend), data, 0).Err()
+	ok, err := s.client.SetNX(ctx, s.redisClientKey(backend), data, 0).Result()
+	if err != nil {
+		return false, fmt.Errorf("redis setnx client reg: %w", err)
+	}
+	return ok, nil
+}
+
+// LockDCR acquires a short-lived distributed lock for the backend's DCR flow.
+// Uses Redis SET NX EX with a 30-second TTL to guard against lock holder crashes.
+func (s *redisCredentialsStore) LockDCR(ctx context.Context, backend string) (func(), error) {
+	const lockTTL = 30 * time.Second
+	key := s.redisClientLockKey(backend)
+	ok, err := s.client.SetNX(ctx, key, "1", lockTTL).Result()
+	if err != nil {
+		return nil, fmt.Errorf("redis dcr lock acquire: %w", err)
+	}
+	if !ok {
+		return nil, fmt.Errorf("dcr lock for %q already held", backend)
+	}
+	return func() {
+		s.client.Del(ctx, key) //nolint:errcheck
+	}, nil
+}
+
+// GetDCRFailure returns the cached DCR failure reason, or "" if none exists.
+func (s *redisCredentialsStore) GetDCRFailure(ctx context.Context, backend string) (string, error) {
+	val, err := s.client.Get(ctx, s.redisDCRFailKey(backend)).Result()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return "", nil
+		}
+		return "", fmt.Errorf("redis get dcr failure: %w", err)
+	}
+	return val, nil
+}
+
+// SetDCRFailure caches a DCR failure reason with the given TTL.
+func (s *redisCredentialsStore) SetDCRFailure(ctx context.Context, backend string, reason string, ttl time.Duration) error {
+	return s.client.Set(ctx, s.redisDCRFailKey(backend), reason, ttl).Err()
 }

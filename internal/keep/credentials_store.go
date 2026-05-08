@@ -16,6 +16,7 @@ package keep
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -40,8 +41,11 @@ type pendingAuth struct {
 
 // clientReg holds dynamic client registration credentials for a backend.
 type clientReg struct {
-	ClientID     string `json:"client_id"`
-	ClientSecret string `json:"client_secret,omitempty"`
+	ClientID                string `json:"client_id"`
+	ClientSecret            string `json:"client_secret,omitempty"`
+	ClientSecretExpiresAt   int64  `json:"client_secret_expires_at,omitempty"` // Unix timestamp; 0 = never expires
+	TokenEndpointAuthMethod string `json:"token_endpoint_auth_method,omitempty"`
+	Scopes                  string `json:"scope,omitempty"`
 }
 
 // CredentialsStore manages per-user OAuth tokens, in-progress flow state, and
@@ -60,7 +64,17 @@ type CredentialsStore interface {
 	// Returns (nil, nil) if the nonce is unknown, already consumed, or expired.
 	ConsumePending(ctx context.Context, nonce string) (*pendingAuth, error)
 	GetClientReg(ctx context.Context, backend string) (*clientReg, error)
-	SetClientReg(ctx context.Context, backend string, reg *clientReg) error
+	// SetClientRegNX atomically sets the client registration only if one does not already exist.
+	// Returns (true, nil) if set, (false, nil) if a registration already exists.
+	SetClientRegNX(ctx context.Context, backend string, reg *clientReg) (bool, error)
+	// LockDCR acquires an exclusive lock for the given backend's DCR flow.
+	// Returns an unlock function and nil on success. Callers must call unlock when done.
+	LockDCR(ctx context.Context, backend string) (func(), error)
+	// GetDCRFailure returns the cached failure reason for a recent failed DCR attempt,
+	// or "" if no failure is cached (or the cache has expired).
+	GetDCRFailure(ctx context.Context, backend string) (string, error)
+	// SetDCRFailure records a DCR failure reason in the store for the given TTL.
+	SetDCRFailure(ctx context.Context, backend string, reason string, ttl time.Duration) error
 }
 
 const defaultPendingTTL = 10 * time.Minute
@@ -71,21 +85,32 @@ type pendingEntry struct {
 	expiry time.Time
 }
 
+// dcrFailureEntry records a cached DCR failure reason and its expiry.
+type dcrFailureEntry struct {
+	reason string
+	expiry time.Time
+}
+
 // memoryCredentialsStore is a single-process, non-persistent CredentialsStore.
 // It is safe for concurrent use but state is lost on restart.
 type memoryCredentialsStore struct {
-	mu      sync.RWMutex
-	tokens  map[string]*userToken
-	pending map[string]*pendingEntry
-	clients map[string]*clientReg
+	mu          sync.RWMutex
+	tokens      map[string]*userToken
+	pending     map[string]*pendingEntry
+	clients     map[string]*clientReg
+	dcrFailures map[string]*dcrFailureEntry
+	dcrLocks    map[string]*sync.Mutex
+	dcrLocksMu  sync.Mutex
 }
 
 // NewMemoryCredentialsStore returns a CredentialsStore backed by in-process maps.
 func NewMemoryCredentialsStore() CredentialsStore {
 	return &memoryCredentialsStore{
-		tokens:  make(map[string]*userToken),
-		pending: make(map[string]*pendingEntry),
-		clients: make(map[string]*clientReg),
+		tokens:      make(map[string]*userToken),
+		pending:     make(map[string]*pendingEntry),
+		clients:     make(map[string]*clientReg),
+		dcrFailures: make(map[string]*dcrFailureEntry),
+		dcrLocks:    make(map[string]*sync.Mutex),
 	}
 }
 
@@ -150,9 +175,49 @@ func (s *memoryCredentialsStore) GetClientReg(_ context.Context, backend string)
 	return nil, nil
 }
 
-func (s *memoryCredentialsStore) SetClientReg(_ context.Context, backend string, reg *clientReg) error {
+func (s *memoryCredentialsStore) SetClientRegNX(_ context.Context, backend string, reg *clientReg) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, exists := s.clients[backend]; exists {
+		return false, nil
+	}
 	s.clients[backend] = reg
+	return true, nil
+}
+
+func (s *memoryCredentialsStore) LockDCR(_ context.Context, backend string) (func(), error) {
+	s.dcrLocksMu.Lock()
+	mu, ok := s.dcrLocks[backend]
+	if !ok {
+		mu = &sync.Mutex{}
+		s.dcrLocks[backend] = mu
+	}
+	s.dcrLocksMu.Unlock()
+
+	mu.Lock()
+	return func() { mu.Unlock() }, nil
+}
+
+func (s *memoryCredentialsStore) GetDCRFailure(_ context.Context, backend string) (string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	entry, ok := s.dcrFailures[backend]
+	if !ok {
+		return "", nil
+	}
+	if time.Now().After(entry.expiry) {
+		return "", nil // expired
+	}
+	return entry.reason, nil
+}
+
+func (s *memoryCredentialsStore) SetDCRFailure(_ context.Context, backend string, reason string, ttl time.Duration) error {
+	if ttl <= 0 {
+		return fmt.Errorf("dcr failure ttl must be positive")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.dcrFailures[backend] = &dcrFailureEntry{reason: reason, expiry: time.Now().Add(ttl)}
 	return nil
 }
+
