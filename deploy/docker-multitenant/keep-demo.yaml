@@ -1,7 +1,9 @@
 # Portcullis Keep — multi-tenant demo configuration
 #
 # Keep validates bearer tokens presented by Gate's tenants against
-# mock-idp.dev's public JWKS. No Guard or escalation in this stack.
+# mock-idp.dev's public JWKS. Escalation tokens are signed with
+# the key in responsibility.issuance.signing_key, which Guard uses
+# as its approval_request_verification_key.
 
 mode: dev
 

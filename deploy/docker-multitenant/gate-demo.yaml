@@ -19,12 +19,11 @@ mode: dev
 #
 tenancy: multi
 
-# Escalation is disabled in this demo. All EscalationPending responses from Keep are
-# intercepted, logged to the SIEM, and returned to the agent as a deny marker.
-#
-# To enable multi-tenant escalation, set this to "session" or "fingerprint", configure
-# peers.guard below, and switch operations.storage.backend to "redis".
-escalation: disabled
+# "session" partitions escalation state by the tenant's bearer-token session, so
+# each user sees only their own pending approvals and escalation tokens.
+# Use "fingerprint" to partition by OIDC credential fingerprint instead.
+# Use "disabled" to turn off human-in-the-loop approval entirely.
+escalation: session
 
 server:
   endpoints:
@@ -38,10 +37,9 @@ server:
 
 #
 # In multi-tenant:
-#   No identity section provided, the identity credentials are provided by the Agent
-#   with a header, and will be validated by Keep
+#   No identity section provided — the Agent supplies a bearer token that Keep
+#   validates against the IdP's JWKS endpoint.
 #
-
 
 peers:
   keep:
@@ -51,8 +49,19 @@ peers:
       credentials:
         bearer_token: "dev-secret-token"
 
+  guard:
+    endpoints:
+      # approval_ui must be reachable by the human in their browser (host-facing).
+      approval_ui: "http://localhost:8444"
+      # token_api is called by Gate on the internal Docker network.
+      token_api: "http://guard:8445"
+    auth:
+      type: "bearer"
+      credentials:
+        bearer_token: "dev-guard-token"
+
 #
-# it doesnt make sense to allow a local filesystem tool in a multi-tenant environment
+# Local filesystem tools are not available in multi-tenant mode (tenant isolation).
 #
 responsibility:
   tools:
@@ -63,12 +72,11 @@ responsibility:
 
 operations:
   storage:
-    backend: "memory"
-#    config:
-#      addr: "redis:6379"
-#      password: "portcullis-dev-secret"
-#      key_prefix: "portcullis:gate:"
-
+    backend: "redis"
+    config:
+      addr: "redis:6379"
+      password: "portcullis-dev-secret"
+      key_prefix: "portcullis:gate:"
 
   telemetry:
     exporter: "noop"

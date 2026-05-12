@@ -17,6 +17,13 @@ services:
     networks:
       - portcullis-mt
 
+  redis:
+    image: redis:7-alpine
+    container_name: portcullis-mt-redis
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-portcullis-dev-secret}", "--loglevel", "notice"]
+    networks:
+      - portcullis-mt
+
   keep:
     build:
       context: ../..
@@ -35,6 +42,25 @@ services:
     networks:
       - portcullis-mt
 
+  guard:
+    build:
+      context: ../..
+      dockerfile: deploy/docker-multitenant/Dockerfile
+      target: guard
+      args:
+        VERSION: ${VERSION:-0.4.2-dev}
+    container_name: portcullis-mt-guard
+    ports:
+      - "8444:8444"  # approval UI — human opens this in their browser
+      - "8445:8445"  # token API  — Gate calls this on the internal network
+    volumes:
+      - ./guard-demo.yaml:/etc/portcullis/guard.yaml:ro
+    command: ["-config", "/etc/portcullis/guard.yaml"]
+    depends_on:
+      - redis
+    networks:
+      - portcullis-mt
+
   gate:
     build:
       context: ../..
@@ -50,6 +76,8 @@ services:
     command: ["-config", "/etc/portcullis/gate.yaml"]
     depends_on:
       - keep
+      - guard
+      - redis
     networks:
       - portcullis-mt
 
