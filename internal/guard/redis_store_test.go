@@ -131,7 +131,7 @@ func TestRedisPendingStore_PurgeExpiredIsNoOp(t *testing.T) {
 
 // ---- RedisUnclaimedStore ----------------------------------------------------
 
-func TestRedisUnclaimedStore_AddAndList(t *testing.T) {
+func TestRedisUnclaimedStore_AddAndClaim(t *testing.T) {
 	ctx := context.Background()
 	s := NewRedisUnclaimedStore(newTestRedisClient(t), "", 0)
 
@@ -145,28 +145,12 @@ func TestRedisUnclaimedStore_AddAndList(t *testing.T) {
 		t.Fatalf("AddUnclaimed: %v", err)
 	}
 
-	list, err := s.ListUnclaimed(ctx, tok.UserID)
+	claimed, err := s.ClaimToken(ctx, tok.JTI)
 	if err != nil {
-		t.Fatalf("ListUnclaimed: %v", err)
+		t.Fatalf("ClaimToken: %v", err)
 	}
-	if len(list) != 1 {
-		t.Fatalf("expected 1 token, got %d", len(list))
-	}
-	if list[0].JTI != tok.JTI || list[0].Raw != tok.Raw {
-		t.Errorf("listed token = %+v, want %+v", list[0], tok)
-	}
-}
-
-func TestRedisUnclaimedStore_ListEmptyUser(t *testing.T) {
-	ctx := context.Background()
-	s := NewRedisUnclaimedStore(newTestRedisClient(t), "", 0)
-
-	list, err := s.ListUnclaimed(ctx, "nobody@corp.com")
-	if err != nil {
-		t.Fatalf("ListUnclaimed for unknown user: %v", err)
-	}
-	if len(list) != 0 {
-		t.Errorf("expected empty list, got %d entries", len(list))
+	if claimed == nil || claimed.JTI != tok.JTI || claimed.Raw != tok.Raw {
+		t.Errorf("claimed token = %+v, want %+v", claimed, tok)
 	}
 }
 
@@ -244,7 +228,7 @@ func TestRedisUnclaimedStore_CapacityExceeded(t *testing.T) {
 	}
 }
 
-func TestRedisUnclaimedStore_TTLExpiry_HidesFromList(t *testing.T) {
+func TestRedisUnclaimedStore_TTLExpiry_ClaimReturnsNil(t *testing.T) {
 	ctx := context.Background()
 	mr := miniredis.RunT(t)
 	s := NewRedisUnclaimedStore(redis.NewClient(&redis.Options{Addr: mr.Addr()}), "", 0)
@@ -262,12 +246,12 @@ func TestRedisUnclaimedStore_TTLExpiry_HidesFromList(t *testing.T) {
 	// Fast-forward past the TTL.
 	mr.FastForward(3 * time.Second)
 
-	list, err := s.ListUnclaimed(ctx, tok.UserID)
+	claimed, err := s.ClaimToken(ctx, tok.JTI)
 	if err != nil {
-		t.Fatalf("ListUnclaimed after expiry: %v", err)
+		t.Fatalf("ClaimToken after expiry: %v", err)
 	}
-	if len(list) != 0 {
-		t.Errorf("expected empty list after TTL expiry, got %d entries", len(list))
+	if claimed != nil {
+		t.Errorf("expected nil after TTL expiry, got %+v", claimed)
 	}
 }
 
@@ -279,7 +263,7 @@ func TestRedisUnclaimedStore_PurgeExpiredIsNoOp(t *testing.T) {
 	}
 }
 
-func TestRedisUnclaimedStore_MultipleUsers(t *testing.T) {
+func TestRedisUnclaimedStore_MultipleUsers_IndependentClaims(t *testing.T) {
 	ctx := context.Background()
 	s := NewRedisUnclaimedStore(newTestRedisClient(t), "", 0)
 
@@ -297,13 +281,13 @@ func TestRedisUnclaimedStore_MultipleUsers(t *testing.T) {
 		}
 	}
 
-	aliceTokens, _ := s.ListUnclaimed(ctx, "alice@corp.com")
-	bobTokens, _ := s.ListUnclaimed(ctx, "bob@corp.com")
-	if len(aliceTokens) != 1 || aliceTokens[0].JTI != "jti-a" {
-		t.Errorf("alice: %+v", aliceTokens)
+	aliceClaimed, err := s.ClaimToken(ctx, "jti-a")
+	if err != nil || aliceClaimed == nil || aliceClaimed.JTI != "jti-a" {
+		t.Errorf("alice claim: err=%v, tok=%+v", err, aliceClaimed)
 	}
-	if len(bobTokens) != 1 || bobTokens[0].JTI != "jti-b" {
-		t.Errorf("bob: %+v", bobTokens)
+	bobClaimed, err := s.ClaimToken(ctx, "jti-b")
+	if err != nil || bobClaimed == nil || bobClaimed.JTI != "jti-b" {
+		t.Errorf("bob claim: err=%v, tok=%+v", err, bobClaimed)
 	}
 }
 

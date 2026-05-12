@@ -33,7 +33,7 @@ import (
 func newTestManagementServer(t *testing.T, endpoint cfgloader.EndpointConfig, interaction AgentInteractionConfig) *ManagementServer {
 	t.Helper()
 	storePath := filepath.Join(t.TempDir(), "tokens.json")
-	store, err := NewTokenStore(context.Background(), storePath)
+	store, err := NewTokenStore(context.Background(), storePath, "", nil)
 	if err != nil {
 		t.Fatalf("NewTokenStore: %v", err)
 	}
@@ -215,7 +215,7 @@ func TestManagementServer_UpdateIdentityToken(t *testing.T) {
 	identity, _ := NewIdentityCache(context.Background(), identityCfg)
 
 	storePath := filepath.Join(dir, "tokens.json")
-	store, _ := NewTokenStore(context.Background(), storePath)
+	store, _ := NewTokenStore(context.Background(), storePath, "", nil)
 	ms, err := NewManagementServer(store, identity, cfgloader.EndpointConfig{}, AgentInteractionConfig{}, nil, "")
 	if err != nil {
 		t.Fatalf("NewManagementServer: %v", err)
@@ -376,7 +376,7 @@ func TestNewManagementServer_CallbackPageFile_Override(t *testing.T) {
 	pageFile := filepath.Join(dir, "callback.html")
 	_ = os.WriteFile(pageFile, []byte(customHTML), 0600)
 
-	store, _ := NewTokenStore(context.Background(), filepath.Join(dir, "tokens.json"))
+	store, _ := NewTokenStore(context.Background(), filepath.Join(dir, "tokens.json"), "", nil)
 	identity, _ := NewIdentityCache(context.Background(), IdentityConfig{Strategy: "os", Config: map[string]any{"user_id": "test"}})
 	sm := NewStateMachine()
 	oidcLogin := NewOIDCLoginManager(OIDCLoginConfig{IssuerURL: "https://idp.example.com", ClientID: "c"}, DefaultManagementAPIPort, 0, sm, nil, nil, nil, nil)
@@ -400,7 +400,7 @@ func TestNewManagementServer_CallbackPageFile_Override(t *testing.T) {
 
 func TestNewManagementServer_CallbackPageFile_Missing(t *testing.T) {
 	dir := t.TempDir()
-	store, _ := NewTokenStore(context.Background(), filepath.Join(dir, "tokens.json"))
+	store, _ := NewTokenStore(context.Background(), filepath.Join(dir, "tokens.json"), "", nil)
 	identity, _ := NewIdentityCache(context.Background(), IdentityConfig{Strategy: "os", Config: map[string]any{"user_id": "test"}})
 	sm := NewStateMachine()
 	oidcLogin := NewOIDCLoginManager(OIDCLoginConfig{IssuerURL: "https://idp.example.com", ClientID: "c"}, DefaultManagementAPIPort, 0, sm, nil, nil, nil, nil)
@@ -413,7 +413,7 @@ func TestNewManagementServer_CallbackPageFile_Missing(t *testing.T) {
 
 func TestNewManagementServer_CallbackPageFile_Empty_UsesEmbedded(t *testing.T) {
 	dir := t.TempDir()
-	store, _ := NewTokenStore(context.Background(), filepath.Join(dir, "tokens.json"))
+	store, _ := NewTokenStore(context.Background(), filepath.Join(dir, "tokens.json"), "", nil)
 	identity, _ := NewIdentityCache(context.Background(), IdentityConfig{Strategy: "os", Config: map[string]any{"user_id": "test"}})
 	sm := NewStateMachine()
 	oidcLogin := NewOIDCLoginManager(OIDCLoginConfig{IssuerURL: "https://idp.example.com", ClientID: "c"}, DefaultManagementAPIPort, 0, sm, nil, nil, nil, nil)

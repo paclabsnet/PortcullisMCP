@@ -90,20 +90,6 @@ func (s *MemStore) AddUnclaimed(_ context.Context, tok UnclaimedToken) error {
 	return nil
 }
 
-func (s *MemStore) ListUnclaimed(_ context.Context, userID string) ([]UnclaimedToken, error) {
-	now := time.Now()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	userTokens := s.unclaimedEntries[userID]
-	result := make([]UnclaimedToken, 0, len(userTokens))
-	for _, tok := range userTokens {
-		if !tok.ExpiresAt.Before(now) {
-			result = append(result, tok)
-		}
-	}
-	return result, nil
-}
-
 func (s *MemStore) ClaimToken(_ context.Context, jti string) (*UnclaimedToken, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

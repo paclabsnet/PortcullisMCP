@@ -15,10 +15,7 @@
 package gate
 
 import (
-	"context"
 	"net/http"
-
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // TenancyProvider abstracts the behavioural differences between single-tenant
@@ -29,18 +26,11 @@ type TenancyProvider interface {
 
 	// Capabilities returns the feature flags allowed for this tenancy mode.
 	Capabilities() Capabilities
-
-	// MapPolicyError converts internal policy results into MCP Tool results.
-	// It returns (result, handled). If handled=true, the caller should return
-	// the result immediately.
-	MapPolicyError(ctx context.Context, err error, tool, traceID string, cfg *Config) (*mcp.CallToolResult, bool)
 }
 
 // Capabilities describes which Gate features are enabled for a given tenancy mode.
 type Capabilities struct {
 	AllowLocalFS      bool
 	AllowManagementUI bool
-	AllowGuardPeer    bool
-	AllowHumanInLoop  bool
 	AllowNativeTools  bool
 }

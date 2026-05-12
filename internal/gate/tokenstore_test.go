@@ -128,7 +128,7 @@ func TestParseEscalationToken_NoExpClaim(t *testing.T) {
 
 func TestTokenStore_AddAndAll(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tokens.json")
-	ts, err := NewTokenStore(context.Background(), path)
+	ts, err := NewTokenStore(context.Background(), path, "", nil)
 	if err != nil {
 		t.Fatalf("NewTokenStore: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestTokenStore_AddAndAll(t *testing.T) {
 		t.Errorf("returned TokenID = %q, want %q", tok.TokenID, "t1")
 	}
 
-	all := ts.All()
+	all := ts.All(context.Background())
 	if len(all) != 1 {
 		t.Fatalf("All() returned %d tokens, want 1", len(all))
 	}
@@ -155,18 +155,18 @@ func TestTokenStore_Persistence(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tokens.json")
 
 	// Add a token via first store instance.
-	ts1, _ := NewTokenStore(context.Background(), path)
+	ts1, _ := NewTokenStore(context.Background(), path, "", nil)
 	raw := makeTestJWT(map[string]any{"jti": "persist-me", "exp": futureExp()})
 	if _, err := ts1.Add(context.Background(), raw); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
 	// Load a second store from the same file.
-	ts2, err := NewTokenStore(context.Background(), path)
+	ts2, err := NewTokenStore(context.Background(), path, "", nil)
 	if err != nil {
 		t.Fatalf("second NewTokenStore: %v", err)
 	}
-	all := ts2.All()
+	all := ts2.All(context.Background())
 	if len(all) != 1 {
 		t.Fatalf("second store has %d tokens, want 1", len(all))
 	}
@@ -177,7 +177,7 @@ func TestTokenStore_Persistence(t *testing.T) {
 
 func TestTokenStore_Delete(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tokens.json")
-	ts, _ := NewTokenStore(context.Background(), path)
+	ts, _ := NewTokenStore(context.Background(), path, "", nil)
 
 	raw := makeTestJWT(map[string]any{"jti": "del-me", "exp": futureExp()})
 	ts.Add(context.Background(), raw)
@@ -185,14 +185,14 @@ func TestTokenStore_Delete(t *testing.T) {
 	if err := ts.Delete(context.Background(), "del-me"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if len(ts.All()) != 0 {
+	if len(ts.All(context.Background())) != 0 {
 		t.Error("expected empty store after delete")
 	}
 }
 
 func TestTokenStore_Delete_NotFound(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tokens.json")
-	ts, _ := NewTokenStore(context.Background(), path)
+	ts, _ := NewTokenStore(context.Background(), path, "", nil)
 
 	if err := ts.Delete(context.Background(), "nonexistent"); err == nil {
 		t.Error("expected error deleting nonexistent token, got nil")
@@ -201,7 +201,7 @@ func TestTokenStore_Delete_NotFound(t *testing.T) {
 
 func TestTokenStore_DuplicateReplacement(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tokens.json")
-	ts, _ := NewTokenStore(context.Background(), path)
+	ts, _ := NewTokenStore(context.Background(), path, "", nil)
 
 	raw1 := makeTestJWT(map[string]any{"jti": "dup", "exp": futureExp(), "granted_by": "first"})
 	raw2 := makeTestJWT(map[string]any{"jti": "dup", "exp": futureExp(), "granted_by": "second"})
@@ -209,7 +209,7 @@ func TestTokenStore_DuplicateReplacement(t *testing.T) {
 	ts.Add(context.Background(), raw1)
 	ts.Add(context.Background(), raw2)
 
-	all := ts.All()
+	all := ts.All(context.Background())
 	if len(all) != 1 {
 		t.Fatalf("expected 1 token after duplicate replacement, got %d", len(all))
 	}
@@ -221,11 +221,11 @@ func TestTokenStore_DuplicateReplacement(t *testing.T) {
 func TestTokenStore_NonExistentFile(t *testing.T) {
 	// File does not exist — store should start empty without error.
 	path := filepath.Join(t.TempDir(), "does-not-exist", "tokens.json")
-	ts, err := NewTokenStore(context.Background(), path)
+	ts, err := NewTokenStore(context.Background(), path, "", nil)
 	if err != nil {
 		t.Fatalf("NewTokenStore on missing file: %v", err)
 	}
-	if len(ts.All()) != 0 {
+	if len(ts.All(context.Background())) != 0 {
 		t.Error("expected empty store for non-existent file")
 	}
 }
@@ -233,19 +233,23 @@ func TestTokenStore_NonExistentFile(t *testing.T) {
 func TestTokenStore_PrunesExpiredOnLoad(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tokens.json")
 
-	// Write a mix of valid and expired tokens directly to the file.
+	// Write a mix of valid and expired tokens directly to the file using the
+	// current storedTokenEntry format.
 	validRaw := makeTestJWT(map[string]any{"jti": "valid", "exp": futureExp()})
 	expiredRaw := makeTestJWT(map[string]any{"jti": "expired", "exp": expiredExp()})
-	data, _ := json.Marshal([]string{validRaw, expiredRaw})
+	data, _ := json.Marshal([]storedTokenEntry{
+		{Raw: validRaw},
+		{Raw: expiredRaw},
+	})
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		t.Fatal(err)
 	}
 
-	ts, err := NewTokenStore(context.Background(), path)
+	ts, err := NewTokenStore(context.Background(), path, "", nil)
 	if err != nil {
 		t.Fatalf("NewTokenStore: %v", err)
 	}
-	all := ts.All()
+	all := ts.All(context.Background())
 	if len(all) != 1 {
 		t.Fatalf("expected 1 token (expired pruned), got %d", len(all))
 	}
@@ -262,7 +266,7 @@ func TestTokenStore_FilePermissions(t *testing.T) {
 		t.Skip("Unix file permission bits not enforced on Windows")
 	}
 	path := filepath.Join(t.TempDir(), "tokens.json")
-	ts, _ := NewTokenStore(context.Background(), path)
+	ts, _ := NewTokenStore(context.Background(), path, "", nil)
 	raw := makeTestJWT(map[string]any{"jti": "perm-test", "exp": futureExp()})
 	ts.Add(context.Background(), raw)
 

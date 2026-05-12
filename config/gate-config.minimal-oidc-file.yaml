@@ -35,6 +35,9 @@ mode: dev
 # this is the default, so you don't have to specify it
 tenancy: single
 
+# "session" binds approvals to the MCP session (single-tenant: always session "0").
+escalation: session
+
 
 server:
   endpoints:
@@ -74,7 +77,6 @@ responsibility:
           - "/etc"
 
   escalation:
-    strategy: "proactive"
     token_store: "~/.portcullis/tokens.json"
   # decision_logs:
   #   flush_interval: 30

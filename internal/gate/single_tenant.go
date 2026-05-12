@@ -15,10 +15,7 @@
 package gate
 
 import (
-	"context"
 	"net/http"
-
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // SingleTenantProvider implements TenancyProvider for single-tenant deployments.
@@ -54,14 +51,6 @@ func (p *SingleTenantProvider) Capabilities() Capabilities {
 	return Capabilities{
 		AllowLocalFS:      true,
 		AllowManagementUI: true,
-		AllowGuardPeer:    true,
-		AllowHumanInLoop:  true,
 		AllowNativeTools:  true,
 	}
-}
-
-// MapPolicyError returns (nil, false) so that the caller falls through to the
-// existing single-tenant policy-error logic in server.go.
-func (p *SingleTenantProvider) MapPolicyError(_ context.Context, _ error, _, _ string, _ *Config) (*mcp.CallToolResult, bool) {
-	return nil, false
 }

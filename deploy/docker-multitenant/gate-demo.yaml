@@ -10,15 +10,21 @@ mode: dev
 
 # the key differences with multi-tenancy are:
 # 1) Portcullis runs standalone, and the Agents connect over the local network
-# 2) `escalate` responses from Keep are treated as Deny 
-# 3) multiple Agents can interact with Portcullis in parallel, each one supporting a 
+# 2) multiple Agents can interact with Portcullis in parallel, each one supporting a
 #    different human (the humans are the multiple tenants)
-# 
+#
 # The primary use case is when you're operating a fleet of AI Agents, and you want to give them some
 # access to APIs or other tools, but you also want to make sure everything is captured, logged and
 # authorized properly
 #
 tenancy: multi
+
+# Escalation is disabled in this demo. All EscalationPending responses from Keep are
+# intercepted, logged to the SIEM, and returned to the agent as a deny marker.
+#
+# To enable multi-tenant escalation, set this to "session" or "fingerprint", configure
+# peers.guard below, and switch operations.storage.backend to "redis".
+escalation: disabled
 
 server:
   endpoints:
@@ -53,7 +59,6 @@ responsibility:
     portcullis-localfs:
       enabled: false
   escalation:
-    enabled: false
     no_escalation_marker: "ESCALATION_DENIED"
 
 operations:

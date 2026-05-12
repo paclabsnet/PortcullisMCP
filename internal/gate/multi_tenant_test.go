@@ -76,9 +76,10 @@ func TestMultiTenantBoundary_CrossTenantIsolation(t *testing.T) {
 func newMultiTenantConfig(t *testing.T) Config {
 	t.Helper()
 	return Config{
-		Mode:    cfgloader.ModeDev,
-		Tenancy: "multi",
-		Identity: IdentityConfig{Strategy: "os"},
+		Mode:       cfgloader.ModeDev,
+		Tenancy:    "multi",
+		Escalation: "disabled",
+		Identity:   IdentityConfig{Strategy: "os"},
 		Server: cfgloader.ServerConfig{
 			SessionTTL: 3600,
 			Endpoints: map[string]cfgloader.EndpointConfig{
@@ -178,10 +179,11 @@ func newMultiTenantGateForAudit(t *testing.T, marker string) (*Gate, *captureLog
 	captured := &captureLogger{}
 	provider := NewMultiTenantProvider("", nil, captured)
 	pending := NewInMemoryPendingStore()
-	escalationMgr := NewEscalationManager(nil, pending, nil, EscalationConfig{NoEscalationMarker: marker}, provider, nil)
+	escalationMgr := NewEscalationManager(nil, pending, nil, EscalationConfig{NoEscalationMarker: marker}, provider, nil, "")
 	g := &Gate{
 		cfg: Config{
-			Tenancy: "multi",
+			Tenancy:    "multi",
+			Escalation: "disabled", // escalation interception handled in policyErrToResult
 			Responsibility: ResponsibilityConfig{
 				Escalation: EscalationConfig{NoEscalationMarker: marker},
 			},
@@ -213,7 +215,7 @@ func TestMultiTenantBoundary_StatelessnessAudit(t *testing.T) {
 
 	// The pending store must be empty after the full deny path.
 	mgr := g.escalationMgr.(*DefaultEscalationManager)
-	if _, ok := mgr.pending.Get("backend-server/sensitive_tool"); ok {
+	if _, ok := mgr.pending.Get(context.Background(), "backend-server/sensitive_tool"); ok {
 		t.Error("PendingEscalationStore must remain empty after multi-tenant deny (no state leakage)")
 	}
 }

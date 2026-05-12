@@ -241,3 +241,73 @@ func TestPolicyErrToResult_UnknownError_ReturnedAsIs(t *testing.T) {
 		t.Errorf("returned error = %v, want %v", retErr, unexpectedErr)
 	}
 }
+
+// ---- enrichBackendAuthChallenge ---------------------------------------------
+
+func TestEnrichBackendAuthChallenge_WithWWWAuth(t *testing.T) {
+	g := newGateForPolicyErrTests("http://guard.example.com")
+	raw := &mcp.CallToolResult{
+		IsError: true,
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: "HTTP/1.1 401 Unauthorized\nWWW-Authenticate: Bearer realm=\"api\"\nContent-Type: application/json"},
+		},
+	}
+	enriched := g.enrichBackendAuthChallenge(raw, "my-backend", "do_thing")
+	if enriched == raw {
+		t.Fatal("expected a new result, got same pointer")
+	}
+	tc, ok := enriched.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("expected *mcp.TextContent, got %T", enriched.Content[0])
+	}
+	if !strings.Contains(tc.Text, "do_thing") {
+		t.Errorf("enriched message should contain tool name; got: %s", tc.Text)
+	}
+	if !strings.Contains(tc.Text, "my-backend") {
+		t.Errorf("enriched message should contain backend name; got: %s", tc.Text)
+	}
+	if !strings.Contains(tc.Text, `Bearer realm="api"`) {
+		t.Errorf("enriched message should contain WWW-Authenticate value; got: %s", tc.Text)
+	}
+}
+
+func TestEnrichBackendAuthChallenge_NoWWWAuth_PassThrough(t *testing.T) {
+	g := newGateForPolicyErrTests("http://guard.example.com")
+	raw := &mcp.CallToolResult{
+		IsError: true,
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: "something went wrong"},
+		},
+	}
+	result := g.enrichBackendAuthChallenge(raw, "backend", "tool")
+	if result != raw {
+		t.Error("result without WWW-Authenticate should be returned unchanged")
+	}
+}
+
+func TestEnrichBackendAuthChallenge_EmptyContent_PassThrough(t *testing.T) {
+	g := newGateForPolicyErrTests("http://guard.example.com")
+	raw := &mcp.CallToolResult{IsError: true, Content: []mcp.Content{}}
+	result := g.enrichBackendAuthChallenge(raw, "backend", "tool")
+	if result != raw {
+		t.Error("result with empty content should be returned unchanged")
+	}
+}
+
+func TestEnrichBackendAuthChallenge_CaseInsensitiveHeader(t *testing.T) {
+	g := newGateForPolicyErrTests("http://guard.example.com")
+	raw := &mcp.CallToolResult{
+		IsError: true,
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: "www-Authenticate: Basic realm=\"admin\"\nother: value"},
+		},
+	}
+	enriched := g.enrichBackendAuthChallenge(raw, "srv", "op")
+	if enriched == raw {
+		t.Fatal("expected enriched result for lowercase header variant")
+	}
+	tc := enriched.Content[0].(*mcp.TextContent)
+	if !strings.Contains(tc.Text, `Basic realm="admin"`) {
+		t.Errorf("enriched message should contain WWW-Authenticate value; got: %s", tc.Text)
+	}
+}

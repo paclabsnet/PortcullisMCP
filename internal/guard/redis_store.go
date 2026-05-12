@@ -220,57 +220,6 @@ func (s *RedisUnclaimedStore) AddUnclaimed(ctx context.Context, tok UnclaimedTok
 	return err
 }
 
-func (s *RedisUnclaimedStore) ListUnclaimed(ctx context.Context, userID string) ([]UnclaimedToken, error) {
-	jtis, err := s.client.SMembers(ctx, s.usrKey(userID)).Result()
-	if err != nil {
-		if errors.Is(err, redis.Nil) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("redis smembers user %q: %w", userID, err)
-	}
-
-	slog.Debug("ListUnclaimed: ", "userId", userID, "jti count:", len(jtis))
-
-	if len(jtis) == 0 {
-		return nil, nil
-	}
-
-	// Pipeline GETs for all JTIs in one round-trip.
-	pipe := s.client.Pipeline()
-	cmds := make([]*redis.StringCmd, len(jtis))
-	for i, jti := range jtis {
-		cmds[i] = pipe.Get(ctx, s.tokKey(jti))
-	}
-	if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
-		return nil, fmt.Errorf("redis pipeline get tokens for user %q: %w", userID, err)
-	}
-
-	result := make([]UnclaimedToken, 0, len(jtis))
-	var stale []interface{}
-	for i, cmd := range cmds {
-		val, err := cmd.Result()
-		if errors.Is(err, redis.Nil) {
-			// Token key has expired but JTI lingers in the user set — clean up lazily.
-			stale = append(stale, jtis[i])
-			continue
-		}
-		if err != nil {
-			return nil, fmt.Errorf("redis get token %q: %w", jtis[i], err)
-		}
-		var tok UnclaimedToken
-		if err := json.Unmarshal([]byte(val), &tok); err != nil {
-			return nil, fmt.Errorf("unmarshal token %q: %w", jtis[i], err)
-		}
-		result = append(result, tok)
-	}
-
-	if len(stale) > 0 {
-		// Best-effort lazy cleanup of stale JTIs from the user set.
-		_ = s.client.SRem(ctx, s.usrKey(userID), stale...).Err()
-	}
-	return result, nil
-}
-
 func (s *RedisUnclaimedStore) ClaimToken(ctx context.Context, jti string) (*UnclaimedToken, error) {
 	// GETDEL is atomic in Redis: only one caller wins, preventing double-claiming.
 	val, err := s.client.GetDel(ctx, s.tokKey(jti)).Result()
@@ -296,5 +245,4 @@ func (s *RedisUnclaimedStore) ClaimToken(ctx context.Context, jti string) (*Uncl
 }
 
 // PurgeExpired is a no-op: token keys expire automatically via Redis TTL.
-// Stale user-set entries are cleaned up lazily inside ListUnclaimed.
 func (s *RedisUnclaimedStore) PurgeExpired(_ context.Context) error { return nil }

@@ -22,12 +22,26 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
 	"time"
 
 	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
 )
+
+// GuardAPIError is returned by GuardClient methods when the Guard server
+// responds with an unexpected HTTP status code. It carries the status code
+// so callers can log it or branch on specific error conditions (e.g. 401
+// for unauthorized, 503 for unavailable).
+type GuardAPIError struct {
+	StatusCode int
+	Err        error
+}
+
+func (e *GuardAPIError) Error() string {
+	return fmt.Sprintf("guard API error (status %d): %v", e.StatusCode, e.Err)
+}
+
+func (e *GuardAPIError) Unwrap() error { return e.Err }
 
 // GuardClient calls the portcullis-guard token API on behalf of Gate.
 // It is used to claim approved escalation tokens and to poll for tokens that
@@ -86,53 +100,6 @@ func buildGuardTransport(creds cfgloader.AuthCredentials) (http.RoundTripper, er
 	}
 
 	return base, nil
-}
-
-// unclaimedTokenInfo describes a single unclaimed token returned by Guard.
-type unclaimedTokenInfo struct {
-	JTI       string    `json:"jti"`
-	Raw       string    `json:"raw"`
-	ExpiresAt time.Time `json:"expires_at"`
-}
-
-// ListUnclaimedTokens returns all tokens that Guard holds for userID but have
-// not yet been claimed.
-func (g *GuardClient) ListUnclaimedTokens(ctx context.Context, userID string) ([]unclaimedTokenInfo, error) {
-	u, err := url.Parse(g.endpoint + "/token/unclaimed/list")
-	if err != nil {
-		return nil, fmt.Errorf("parse guard url: %w", err)
-	}
-	q := u.Query()
-	q.Set("user_id", userID)
-	u.RawQuery = q.Encode()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
-	if err != nil {
-		return nil, fmt.Errorf("build guard request: %w", err)
-	}
-	if g.bearerToken != "" {
-		req.Header.Set("Authorization", "Bearer "+g.bearerToken)
-	}
-
-	resp, err := g.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("guard request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		var errBody struct {
-			Error string `json:"error"`
-		}
-		_ = json.NewDecoder(resp.Body).Decode(&errBody)
-		return nil, fmt.Errorf("guard returned %d: %s", resp.StatusCode, errBody.Error)
-	}
-
-	var tokens []unclaimedTokenInfo
-	if err := json.NewDecoder(resp.Body).Decode(&tokens); err != nil {
-		return nil, fmt.Errorf("decode guard response: %w", err)
-	}
-	return tokens, nil
 }
 
 // RegisterPending pushes a Keep-signed pending escalation JWT to Guard.
@@ -204,7 +171,10 @@ func (g *GuardClient) ClaimToken(ctx context.Context, jti string) (string, error
 			Error string `json:"error"`
 		}
 		_ = json.NewDecoder(resp.Body).Decode(&errBody)
-		return "", fmt.Errorf("guard claim returned %d: %s", resp.StatusCode, errBody.Error)
+		return "", &GuardAPIError{
+			StatusCode: resp.StatusCode,
+			Err:        fmt.Errorf("guard claim returned %d: %s", resp.StatusCode, errBody.Error),
+		}
 	}
 
 	var result struct {

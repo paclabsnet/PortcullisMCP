@@ -18,8 +18,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -27,65 +29,18 @@ import (
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 )
 
-// ---- handleTokenUnclaimedList -----------------------------------------------
+// errUnclaimedStore is a test double whose AddUnclaimed always returns an error.
+type errUnclaimedStore struct{}
 
-func TestHandleTokenUnclaimedList_MissingUserID(t *testing.T) {
-	s := makeServer(t)
-	req := httptest.NewRequest(http.MethodGet, "/token/unclaimed/list", nil)
-	w := httptest.NewRecorder()
-	s.handleTokenUnclaimedList(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400", w.Code)
-	}
+func (e *errUnclaimedStore) AddUnclaimed(_ context.Context, _ UnclaimedToken) error {
+	return errors.New("store unavailable")
 }
 
-func TestHandleTokenUnclaimedList_EmptyForUnknownUser(t *testing.T) {
-	s := makeServer(t)
-	req := httptest.NewRequest(http.MethodGet, "/token/unclaimed/list?user_id=nobody@example.com", nil)
-	w := httptest.NewRecorder()
-	s.handleTokenUnclaimedList(w, req)
-	if w.Code != http.StatusOK {
-		t.Errorf("status = %d, want 200", w.Code)
-	}
-	var result []map[string]string
-	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if len(result) != 0 {
-		t.Errorf("expected empty list for unknown user, got %d entries", len(result))
-	}
+func (e *errUnclaimedStore) ClaimToken(_ context.Context, _ string) (*UnclaimedToken, error) {
+	return nil, nil
 }
 
-func TestHandleTokenUnclaimedList_ReturnsTokensForUser(t *testing.T) {
-	s := makeServer(t)
-	// Directly seed an unclaimed token.
-	if err := s.unclaimedStore.AddUnclaimed(context.Background(), UnclaimedToken{
-		UserID:    "user@example.com",
-		JTI:       "jti-abc",
-		Raw:       "raw-token-value",
-		ExpiresAt: time.Now().Add(time.Hour),
-	}); err != nil {
-		t.Fatalf("AddUnclaimed: %v", err)
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "/token/unclaimed/list?user_id=user@example.com", nil)
-	w := httptest.NewRecorder()
-	s.handleTokenUnclaimedList(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("status = %d, want 200", w.Code)
-	}
-	var result []map[string]string
-	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if len(result) != 1 {
-		t.Fatalf("expected 1 token, got %d", len(result))
-	}
-	if result[0]["jti"] != "jti-abc" {
-		t.Errorf("jti = %q, want %q", result[0]["jti"], "jti-abc")
-	}
-}
+func (e *errUnclaimedStore) PurgeExpired(_ context.Context) error { return nil }
 
 // ---- handleTokenDeposit -----------------------------------------------------
 
@@ -153,16 +108,6 @@ func TestHandleTokenDeposit_ValidJWT_CreatesUnclaimedToken(t *testing.T) {
 	if result["jti"] != "deposit-jti-123" {
 		t.Errorf("jti = %q, want %q", result["jti"], "deposit-jti-123")
 	}
-
-	// Verify the token appeared in the unclaimed list.
-	listReq := httptest.NewRequest(http.MethodGet, "/token/unclaimed/list?user_id=user@example.com", nil)
-	listW := httptest.NewRecorder()
-	s.handleTokenUnclaimedList(listW, listReq)
-	var tokens []map[string]string
-	_ = json.NewDecoder(listW.Body).Decode(&tokens)
-	if len(tokens) != 1 {
-		t.Errorf("expected 1 unclaimed token after deposit, got %d", len(tokens))
-	}
 }
 
 func TestHandleTokenDeposit_UserIDMismatch(t *testing.T) {
@@ -182,6 +127,29 @@ func TestHandleTokenDeposit_UserIDMismatch(t *testing.T) {
 	s.handleTokenDeposit(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400 for user_id mismatch", w.Code)
+	}
+}
+
+func TestHandleTokenDeposit_StoreFailure_Returns500(t *testing.T) {
+	s := makeServer(t)
+	s.unclaimedStore = &errUnclaimedStore{}
+
+	pendingJWT := signKeepJWTWithID(t, "deposit-store-fail", shared.EscalationRequestClaims{
+		UserID: "user@example.com",
+		Server: "test-server",
+		Tool:   "test-tool",
+	}, time.Now().Add(time.Hour))
+
+	body, _ := json.Marshal(map[string]string{
+		"pending_jwt": pendingJWT,
+		"user_id":     "user@example.com",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/token/deposit", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	s.handleTokenDeposit(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500 when AddUnclaimed fails; body: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -254,5 +222,31 @@ func TestHandleTokenClaim_Success_AndConsumed(t *testing.T) {
 	s.handleTokenClaim(w2, req2)
 	if w2.Code != http.StatusNotFound {
 		t.Errorf("second claim status = %d, want 404 (token already consumed)", w2.Code)
+	}
+}
+
+// ---- handleApproveAction store-failure regression ---------------------------
+
+// TestHandleApproveAction_StoreFailure_Returns500 verifies that when the
+// unclaimed token store fails, the approval handler returns 500 instead of
+// silently rendering the success page with a token that was never persisted.
+func TestHandleApproveAction_StoreFailure_Returns500(t *testing.T) {
+	s := makeServer(t)
+	s.unclaimedStore = &errUnclaimedStore{}
+
+	tokenStr := signKeepJWT(t, shared.EscalationRequestClaims{
+		UserID: "alice@corp.com",
+		Server: "github",
+		Tool:   "push",
+	}, time.Now().Add(time.Hour))
+
+	form := url.Values{"token": {tokenStr}}
+	req := httptest.NewRequest(http.MethodPost, "/approve", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	s.handleApproveAction(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500 when AddUnclaimed fails; body: %s", w.Code, w.Body.String())
 	}
 }

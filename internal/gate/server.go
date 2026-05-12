@@ -16,6 +16,8 @@ package gate
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,10 +43,11 @@ import (
 type gateCtxKey string
 
 const (
-	sessionIDKey     gateCtxKey = "sessionID"
-	userIDKey        gateCtxKey = "userID"
-	identityKey      gateCtxKey = "identity"
-	clientHeadersKey gateCtxKey = "clientHeaders"
+	sessionIDKey             gateCtxKey = "sessionID"
+	userIDKey                gateCtxKey = "userID"
+	identityKey              gateCtxKey = "identity"
+	clientHeadersKey         gateCtxKey = "clientHeaders"
+	credentialFingerprintKey gateCtxKey = "credentialFingerprint"
 )
 
 // SessionIDFromContext returns the session ID stored in ctx, or ("", false) if absent.
@@ -69,6 +72,25 @@ func clientHeadersFromContext(ctx context.Context) map[string][]string {
 	return v
 }
 
+// computeFingerprint returns the full hex-encoded SHA-256 of raw.
+// This is used to partition escalation storage by credential identity.
+// Algorithm: SHA-256, hex-encoded (64 chars). Format is stable across versions.
+func computeFingerprint(raw string) string {
+	h := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(h[:])
+}
+
+// withCredentialFingerprint returns a new context carrying the credential fingerprint.
+func withCredentialFingerprint(ctx context.Context, fingerprint string) context.Context {
+	return context.WithValue(ctx, credentialFingerprintKey, fingerprint)
+}
+
+// CredentialFingerprintFromContext returns the credential fingerprint stored in ctx, or ("", false) if absent.
+func CredentialFingerprintFromContext(ctx context.Context) (string, bool) {
+	v, ok := ctx.Value(credentialFingerprintKey).(string)
+	return v, ok
+}
+
 // KeepForwarder defines the interface for communicating with Portcullis Keep.
 type KeepForwarder interface {
 	CallTool(ctx context.Context, req shared.EnrichedMCPRequest) (*mcp.CallToolResult, error)
@@ -80,7 +102,6 @@ type KeepForwarder interface {
 
 // GuardSource defines the interface for communicating with Portcullis Guard.
 type GuardSource interface {
-	ListUnclaimedTokens(ctx context.Context, userID string) ([]unclaimedTokenInfo, error)
 	RegisterPending(ctx context.Context, jti, jwt string) error
 	ClaimToken(ctx context.Context, jti string) (string, error)
 }
@@ -117,16 +138,24 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 		return nil, fmt.Errorf("resolve identity: %w", err)
 	}
 
+	// EscalationTokenStore: file-backed for single-tenant (survives restarts);
+	// Redis-backed for multi-tenant with active escalation (shared across instances).
 	storePath := cfg.Responsibility.Escalation.TokenStore
 	if storePath == "" {
 		storePath = "~/.portcullis/tokens.json"
 	}
-	// For tenancy: single, EscalationTokenStore must remain file-backed so that
-	// approved tokens survive server restarts.
-	tokenStore, err := NewTokenStore(ctx, storePath)
-	if err != nil {
-		return nil, fmt.Errorf("open token store: %w", err)
+	var tokenStore EscalationTokenStore
+	if cfg.Tenancy != "multi" {
+		ts, err := NewTokenStore(ctx, storePath, cfg.Escalation, identityCache)
+		if err != nil {
+			return nil, fmt.Errorf("open token store: %w", err)
+		}
+		tokenStore = ts
 	}
+	// For multi-tenant, tokenStore is set in the Redis block below.
+
+	// PendingEscalationStore: in-memory for single-tenant; Redis for multi-tenant.
+	var pendingStore PendingEscalationStore = NewInMemoryPendingStore()
 
 	fwd, err := NewForwarder(cfg.Peers.Keep)
 	if err != nil {
@@ -215,16 +244,25 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 		password, _ := sc["password"].(string)
 		db, _ := sc["db"].(int)
 		keyPrefix, _ := sc["key_prefix"].(string)
-		rs, err := NewRedisSessionStore(ctx, RedisConfig{
+		redisCfg := RedisConfig{
 			Addr:      addr,
 			Password:  password,
 			DB:        db,
 			KeyPrefix: keyPrefix,
-		}, cfg.Server.SessionTTL)
+		}
+		rs, err := NewRedisSessionStore(ctx, redisCfg, cfg.Server.SessionTTL)
 		if err != nil {
 			return nil, err
 		}
 		sessionStore = rs
+
+		// Wire Redis-backed escalation stores for multi-tenant mode.
+		// In single-tenant mode the file-backed TokenStore is used even with Redis sessions.
+		if cfg.Tenancy == "multi" {
+			redisClient := rs.client
+			tokenStore = NewRedisTokenStore(redisClient, redisCfg.KeyPrefix, cfg.Escalation, identityCache)
+			pendingStore = NewRedisPendingStore(redisClient, redisCfg.KeyPrefix)
+		}
 	} else {
 		sessionStore = NewMemorySessionStore()
 	}
@@ -243,13 +281,20 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 		mtp.logger = logger
 	}
 
+	// For multi-tenant with disabled escalation (no Redis required), fall back
+	// to an in-memory token store — tokens are never persisted in this mode.
+	if tokenStore == nil {
+		tokenStore = NewInMemoryTokenStore()
+	}
+
 	escalationMgr := NewEscalationManager(
 		guardClient,
-		NewInMemoryPendingStore(),
+		pendingStore,
 		tokenStore,
 		cfg.Responsibility.Escalation,
 		provider,
 		identityCache,
+		cfg.Escalation,
 	)
 
 	if cfg.Identity.Strategy != "oidc-login" {
@@ -267,7 +312,7 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 		localFS:       localFSSession,
 		localFSServer: localFSServer,
 		localFSPolicy: initialLocalFSPolicy,
-		sessionID:     uuid.New().String(),
+		sessionID:     "0",
 		toolServerMap: make(map[string]string),
 		localFSTools:  make(map[string]bool),
 		stateMachine:  sm,
@@ -390,7 +435,7 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 }
 
 func (g *Gate) refreshKeepTools(ctx context.Context) ([]string, error) {
-	keepTools, err := g.forwarder.ListTools(ctx, g.identity.Get(ctx), g.escalations.All())
+	keepTools, err := g.forwarder.ListTools(ctx, g.identity.Get(ctx), g.escalations.All(ctx))
 	if err != nil {
 		slog.Warn("fetch tool list from keep failed", "error", err)
 		if g.cfg.Identity.Strategy != "oidc-login" {
@@ -447,11 +492,6 @@ func (g *Gate) handleLoginTool(ctx context.Context, force bool) string {
 	return "Login is not necessary."
 }
 
-// isProactive reports whether the configured escalation strategy is "proactive".
-// Used by buildEscalationMessage to select the correct approval URL format.
-func (g *Gate) isProactive() bool {
-	return g.cfg.Responsibility.Escalation.Strategy == "proactive"
-}
 
 func (g *Gate) Run(ctx context.Context) error {
 	// Start the decision log worker. It flushes remaining entries on ctx cancellation.
@@ -478,12 +518,6 @@ func (g *Gate) Run(ctx context.Context) error {
 			return fmt.Errorf("start management api: %w", err)
 		}
 
-		if g.cfg.Peers.Guard.resolvedAPIEndpoint() != "" {
-			slog.Info("guard poll worker starting", "endpoint", g.cfg.Peers.Guard.resolvedAPIEndpoint())
-			g.escalationMgr.StartPolling(ctx)
-		} else {
-			slog.Warn("guard endpoint not configured; escalation tokens must be added manually")
-		}
 	}
 
 	// When localfs policy source is "keep", perform an initial async fetch and
@@ -556,6 +590,18 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 		ctx = withSessionID(ctx, g.sessionID)
 	}
 	sessionID, _ := SessionIDFromContext(ctx)
+
+	// Inject credential fingerprint for stdio mode (HTTP middleware injects it for HTTP mode).
+	if _, hasFP := CredentialFingerprintFromContext(ctx); !hasFP {
+		id := g.identity.Get(ctx)
+		raw := id.RawToken
+		if raw == "" {
+			raw = id.UserID
+		}
+		if raw != "" {
+			ctx = withCredentialFingerprint(ctx, computeFingerprint(raw))
+		}
+	}
 
 	ctx, span := otel.Tracer(shared.ServiceGate).Start(ctx, "gate.tool_call")
 	defer span.End()
@@ -663,7 +709,7 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 		}
 		if err := g.forwarder.Authorize(ctx, enriched); err != nil {
 			if storeErr := g.escalationMgr.StorePending(ctx, shared.LocalFSServerName, toolName, err); storeErr != nil {
-				return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: storeErr.Error()}}}, nil
+				return g.policyErrToResult(ctx, storeErr, toolName, traceID)
 			}
 			return g.policyErrToResult(ctx, err, toolName, traceID)
 		}
@@ -695,7 +741,7 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 	result, err := g.forwarder.CallTool(ctx, enriched)
 	if err != nil {
 		if storeErr := g.escalationMgr.StorePending(ctx, serverName, toolName, err); storeErr != nil {
-			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: storeErr.Error()}}}, nil
+			return g.policyErrToResult(ctx, storeErr, toolName, traceID)
 		}
 		return g.policyErrToResult(ctx, err, toolName, traceID)
 	}

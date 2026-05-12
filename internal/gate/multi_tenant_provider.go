@@ -16,14 +16,10 @@ package gate
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"net/http"
-	"time"
 
 	"github.com/google/uuid"
-	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 )
 
 // MultiTenantProvider implements TenancyProvider for multi-tenant deployments.
@@ -92,43 +88,6 @@ func (p *MultiTenantProvider) Capabilities() Capabilities {
 	return Capabilities{
 		AllowLocalFS:      false,
 		AllowManagementUI: false,
-		AllowGuardPeer:    false,
-		AllowHumanInLoop:  false,
 		AllowNativeTools:  false,
 	}
-}
-
-// MapPolicyError intercepts escalation and deny errors in multi-tenant mode,
-// emits a SIEM DecisionLogEntry, and returns an opaque deny marker to the
-// caller. Infrastructure errors (transport failures, unknown errors) are not
-// intercepted and return (nil, false) so they propagate normally.
-func (p *MultiTenantProvider) MapPolicyError(ctx context.Context, err error, tool, traceID string, cfg *Config) (*mcp.CallToolResult, bool) {
-	var escalationErr *shared.EscalationPendingError
-	var denyErr *shared.DenyError
-
-	if !errors.As(err, &escalationErr) && !errors.As(err, &denyErr) && !errors.Is(err, shared.ErrDenied) {
-		return nil, false
-	}
-
-	sid, _ := SessionIDFromContext(ctx)
-	if p.logger != nil {
-		p.logger.Log(DecisionLogEntry{
-			Timestamp: time.Now().UTC(),
-			SessionID: sid,
-			TraceID:   traceID,
-			ToolName:  tool,
-			Decision:  "deny",
-			Reason:    "multi-tenant: escalation intercepted",
-			Source:    "gate-multitenant",
-		})
-	}
-
-	marker := cfg.Responsibility.Escalation.NoEscalationMarker
-	if marker == "" {
-		marker = "Access denied."
-	}
-	return &mcp.CallToolResult{
-		IsError: true,
-		Content: []mcp.Content{&mcp.TextContent{Text: marker}},
-	}, true
 }

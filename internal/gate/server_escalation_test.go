@@ -24,10 +24,11 @@ import (
 	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
 )
 
-// newGateForEscalationTests returns a minimal Gate with the given Guard config and escalation strategy.
-func newGateForEscalationTests(approvalUI string, strategy string) *Gate {
+// newGateForEscalationTests returns a minimal Gate with the given Guard endpoint and top-level escalation value.
+func newGateForEscalationTests(approvalUI string, escalation string) *Gate {
 	return &Gate{
 		cfg: Config{
+			Escalation: escalation,
 			Peers: PeersConfig{
 				Guard: GateSpecificGuardConfig{
 					GuardPeerConfig: cfgloader.GuardPeerConfig{
@@ -35,41 +36,16 @@ func newGateForEscalationTests(approvalUI string, strategy string) *Gate {
 					},
 				},
 			},
-			Responsibility: ResponsibilityConfig{
-				Escalation: EscalationConfig{Strategy: strategy},
-			},
 		},
 		provider: NewSingleTenantProvider(nil, ""),
 	}
 }
 
-// ---- isProactive ------------------------------------------------------------
-
-func TestIsProactive_Default(t *testing.T) {
-	g := newGateForEscalationTests("", "")
-	if g.isProactive() {
-		t.Error("isProactive() = true for empty strategy, want false")
-	}
-}
-
-func TestIsProactive_UserDriven(t *testing.T) {
-	g := newGateForEscalationTests("", "user-driven")
-	if g.isProactive() {
-		t.Error("isProactive() = true for user-driven strategy, want false")
-	}
-}
-
-func TestIsProactive_Proactive(t *testing.T) {
-	g := newGateForEscalationTests("", "proactive")
-	if !g.isProactive() {
-		t.Error("isProactive() = false for proactive strategy, want true")
-	}
-}
 
 // ---- buildEscalationMessage -------------------------------------------------
 
-func TestBuildEscalationMessage_UserDrivenMode(t *testing.T) {
-	g := newGateForEscalationTests("http://guard.example.com", "user-driven")
+func TestBuildEscalationMessage_SessionMode(t *testing.T) {
+	g := newGateForEscalationTests("http://guard.example.com", "session")
 	e := &shared.EscalationPendingError{
 		Reason:        "needs approval",
 		EscalationJTI: "test-jti",
@@ -80,17 +56,17 @@ func TestBuildEscalationMessage_UserDrivenMode(t *testing.T) {
 	if !strings.Contains(msg, "needs approval") {
 		t.Errorf("message should contain reason; got: %s", msg)
 	}
-	// User-driven: URL uses ?token= with the JWT
-	if !strings.Contains(msg, "?token=") {
-		t.Errorf("user-driven message should contain ?token=; got: %s", msg)
+	// Session (proactive): URL uses ?jti= format
+	if !strings.Contains(msg, "?jti=") {
+		t.Errorf("session message should contain ?jti=; got: %s", msg)
 	}
-	if strings.Contains(msg, "?jti=") {
-		t.Errorf("user-driven message should not contain ?jti=; got: %s", msg)
+	if strings.Contains(msg, "?token=") {
+		t.Errorf("session message should not contain ?token=; got: %s", msg)
 	}
 }
 
 func TestBuildEscalationMessage_ProactiveMode(t *testing.T) {
-	g := newGateForEscalationTests("http://guard.example.com", "proactive")
+	g := newGateForEscalationTests("http://guard.example.com", "session")
 	e := &shared.EscalationPendingError{
 		Reason:        "needs approval",
 		EscalationJTI: "test-jti-xyz",
@@ -120,8 +96,8 @@ func TestBuildEscalationMessage_CustomInstructions(t *testing.T) {
 					},
 				},
 			},
+			Escalation: "session",
 			Responsibility: ResponsibilityConfig{
-				Escalation: EscalationConfig{Strategy: "proactive"},
 				AgentInteraction: AgentInteractionConfig{
 					Instructions: AgentInstructionsConfig{
 						RequireApproval: "Please visit {url} for: {reason}",
@@ -166,8 +142,7 @@ func TestBuildEscalationMessage_NoGuardEndpoint(t *testing.T) {
 	// When Guard endpoint is not configured, message still includes the reason.
 	g := newGateForEscalationTests("", "") // no endpoint
 	e := &shared.EscalationPendingError{
-		Reason:     "needs approval",
-		PendingJWT: "header.payload.sig",
+		Reason: "needs approval",
 	}
 	msg := g.buildEscalationMessage(e, "test-trace")
 
@@ -201,8 +176,8 @@ func TestBuildEscalationMessage_DefaultInstructions(t *testing.T) {
 	// When no custom instructions are configured, the default template is used.
 	g := newGateForEscalationTests("http://guard.example.com", "")
 	e := &shared.EscalationPendingError{
-		Reason:     "needs approval",
-		PendingJWT: "h.p.s",
+		Reason:        "needs approval",
+		EscalationJTI: "default-jti",
 	}
 	msg := g.buildEscalationMessage(e, "test-trace")
 
@@ -215,8 +190,8 @@ func TestBuildEscalationMessage_TraceIDSubstituted(t *testing.T) {
 	// {trace_id} in the default template must be replaced with the supplied trace ID.
 	g := newGateForEscalationTests("http://guard.example.com", "")
 	e := &shared.EscalationPendingError{
-		Reason:     "needs approval",
-		PendingJWT: "h.p.s",
+		Reason:        "needs approval",
+		EscalationJTI: "trace-jti",
 	}
 	msg := g.buildEscalationMessage(e, "trace-xyz-999")
 
@@ -236,8 +211,8 @@ func TestBuildEscalationMessage_CustomInstructions_TraceIDOmitted(t *testing.T) 
 					},
 				},
 			},
+			Escalation: "session",
 			Responsibility: ResponsibilityConfig{
-				Escalation: EscalationConfig{Strategy: "proactive"},
 				AgentInteraction: AgentInteractionConfig{
 					Instructions: AgentInstructionsConfig{
 						RequireApproval: "Approve at {url} — reason: {reason}",
@@ -267,10 +242,11 @@ func newMultiTenantGate(marker string) *Gate {
 	captured := &captureLogger{}
 	provider := NewMultiTenantProvider("", nil, captured)
 	pending := NewInMemoryPendingStore()
-	escalationMgr := NewEscalationManager(nil, pending, nil, EscalationConfig{}, provider, nil)
+	escalationMgr := NewEscalationManager(nil, pending, nil, EscalationConfig{}, provider, nil, "")
 	return &Gate{
 		cfg: Config{
-			Tenancy: "multi",
+			Tenancy:    "multi",
+			Escalation: "disabled", // escalation interception handled in policyErrToResult
 			Responsibility: ResponsibilityConfig{
 				Escalation: EscalationConfig{NoEscalationMarker: marker},
 			},
@@ -351,7 +327,7 @@ func TestMultiTenantEscalation_NoPendingStorageLeakage(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	mgr := g.escalationMgr.(*DefaultEscalationManager)
-	if _, ok := mgr.pending.Get("server/tool"); ok {
+	if _, ok := mgr.pending.Get(context.Background(), "server/tool"); ok {
 		t.Error("pending store must remain empty in multi-tenant mode (no state leakage)")
 	}
 }

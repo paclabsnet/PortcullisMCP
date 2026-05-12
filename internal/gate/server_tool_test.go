@@ -170,7 +170,7 @@ func TestHandleToolCall_Success(t *testing.T) {
 		toolServerMap: map[string]string{"test_tool": "test-server"},
 		sessionID:     "test-session",
 		escalations:   &mockTokenStore{},
-		escalationMgr: NewEscalationManager(nil, NewInMemoryPendingStore(), &mockTokenStore{}, EscalationConfig{}, NewSingleTenantProvider(nil, ""), idSource),
+		escalationMgr: NewEscalationManager(nil, NewInMemoryPendingStore(), &mockTokenStore{}, EscalationConfig{}, NewSingleTenantProvider(nil, ""), idSource, ""),
 		logger:        &captureLogger{},
 	}
 
@@ -235,7 +235,6 @@ func TestHandleToolCall_FastPath_Allow(t *testing.T) {
 type mockGuardClient struct {
 	claimTokenFunc      func(ctx context.Context, jti string) (string, error)
 	registerPendingFunc func(ctx context.Context, jti, jwt string) error
-	listUnclaimedFunc   func(ctx context.Context, userID string) ([]unclaimedTokenInfo, error)
 }
 
 func (m *mockGuardClient) ClaimToken(ctx context.Context, jti string) (string, error) {
@@ -250,19 +249,13 @@ func (m *mockGuardClient) RegisterPending(ctx context.Context, jti, jwt string) 
 	}
 	return nil
 }
-func (m *mockGuardClient) ListUnclaimedTokens(ctx context.Context, userID string) ([]unclaimedTokenInfo, error) {
-	if m.listUnclaimedFunc != nil {
-		return m.listUnclaimedFunc(ctx, userID)
-	}
-	return nil, nil
-}
 
 type mockTokenStore struct {
 	tokens  []shared.EscalationToken
 	addFunc func(ctx context.Context, raw string) (shared.EscalationToken, error)
 }
 
-func (m *mockTokenStore) All() []shared.EscalationToken {
+func (m *mockTokenStore) All(_ context.Context) []shared.EscalationToken {
 	return m.tokens
 }
 func (m *mockTokenStore) Add(ctx context.Context, raw string) (shared.EscalationToken, error) {
@@ -279,7 +272,7 @@ func (m *mockTokenStore) Delete(_ context.Context, _ string) error {
 
 func TestCollectEscalationTokens_Claim(t *testing.T) {
 	pending := NewInMemoryPendingStore()
-	pending.Store("srv/tool", pendingEscalation{
+	pending.Store(context.Background(), "srv/tool", pendingEscalation{
 		ServerName: "srv",
 		ToolName:   "tool",
 		JTI:        "jti-123",
@@ -303,13 +296,13 @@ func TestCollectEscalationTokens_Claim(t *testing.T) {
 		return tok, nil
 	}
 
-	mgr := NewEscalationManager(guard, pending, tokens, EscalationConfig{}, NewSingleTenantProvider(nil, ""), nil)
+	mgr := NewEscalationManager(guard, pending, tokens, EscalationConfig{}, NewSingleTenantProvider(nil, ""), nil, "")
 	res := mgr.CollectTokens(context.Background(), "srv", "tool")
 	if len(res) != 1 || res[0].TokenID != "tok-id" {
 		t.Errorf("expected 1 token 'tok-id', got %v", res)
 	}
 
-	if _, ok := pending.Get("srv/tool"); ok {
+	if _, ok := pending.Get(context.Background(), "srv/tool"); ok {
 		t.Error("pending escalation should have been deleted after claim")
 	}
 }
@@ -325,7 +318,7 @@ func TestMaybeStorePendingEscalation_Proactive(t *testing.T) {
 	}
 	pending := NewInMemoryPendingStore()
 
-	mgr := NewEscalationManager(guard, pending, &mockTokenStore{}, EscalationConfig{Strategy: "proactive"}, NewSingleTenantProvider(nil, ""), nil)
+	mgr := NewEscalationManager(guard, pending, &mockTokenStore{}, EscalationConfig{}, NewSingleTenantProvider(nil, ""), nil, "")
 
 	err := &shared.EscalationPendingError{
 		EscalationJTI: "jti-proactive",
@@ -337,47 +330,12 @@ func TestMaybeStorePendingEscalation_Proactive(t *testing.T) {
 		t.Fatalf("unexpected error: %v", errResult)
 	}
 
-	p, ok := pending.Get("srv/tool")
+	p, ok := pending.Get(context.Background(), "srv/tool")
 	if !ok || p.JTI != "jti-proactive" {
 		t.Errorf("pending escalation not stored correctly: %+v", p)
 	}
 }
 
-func TestGate_ClaimAllUnclaimedTokens(t *testing.T) {
-	guard := &mockGuardClient{
-		listUnclaimedFunc: func(ctx context.Context, userID string) ([]unclaimedTokenInfo, error) {
-			return []unclaimedTokenInfo{
-				{JTI: "jti-poll", Raw: "raw-poll", ExpiresAt: time.Now().Add(time.Hour)},
-			}, nil
-		},
-		claimTokenFunc: func(ctx context.Context, jti string) (string, error) {
-			if jti == "jti-poll" {
-				return "raw-poll", nil
-			}
-			return "", nil
-		},
-	}
-
-	tokens := &mockTokenStore{}
-	tokens.addFunc = func(ctx context.Context, raw string) (shared.EscalationToken, error) {
-		if raw == "raw-poll" {
-			return shared.EscalationToken{TokenID: "tok-poll"}, nil
-		}
-		return shared.EscalationToken{}, nil
-	}
-
-	pending := NewInMemoryPendingStore()
-	pending.Store("srv/tool", pendingEscalation{JTI: "jti-poll"})
-
-	identity := &mockIdentitySource{identity: shared.UserIdentity{UserID: "user1"}}
-	mgr := NewEscalationManager(guard, pending, tokens, EscalationConfig{}, nil, identity)
-
-	mgr.claimAllUnclaimedTokens(context.Background())
-
-	if _, ok := pending.Get("srv/tool"); ok {
-		t.Error("pending escalation should have been deleted by JTI")
-	}
-}
 
 // ---- BatchDecisionLogger tests ----------------------------------------------
 
@@ -437,38 +395,15 @@ func TestBatchDecisionLogger_Worker(t *testing.T) {
 	}
 }
 
-func TestGate_PollGuardWorker(t *testing.T) {
-	called := make(chan bool, 1)
-	guard := &mockGuardClient{
-		listUnclaimedFunc: func(ctx context.Context, userID string) ([]unclaimedTokenInfo, error) {
-			called <- true
-			return nil, nil
-		},
-	}
-
-	identity := &mockIdentitySource{identity: shared.UserIdentity{UserID: "u1"}}
-	mgr := NewEscalationManager(guard, NewInMemoryPendingStore(), &mockTokenStore{}, EscalationConfig{PollInterval: 1}, nil, identity)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	go mgr.pollGuardWorker(ctx)
-
-	select {
-	case <-called:
-		// Success
-	case <-ctx.Done():
-		t.Error("pollGuardWorker was not called within timeout")
-	}
-}
 
 func TestGate_New_Variants(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("multi-tenant", func(t *testing.T) {
 		cfg := Config{
-			Mode:    "development",
-			Tenancy: "multi",
+			Mode:       "development",
+			Tenancy:    "multi",
+			Escalation: "disabled",
 			Peers: PeersConfig{
 				Keep: cfgloader.PeerAuth{Endpoint: "http://keep"},
 			},
@@ -490,8 +425,9 @@ func TestGate_New_Variants(t *testing.T) {
 	t.Run("multi-tenant-redis", func(t *testing.T) {
 		mr := miniredis.RunT(t)
 		cfg := Config{
-			Mode:    "development",
-			Tenancy: "multi",
+			Mode:       "development",
+			Tenancy:    "multi",
+			Escalation: "disabled",
 			Peers: PeersConfig{
 				Keep: cfgloader.PeerAuth{Endpoint: "http://keep"},
 			},
@@ -517,8 +453,9 @@ func TestGate_New_Variants(t *testing.T) {
 
 	t.Run("oidc-login-strategy", func(t *testing.T) {
 		cfg := Config{
-			Mode:    "development",
-			Tenancy: "single",
+			Mode:       "development",
+			Tenancy:    "single",
+			Escalation: "disabled",
 			Peers: PeersConfig{
 				Keep: cfgloader.PeerAuth{Endpoint: "http://keep"},
 			},
@@ -534,6 +471,11 @@ func TestGate_New_Variants(t *testing.T) {
 			Server: cfgloader.ServerConfig{
 				Endpoints: map[string]cfgloader.EndpointConfig{
 					ManagementUIEndpoint: {Listen: "127.0.0.1:9090"},
+				},
+			},
+			Responsibility: ResponsibilityConfig{
+				Escalation: EscalationConfig{
+					TokenStore: filepath.Join(t.TempDir(), "tokens.json"),
 				},
 			},
 		}
@@ -616,7 +558,7 @@ func TestGate_RegisterTool_Logic(t *testing.T) {
 		},
 		toolServerMap: map[string]string{"t1": "s1"},
 		escalations:   &mockTokenStore{},
-		escalationMgr: NewEscalationManager(nil, NewInMemoryPendingStore(), &mockTokenStore{}, EscalationConfig{}, NewSingleTenantProvider(nil, ""), idSource),
+		escalationMgr: NewEscalationManager(nil, NewInMemoryPendingStore(), &mockTokenStore{}, EscalationConfig{}, NewSingleTenantProvider(nil, ""), idSource, ""),
 		logger:        &captureLogger{},
 	}
 
@@ -689,8 +631,9 @@ func TestGate_RefreshKeepTools(t *testing.T) {
 func TestGate_Run(t *testing.T) {
 	mr := miniredis.RunT(t)
 	cfg := Config{
-		Mode:    "development",
-		Tenancy: "single",
+		Mode:       "development",
+		Tenancy:    "single",
+		Escalation: "disabled",
 		Server: cfgloader.ServerConfig{
 			Endpoints: map[string]cfgloader.EndpointConfig{
 				MCPEndpoint:          {Listen: "127.0.0.1:0"},
@@ -705,6 +648,11 @@ func TestGate_Run(t *testing.T) {
 			Storage: cfgloader.StorageConfig{
 				Backend: "redis",
 				Config:  map[string]any{"addr": mr.Addr()},
+			},
+		},
+		Responsibility: ResponsibilityConfig{
+			Escalation: EscalationConfig{
+				TokenStore: filepath.Join(t.TempDir(), "tokens.json"),
 			},
 		},
 	}
