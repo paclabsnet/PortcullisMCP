@@ -11,6 +11,7 @@ PortcullisMCP is a policy enforcement gateway/firewall for MCP-based AI agents. 
    - Audit & Visibility: Centrally log every tool call, decision, and identity for full compliance and troubleshooting.
    - Identity injection: The system can inject identity information for the actual MCP requests, so the Agent is no longer in the loop
 
+PortcullisMCP is managed by [PAC.Labs](https://paclabs.io), and is designed to be compatible with virtually any fine-grained authorization platform.
 
 ## What problem does it solve?
 
