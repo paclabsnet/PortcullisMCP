@@ -345,6 +345,180 @@
                                         ]
                                 }
                         }
+                },
+                "rovo" : {
+                       "atlassianUserInfo" : {
+                                "allow" : {
+                                        "groups" : ["*"]
+                                }
+                       },
+                       "getAccessibleAtlassianResources": {
+                                "allow" : {
+                                        "groups" : ["*"]
+                                }
+                       },
+                       "getJiraIssue" : {
+                                "allow" : {
+                                        "groups" : ["*"]
+                                },
+                                "deny" : {
+                                        "arg_restrictions" : [
+                                                { "type":"prefix","key_path":"resource.arguments.issueIdOrKey", "data":"HO"}
+                                        ]
+                                },
+                                "escalate" : {
+                                        "arg_restrictions" : [
+                                                { "type":"prefix","key_path":"resource.arguments.issueIdOrKey", "data":"HITL"}
+                                        ]
+                                }
+                       },
+                       "getJiraIssueRemoteIssueLinks" : {
+                                "allow" : {
+                                        "groups" : ["*"]
+                                }
+                       },
+                       "getJiraIssueTypeMetaWithFields" :{
+                                "allow" : {
+                                        "groups" : ["*"]
+                                }
+                       },
+                       "getJiraProjectIssueTypesMetadata" : {
+                                "allow" : {
+                                        "groups" : ["*"]
+                                }
+                       },
+                       "getIssueLinkTypes" : {
+                                "allow" : {
+                                        "groups" : ["*"]
+                                }
+                       },
+                       "getTransitionsForJiraIssue" : {
+                                "allow" : {
+                                        "groups" : ["*"]
+                                }
+                       },
+                       "getVisibleJiraProjects" : {
+                                "allow" : {
+                                        "groups" : ["*"]
+                                }
+                       },
+                       "lookupJiraAccountId"  : {
+                                "allow" : {
+                                        "groups" : ["*"]
+                                }
+                       },
+                       "addCommentToJiraIssue": {
+                                "escalate" : {
+                                        "arg_restrictions" : [
+                                                { "type":"regex","key_path":"resource.arguments.issueIdOrKey", "data":".+"}
+                                        ]
+                                }
+                       },
+                       "addWorklogToJiraIssue" : {
+                                "escalate" : {
+                                        "arg_restrictions" : [
+                                                { "type":"regex","key_path":"resource.arguments.issueIdOrKey", "data":".+"}
+                                        ]
+                                }
+                       },
+                       "createJiraIssue": {
+                                "escalate" : {
+                                        "arg_restrictions" : [
+                                                { "type":"regex","key_path":"resource.arguments.summary", "data":".+"}
+                                        ]
+                                }
+                       },
+                       "editJiraIssue" : {
+                                "escalate" : {
+                                        "arg_restrictions" : [
+                                                { "type":"regex","key_path":"resource.arguments.issueIdOrKey", "data":".+"}
+                                        ]
+                                }
+                       },
+                       "transitionJiraIssue": { 
+                                "allow" : {
+                                        "groups" : ["*"]
+                                }
+                       },
+                       "searchJiraIssuesUsingJql" : { 
+                                "allow" : {
+                                        "groups" : ["*"]
+                                }
+                       },
+                       "getConfluencePage" : { 
+                                "allow" : {
+                                        "groups" : ["*"]
+                                }
+                       },
+                       "getConfluencePageDescendants" : { 
+                                "allow" : {
+                                        "groups" : ["*"]
+                                }
+                       },
+                       "getConfluencePageFooterComments" : { 
+                                "allow" : {
+                                        "groups" : ["*"]
+                                }
+                       },
+                       "getConfluencePageInlineComments" : { 
+                                "allow" : {
+                                        "groups" : ["*"]
+                                }
+                       },
+                       "getConfluenceCommentChildren" : { 
+                                "allow" : {
+                                        "groups" : ["*"]
+                                }
+                       },
+                       "getConfluenceSpaces": { 
+                                "allow" : {
+                                        "groups" : ["*"]
+                                }
+                       },
+                       "getPagesInConfluenceSpace" : { 
+                                "allow" : {
+                                        "groups" : ["*"]
+                                }
+                       },
+                       "createConfluencePage" : {
+                                "escalate" : {
+                                        "arg_restrictions" : [
+                                                { "type":"regex","key_path":"resource.arguments.title", "data":".+"}
+                                        ]
+                                }
+                       },
+                       "updateConfluencePage" : {
+                                "escalate" : {
+                                        "arg_restrictions" : [
+                                                { "type":"regex","key_path":"resource.arguments.pageId", "data":".+"}
+                                        ]
+                                }
+                       },
+                       "createConfluenceFooterComment" : {
+                                "allow" : {
+                                        "groups" : ["*"]
+                                }
+                       },
+                       "createConfluenceInlineComment" : {
+                                "allow" : {
+                                        "groups" : ["*"]
+                                }
+                       },
+                       "searchConfluenceUsingCql" : {
+                                "allow" : {
+                                        "groups" : ["*"]
+                                }
+                       },
+                       "searchAtlassian" : {
+                                "allow" : {
+                                        "groups" : ["*"]
+                                }
+                       },
+                       "fetchAtlassian": {
+                                "allow" : {
+                                        "groups" : ["*"]
+                                }
+                       }
                 }
 
 	},

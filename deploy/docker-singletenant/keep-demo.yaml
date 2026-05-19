@@ -98,10 +98,43 @@ responsibility:
             client_name: Portcullis Keep
             timeout: 10s
             failure_cache_ttl: 5m
-
       tool_list:
         source: file
         file: tools/enforceauth_mcp.json
+
+    - name: "rovo"
+      type: "http"
+      url: "https://mcp.atlassian.com/v1/mcp"
+      user_identity:
+        type: api_key
+        api_key:
+          # The environment varaible needs to include the word 'Bearer ' before the actual key
+          # so it passes validation
+          #
+          source: "envvar://ATLASSIAN_ROVO_API_KEY"
+        placement:
+          header: "Authorization"
+
+# The OAuth flow may not be working properly and also may not work properly for agent-to-agent
+# flows.  Just to get the basics functional, we'll start with an API key as a baseline, so we
+# can validate the functionality
+#          
+#        type: oauth
+#        oauth:
+#          client_id: "portcullis-keep"
+#          callback_url: "http://localhost:8080/oauth/callback"
+#          scopes:
+#          - openid
+#          - offline_access
+#          store_refresh_tokens: true
+#          dcr:
+#            enabled: true
+#            client_name: Portcullis Keep
+#            timeout: 10s
+#            failure_cache_ttl: 5m
+      tool_list:
+        source: file
+        file: tools/atlassian-rovo-mcp-tools-list.json
 
 
   issuance:

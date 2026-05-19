@@ -234,6 +234,24 @@ func debugLogOAuthEndpoints(label string, eps oauthEndpoints, source string) {
 	)
 }
 
+// debugLogMCPCall logs an outgoing MCP tool call at DEBUG level.
+func debugLogMCPCall(backend, tool string, args map[string]any) {
+	if !debugEnabled() {
+		return
+	}
+	slog.Debug("keep: MCP→ tool call", "backend", backend, "tool", tool, "args", args)
+}
+
+// debugLogMCPResult logs an MCP tool result at DEBUG level.
+// content is marshalled to JSON so structured payloads are readable.
+func debugLogMCPResult(backend, tool string, isError bool, content any) {
+	if !debugEnabled() {
+		return
+	}
+	raw, _ := json.Marshal(content)
+	slog.Debug("keep: MCP← tool result", "backend", backend, "tool", tool, "is_error", isError, "content", string(raw))
+}
+
 // decodeJWTPart base64url-decodes a JWT segment and unmarshals it as JSON.
 func decodeJWTPart(s string) (map[string]any, error) {
 	// Add padding if needed.
