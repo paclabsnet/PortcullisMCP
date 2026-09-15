@@ -34,7 +34,11 @@ services:
     container_name: portcullis-mt-keep
     volumes:
       - ./keep-demo.yaml:/etc/portcullis/keep.yaml:ro
+      - ./tools:/home/nonroot/tools:ro
     command: ["-config", "/etc/portcullis/keep.yaml"]
+    environment:
+      - ATLASSIAN_ROVO_API_KEY
+
     depends_on:
       - opa
       - mock-enterprise-api

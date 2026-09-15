@@ -197,8 +197,22 @@
                                 "allow" : {
                                         "groups" : ["*"]
                                 },
+                                "deny" : {
+                                        "arg_restrictions" :[
+                                                { "type":"and", "list" :[
+                                                        { "type":"prefix", "key_path": "resource.arguments.host", "data": "competitor.com" },
+                                                        { "type":"prefix", "key_path": "resource.arguments.path", "data": "/v1/jobs" }
+                                                   ]
+                                                }
+                                        ]
+                                },
                                 "escalate" : {
                                         "arg_restrictions" :[
+                                              { "type":"and", "list" :[
+                                                        { "type":"PREFIX", "key_path": "resource.arguments.host", "data": "competitor.com" },
+                                                        { "type":"prefix", "key_path": "resource.arguments.path", "data": "/v1/products" }
+                                                   ]
+                                              },
                                               { "type":"regex", "key_path":"resource.arguments.host", "data":"(?i)^[a-z0-9.-]+\\.styra\\.com$"},
                                               { "type":"prefix","key_path":"resource.arguments.host", "data":"www.STyRa.CoM"},
                                               { "type":"prefix","key_path":"resource.arguments.host", "data":"www.OpenPolicyAgent.org"},
