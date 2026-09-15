@@ -27,19 +27,47 @@ import (
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 )
 
+// resolveStoragePrefix returns a context-derived storage key prefix for
+// partitioning escalation state by caller identity. The prefix prevents
+// cross-session or cross-user state leakage in shared stores (e.g. Redis).
+//
+// scope "session"     → "sess:{sessionID}" from context
+// scope "fingerprint" → "fp:{credentialFingerprint}" from context,
+//
+//	falling back to "fp:{userID}" from identity source
+//
+// Any other scope (including "") returns "" (bare key, no partitioning).
+func resolveStoragePrefix(ctx context.Context, scope string, identity IdentitySource) string {
+	switch scope {
+	case "session":
+		if sid, ok := SessionIDFromContext(ctx); ok && sid != "" {
+			return "sess:" + sid
+		}
+	case "fingerprint":
+		if fp, ok := CredentialFingerprintFromContext(ctx); ok && fp != "" {
+			return "fp:" + fp
+		}
+		if identity != nil {
+			if uid := identity.Get(ctx).UserID; uid != "" {
+				return "fp:" + uid
+			}
+		}
+	}
+	return ""
+}
+
 // EscalationTokenStore manages short-lived escalation JWTs.
 type EscalationTokenStore interface {
-	All() []shared.EscalationToken
+	All(ctx context.Context) []shared.EscalationToken
 	Add(ctx context.Context, raw string) (shared.EscalationToken, error)
 	Delete(ctx context.Context, tokenID string) error
 }
 
 // PendingEscalationStore manages in-flight (not-yet-approved) escalation requests.
 type PendingEscalationStore interface {
-	Store(key string, p pendingEscalation)
-	Get(key string) (pendingEscalation, bool)
-	Delete(key string)
-	DeleteByJTI(jti string)
+	Store(ctx context.Context, key string, p pendingEscalation)
+	Get(ctx context.Context, key string) (pendingEscalation, bool)
+	Delete(ctx context.Context, key string)
 }
 
 // InMemoryPendingStore is a thread-safe in-memory PendingEscalationStore.
@@ -53,106 +81,166 @@ func NewInMemoryPendingStore() *InMemoryPendingStore {
 	return &InMemoryPendingStore{data: make(map[string]pendingEscalation)}
 }
 
-func (s *InMemoryPendingStore) Store(key string, p pendingEscalation) {
+func (s *InMemoryPendingStore) Store(_ context.Context, key string, p pendingEscalation) {
 	s.mu.Lock()
 	s.data[key] = p
 	s.mu.Unlock()
 }
 
-func (s *InMemoryPendingStore) Get(key string) (pendingEscalation, bool) {
+func (s *InMemoryPendingStore) Get(_ context.Context, key string) (pendingEscalation, bool) {
 	s.mu.Lock()
 	p, ok := s.data[key]
 	s.mu.Unlock()
 	return p, ok
 }
 
-func (s *InMemoryPendingStore) Delete(key string) {
+func (s *InMemoryPendingStore) Delete(_ context.Context, key string) {
 	s.mu.Lock()
 	delete(s.data, key)
 	s.mu.Unlock()
 }
 
-func (s *InMemoryPendingStore) DeleteByJTI(jti string) {
+
+// InMemoryTokenStore is a trivial EscalationTokenStore backed by a slice.
+// It is used in multi-tenant mode when escalation is disabled (no Redis needed).
+type InMemoryTokenStore struct {
+	mu     sync.Mutex
+	tokens []shared.EscalationToken
+}
+
+// NewInMemoryTokenStore creates an empty InMemoryTokenStore.
+func NewInMemoryTokenStore() *InMemoryTokenStore { return &InMemoryTokenStore{} }
+
+func (s *InMemoryTokenStore) All(_ context.Context) []shared.EscalationToken {
 	s.mu.Lock()
-	for key, p := range s.data {
-		if p.JTI == jti {
-			delete(s.data, key)
-			break
+	out := make([]shared.EscalationToken, len(s.tokens))
+	copy(out, s.tokens)
+	s.mu.Unlock()
+	return out
+}
+
+func (s *InMemoryTokenStore) Add(_ context.Context, raw string) (shared.EscalationToken, error) {
+	tok, err := parseEscalationToken(raw)
+	if err != nil {
+		return shared.EscalationToken{}, err
+	}
+	s.mu.Lock()
+	s.tokens = append(s.tokens, tok)
+	s.mu.Unlock()
+	return tok, nil
+}
+
+func (s *InMemoryTokenStore) Delete(_ context.Context, tokenID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, t := range s.tokens {
+		if t.TokenID == tokenID {
+			s.tokens = append(s.tokens[:i], s.tokens[i+1:]...)
+			return nil
 		}
 	}
-	s.mu.Unlock()
+	return fmt.Errorf("token %q not found", tokenID)
+}
+
+// storedTokenEntry is the on-disk representation of an escalation token.
+// ScopeKey is the resolved storage prefix at the time of Add (e.g.
+// "sess:0" or "fp:abc123"). An empty ScopeKey means the entry was stored
+// without a scope and is visible to all callers.
+type storedTokenEntry struct {
+	Raw      string `json:"raw"`
+	ScopeKey string `json:"scope_key,omitempty"`
+	tok      shared.EscalationToken
 }
 
 // TokenStore manages the local escalation token file.
 // The file is owned and readable only by the current user (mode 0600).
+// When scope and identity are set, All and Add are partitioned by the
+// resolved storage prefix so that tokens from one login session are not
+// visible after the credential changes (e.g. in fingerprint mode).
 type TokenStore struct {
-	mu   sync.RWMutex
-	path string
-	// tokens is the in-memory copy, pruned of expired entries.
-	tokens []shared.EscalationToken
+	mu       sync.RWMutex
+	path     string
+	scope    string
+	identity IdentitySource
+	// entries is the in-memory copy, pruned of expired entries.
+	entries []storedTokenEntry
 }
 
 // NewTokenStore opens (or creates) the token store at the given path,
 // loads existing tokens, and prunes expired ones.
-func NewTokenStore(_ context.Context, path string) (*TokenStore, error) {
+// scope and identity drive per-caller partitioning (see resolveStoragePrefix).
+func NewTokenStore(_ context.Context, path, scope string, identity IdentitySource) (*TokenStore, error) {
 	expanded, err := expandHome(path)
 	if err != nil {
 		return nil, fmt.Errorf("expand token store path: %w", err)
 	}
-	ts := &TokenStore{path: expanded}
+	ts := &TokenStore{path: expanded, scope: scope, identity: identity}
 	if err := ts.load(); err != nil {
 		return nil, err
 	}
 	return ts, nil
 }
 
-// All returns a snapshot of all currently valid (non-expired) tokens.
-func (ts *TokenStore) All() []shared.EscalationToken {
+// All returns a snapshot of valid tokens visible to the current caller.
+// If a scope prefix is resolved from ctx, only tokens tagged with that prefix
+// are returned. If no prefix can be resolved (e.g. no fingerprint in context),
+// all tokens are returned — this covers admin/management-console access.
+func (ts *TokenStore) All(ctx context.Context) []shared.EscalationToken {
+	prefix := resolveStoragePrefix(ctx, ts.scope, ts.identity)
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
-	out := make([]shared.EscalationToken, len(ts.tokens))
-	copy(out, ts.tokens)
+	out := make([]shared.EscalationToken, 0, len(ts.entries))
+	for _, e := range ts.entries {
+		if prefix == "" || e.ScopeKey == prefix {
+			out = append(out, e.tok)
+		}
+	}
 	return out
 }
 
-// Add validates and persists a new token. If the token is already expired it
-// is rejected. Duplicate TokenIDs are replaced.
-func (ts *TokenStore) Add(_ context.Context, raw string) (shared.EscalationToken, error) {
+// Add validates and persists a new token tagged with the current caller's
+// scope key. If the token is already expired it is rejected. Duplicate
+// TokenIDs are replaced (regardless of scope key).
+func (ts *TokenStore) Add(ctx context.Context, raw string) (shared.EscalationToken, error) {
 	tok, err := parseEscalationToken(raw)
 	if err != nil {
 		return shared.EscalationToken{}, fmt.Errorf("parse token: %w", err)
 	}
+	scopeKey := resolveStoragePrefix(ctx, ts.scope, ts.identity)
+	entry := storedTokenEntry{Raw: raw, ScopeKey: scopeKey, tok: tok}
+
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 
-	// Replace duplicate.
+	// Replace duplicate by TokenID.
 	replaced := false
-	for i, t := range ts.tokens {
-		if t.TokenID == tok.TokenID {
-			ts.tokens[i] = tok
+	for i, e := range ts.entries {
+		if e.tok.TokenID == tok.TokenID {
+			ts.entries[i] = entry
 			replaced = true
 			break
 		}
 	}
 	if !replaced {
-		ts.tokens = append(ts.tokens, tok)
+		ts.entries = append(ts.entries, entry)
 	}
 	return tok, ts.saveLocked()
 }
 
 // Delete removes the token with the given ID and persists the change.
+// Deletion is not scope-filtered — it is an administrative operation.
 func (ts *TokenStore) Delete(_ context.Context, tokenID string) error {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
-	n := len(ts.tokens)
-	filtered := ts.tokens[:0]
-	for _, t := range ts.tokens {
-		if t.TokenID != tokenID {
-			filtered = append(filtered, t)
+	n := len(ts.entries)
+	filtered := ts.entries[:0]
+	for _, e := range ts.entries {
+		if e.tok.TokenID != tokenID {
+			filtered = append(filtered, e)
 		}
 	}
-	ts.tokens = filtered
-	if len(ts.tokens) == n {
+	ts.entries = filtered
+	if len(ts.entries) == n {
 		return fmt.Errorf("token %q not found", tokenID)
 	}
 	return ts.saveLocked()
@@ -172,29 +260,25 @@ func (ts *TokenStore) load() error {
 		return fmt.Errorf("read token store: %w", err)
 	}
 
-	var raws []string
-	if err := json.Unmarshal(data, &raws); err != nil {
+	var disk []storedTokenEntry
+	if err := json.Unmarshal(data, &disk); err != nil {
 		return fmt.Errorf("parse token store: %w", err)
 	}
 
-	for _, raw := range raws {
-		tok, err := parseEscalationToken(raw)
+	for _, e := range disk {
+		tok, err := parseEscalationToken(e.Raw)
 		if err != nil {
-			// Skip malformed tokens silently.
+			// Skip malformed or expired tokens silently.
 			continue
 		}
-		ts.tokens = append(ts.tokens, tok)
+		ts.entries = append(ts.entries, storedTokenEntry{Raw: e.Raw, ScopeKey: e.ScopeKey, tok: tok})
 	}
 	return nil
 }
 
-// saveLocked writes the current token list to disk. Caller must hold ts.mu.
+// saveLocked writes the current entry list to disk. Caller must hold ts.mu.
 func (ts *TokenStore) saveLocked() error {
-	raws := make([]string, len(ts.tokens))
-	for i, t := range ts.tokens {
-		raws[i] = t.Raw
-	}
-	data, err := json.MarshalIndent(raws, "", "  ")
+	data, err := json.MarshalIndent(ts.entries, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal token store: %w", err)
 	}

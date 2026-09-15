@@ -133,10 +133,6 @@ type UnclaimedStore interface {
 	// would be exceeded.
 	AddUnclaimed(ctx context.Context, tok UnclaimedToken) error
 
-	// ListUnclaimed returns all non-expired unclaimed tokens for userID.
-	// Returns an empty slice (not an error) when the user has no tokens.
-	ListUnclaimed(ctx context.Context, userID string) ([]UnclaimedToken, error)
-
 	// ClaimToken atomically removes and returns the token with the given JTI.
 	// Returns (nil, nil) if the token is not found — it may not yet be
 	// approved, may already have been claimed, or may have expired.

@@ -17,6 +17,7 @@ package gate
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -166,5 +167,125 @@ func TestRegisterPending_NoBearerTokenWhenNotConfigured(t *testing.T) {
 
 	if gotAuth != "" {
 		t.Errorf("expected no Authorization header, got %q", gotAuth)
+	}
+}
+
+// ---- ClaimToken -------------------------------------------------------------
+
+func TestClaimToken_Success(t *testing.T) {
+	const wantRaw = "header.payload.sig"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/token/claim" {
+			t.Errorf("path = %q, want /token/claim", r.URL.Path)
+		}
+		if r.Method != http.MethodPost {
+			t.Errorf("method = %q, want POST", r.Method)
+		}
+		var body struct {
+			JTI string `json:"jti"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		if body.JTI != "claim-jti" {
+			t.Errorf("jti = %q, want claim-jti", body.JTI)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"raw": wantRaw})
+	}))
+	defer srv.Close()
+
+	g := mustGuardClient(t, GuardConfig{
+		GuardPeerConfig: cfgloader.GuardPeerConfig{
+			Endpoints: cfgloader.GuardEndpoints{TokenAPI: srv.URL},
+		},
+	})
+	raw, err := g.ClaimToken(context.Background(), "claim-jti")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if raw != wantRaw {
+		t.Errorf("raw = %q, want %q", raw, wantRaw)
+	}
+}
+
+func TestClaimToken_NotFound_ReturnsEmpty(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	g := mustGuardClient(t, GuardConfig{
+		GuardPeerConfig: cfgloader.GuardPeerConfig{
+			Endpoints: cfgloader.GuardEndpoints{TokenAPI: srv.URL},
+		},
+	})
+	raw, err := g.ClaimToken(context.Background(), "unknown-jti")
+	if err != nil {
+		t.Fatalf("404 should return nil error, got: %v", err)
+	}
+	if raw != "" {
+		t.Errorf("404 should return empty raw, got %q", raw)
+	}
+}
+
+func TestClaimToken_ServerError_ReturnsGuardAPIError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "internal server error"})
+	}))
+	defer srv.Close()
+
+	g := mustGuardClient(t, GuardConfig{
+		GuardPeerConfig: cfgloader.GuardPeerConfig{
+			Endpoints: cfgloader.GuardEndpoints{TokenAPI: srv.URL},
+		},
+	})
+	_, err := g.ClaimToken(context.Background(), "jti-err")
+	if err == nil {
+		t.Fatal("expected error for 500 response, got nil")
+	}
+	var apiErr *GuardAPIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected *GuardAPIError, got %T: %v", err, err)
+	}
+	if apiErr.StatusCode != http.StatusInternalServerError {
+		t.Errorf("StatusCode = %d, want 500", apiErr.StatusCode)
+	}
+}
+
+func TestClaimToken_NetworkError(t *testing.T) {
+	g := mustGuardClient(t, GuardConfig{
+		GuardPeerConfig: cfgloader.GuardPeerConfig{
+			Endpoints: cfgloader.GuardEndpoints{TokenAPI: "http://127.0.0.1:1"},
+		},
+	})
+	_, err := g.ClaimToken(context.Background(), "jti")
+	if err == nil {
+		t.Fatal("expected network error, got nil")
+	}
+}
+
+func TestClaimToken_BearerTokenSent(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		_ = json.NewEncoder(w).Encode(map[string]string{"raw": "tok"})
+	}))
+	defer srv.Close()
+
+	g := mustGuardClient(t, GuardConfig{
+		GuardPeerConfig: cfgloader.GuardPeerConfig{
+			Endpoints: cfgloader.GuardEndpoints{TokenAPI: srv.URL},
+			PeerAuth: cfgloader.PeerAuth{
+				Auth: cfgloader.AuthSettings{
+					Credentials: cfgloader.AuthCredentials{BearerToken: "gate-secret"},
+				},
+			},
+		},
+	})
+	_, _ = g.ClaimToken(context.Background(), "j")
+	if gotAuth != "Bearer gate-secret" {
+		t.Errorf("Authorization = %q, want Bearer gate-secret", gotAuth)
 	}
 }

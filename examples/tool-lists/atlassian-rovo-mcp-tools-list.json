@@ -1,0 +1,1466 @@
+{
+  "tools": [
+    {
+      "name": "atlassianUserInfo",
+      "description": "Get current Atlassian user details, such as account ID.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "annotations": {
+        "permissionGroup": "shared",
+        "authMethods": ["oauth2", "apitoken"],
+        "scopes": ["read:me"]
+      }
+    },
+    {
+      "name": "getAccessibleAtlassianResources",
+      "description": "List Atlassian cloud sites (cloudId) that the user can access.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "annotations": {
+        "permissionGroup": "shared",
+        "authMethods": ["oauth2", "apitoken"],
+        "scopes": ["read:account", "read:me"]
+      }
+    },
+
+    {
+      "name": "getJiraIssue",
+      "description": "Get a Jira issue by ID or key.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "issueIdOrKey": {
+            "type": "string",
+            "description": "The Jira issue ID or key (e.g. PROJ-123)."
+          },
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          }
+        },
+        "required": ["issueIdOrKey", "cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "read_jira",
+        "authMethods": ["oauth2", "apitoken"],
+        "scopes": ["read:jira-work"]
+      }
+    },
+    {
+      "name": "getJiraIssueRemoteIssueLinks",
+      "description": "List remote issue links (for example, Confluence links) on a Jira issue.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "issueIdOrKey": {
+            "type": "string",
+            "description": "The Jira issue ID or key."
+          },
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          }
+        },
+        "required": ["issueIdOrKey", "cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "read_jira",
+        "authMethods": ["oauth2", "apitoken"],
+        "scopes": ["read:jira-work"]
+      }
+    },
+    {
+      "name": "getJiraIssueTypeMetaWithFields",
+      "description": "Get create-field metadata for a project and issue type.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectIdOrKey": {
+            "type": "string",
+            "description": "The Jira project ID or key."
+          },
+          "issueTypeId": {
+            "type": "string",
+            "description": "The issue type ID."
+          },
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          }
+        },
+        "required": ["projectIdOrKey", "issueTypeId", "cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "read_jira",
+        "authMethods": ["oauth2", "apitoken"],
+        "scopes": ["read:jira-work"]
+      }
+    },
+    {
+      "name": "getJiraProjectIssueTypesMetadata",
+      "description": "List issue types available in a Jira project.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectIdOrKey": {
+            "type": "string",
+            "description": "The Jira project ID or key."
+          },
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          }
+        },
+        "required": ["projectIdOrKey", "cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "read_jira",
+        "authMethods": ["oauth2", "apitoken"],
+        "scopes": ["read:jira-work"]
+      }
+    },
+    {
+      "name": "getIssueLinkTypes",
+      "description": "List available issue link types.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          }
+        },
+        "required": ["cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "read_jira",
+        "authMethods": ["oauth2", "apitoken"],
+        "scopes": ["read:jira-work"]
+      }
+    },
+    {
+      "name": "getTransitionsForJiraIssue",
+      "description": "List available workflow transitions for an issue.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "issueIdOrKey": {
+            "type": "string",
+            "description": "The Jira issue ID or key."
+          },
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          }
+        },
+        "required": ["issueIdOrKey", "cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "read_jira",
+        "authMethods": ["oauth2", "apitoken"],
+        "scopes": ["read:jira-work"]
+      }
+    },
+    {
+      "name": "getVisibleJiraProjects",
+      "description": "List Jira projects the user can access.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          }
+        },
+        "required": ["cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "read_jira",
+        "authMethods": ["oauth2", "apitoken"],
+        "scopes": ["read:jira-work"]
+      }
+    },
+    {
+      "name": "lookupJiraAccountId",
+      "description": "Find Jira user account IDs by name or email.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Name or email address to search for."
+          },
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          }
+        },
+        "required": ["query", "cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "read_jira",
+        "authMethods": ["oauth2", "apitoken"],
+        "scopes": ["read:jira-work"]
+      }
+    },
+
+    {
+      "name": "addCommentToJiraIssue",
+      "description": "Add a comment to a Jira issue.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "issueIdOrKey": {
+            "type": "string",
+            "description": "The Jira issue ID or key."
+          },
+          "comment": {
+            "type": "string",
+            "description": "The comment body text."
+          },
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          }
+        },
+        "required": ["issueIdOrKey", "comment", "cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "write_jira",
+        "authMethods": ["oauth2", "apitoken"],
+        "scopes": ["write:jira-work"]
+      }
+    },
+    {
+      "name": "addWorklogToJiraIssue",
+      "description": "Add a time-tracking worklog to a Jira issue.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "issueIdOrKey": {
+            "type": "string",
+            "description": "The Jira issue ID or key."
+          },
+          "timeSpent": {
+            "type": "string",
+            "description": "Time spent in Jira duration format (e.g. 2h 30m)."
+          },
+          "comment": {
+            "type": "string",
+            "description": "Optional worklog comment."
+          },
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          }
+        },
+        "required": ["issueIdOrKey", "timeSpent", "cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "write_jira",
+        "authMethods": ["oauth2", "apitoken"],
+        "scopes": ["write:jira-work"]
+      }
+    },
+    {
+      "name": "createJiraIssue",
+      "description": "Create a new Jira issue.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectIdOrKey": {
+            "type": "string",
+            "description": "The Jira project ID or key."
+          },
+          "issueTypeId": {
+            "type": "string",
+            "description": "The issue type ID."
+          },
+          "summary": {
+            "type": "string",
+            "description": "The issue summary/title."
+          },
+          "description": {
+            "type": "string",
+            "description": "The issue description."
+          },
+          "fields": {
+            "type": "object",
+            "description": "Additional fields to set on the issue."
+          },
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          }
+        },
+        "required": ["projectIdOrKey", "issueTypeId", "summary", "cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "write_jira",
+        "authMethods": ["oauth2", "apitoken"],
+        "scopes": ["write:jira-work"]
+      }
+    },
+    {
+      "name": "editJiraIssue",
+      "description": "Update fields on an existing Jira issue.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "issueIdOrKey": {
+            "type": "string",
+            "description": "The Jira issue ID or key."
+          },
+          "fields": {
+            "type": "object",
+            "description": "Fields to update on the issue."
+          },
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          }
+        },
+        "required": ["issueIdOrKey", "fields", "cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "write_jira",
+        "authMethods": ["oauth2", "apitoken"],
+        "scopes": ["write:jira-work"]
+      }
+    },
+    {
+      "name": "transitionJiraIssue",
+      "description": "Perform a workflow transition on a Jira issue.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "issueIdOrKey": {
+            "type": "string",
+            "description": "The Jira issue ID or key."
+          },
+          "transitionId": {
+            "type": "string",
+            "description": "The transition ID to perform (obtain from getTransitionsForJiraIssue)."
+          },
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          }
+        },
+        "required": ["issueIdOrKey", "transitionId", "cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "write_jira",
+        "authMethods": ["oauth2", "apitoken"],
+        "scopes": ["write:jira-work"]
+      }
+    },
+
+    {
+      "name": "searchJiraIssuesUsingJql",
+      "description": "Search Jira issues using a JQL query.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "jql": {
+            "type": "string",
+            "description": "The JQL query string."
+          },
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          },
+          "maxResults": {
+            "type": "integer",
+            "description": "Maximum number of results to return."
+          },
+          "startAt": {
+            "type": "integer",
+            "description": "Index of the first result (for pagination)."
+          }
+        },
+        "required": ["jql", "cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "search_jira",
+        "authMethods": ["oauth2", "apitoken"],
+        "scopes": ["search:jira-work"]
+      }
+    },
+
+    {
+      "name": "getConfluencePage",
+      "description": "Get a Confluence page or live doc by ID.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "pageId": {
+            "type": "string",
+            "description": "The Confluence page ID."
+          },
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          }
+        },
+        "required": ["pageId", "cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "read_confluence",
+        "authMethods": ["oauth2", "apitoken"],
+        "scopes": ["read:page:confluence"]
+      }
+    },
+    {
+      "name": "getConfluencePageDescendants",
+      "description": "List descendant pages under a parent page.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "pageId": {
+            "type": "string",
+            "description": "The parent Confluence page ID."
+          },
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          }
+        },
+        "required": ["pageId", "cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "read_confluence",
+        "authMethods": ["oauth2", "apitoken"],
+        "scopes": ["read:hierarchical-content:confluence"]
+      }
+    },
+    {
+      "name": "getConfluencePageFooterComments",
+      "description": "List footer comments on a Confluence page.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "pageId": {
+            "type": "string",
+            "description": "The Confluence page ID."
+          },
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          }
+        },
+        "required": ["pageId", "cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "read_confluence",
+        "authMethods": ["oauth2", "apitoken"],
+        "scopes": ["read:comment:confluence"]
+      }
+    },
+    {
+      "name": "getConfluencePageInlineComments",
+      "description": "List inline comments on a Confluence page.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "pageId": {
+            "type": "string",
+            "description": "The Confluence page ID."
+          },
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          }
+        },
+        "required": ["pageId", "cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "read_confluence",
+        "authMethods": ["oauth2", "apitoken"],
+        "scopes": ["read:comment:confluence"]
+      }
+    },
+    {
+      "name": "getConfluenceCommentChildren",
+      "description": "List child comments (replies) of a comment.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "commentId": {
+            "type": "string",
+            "description": "The parent comment ID."
+          },
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          }
+        },
+        "required": ["commentId", "cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "read_confluence",
+        "authMethods": ["oauth2", "apitoken"],
+        "scopes": ["read:comment:confluence"]
+      }
+    },
+    {
+      "name": "getConfluenceSpaces",
+      "description": "List Confluence spaces.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          }
+        },
+        "required": ["cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "read_confluence",
+        "authMethods": ["oauth2", "apitoken"],
+        "scopes": ["read:space:confluence"]
+      }
+    },
+    {
+      "name": "getPagesInConfluenceSpace",
+      "description": "List pages in a Confluence space.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "spaceKey": {
+            "type": "string",
+            "description": "The Confluence space key."
+          },
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          }
+        },
+        "required": ["spaceKey", "cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "read_confluence",
+        "authMethods": ["oauth2", "apitoken"],
+        "scopes": ["read:page:confluence"]
+      }
+    },
+
+    {
+      "name": "createConfluencePage",
+      "description": "Create a new Confluence page or live doc.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "spaceKey": {
+            "type": "string",
+            "description": "The Confluence space key."
+          },
+          "title": {
+            "type": "string",
+            "description": "The page title."
+          },
+          "content": {
+            "type": "string",
+            "description": "The page body content."
+          },
+          "parentPageId": {
+            "type": "string",
+            "description": "Optional parent page ID."
+          },
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          }
+        },
+        "required": ["spaceKey", "title", "content", "cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "write_confluence",
+        "authMethods": ["oauth2", "apitoken"],
+        "scopes": ["write:page:confluence"]
+      }
+    },
+    {
+      "name": "updateConfluencePage",
+      "description": "Update an existing Confluence page or live doc.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "pageId": {
+            "type": "string",
+            "description": "The Confluence page ID."
+          },
+          "title": {
+            "type": "string",
+            "description": "The updated page title."
+          },
+          "content": {
+            "type": "string",
+            "description": "The updated page body content."
+          },
+          "version": {
+            "type": "integer",
+            "description": "The current page version number (required for conflict detection)."
+          },
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          }
+        },
+        "required": ["pageId", "title", "content", "version", "cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "write_confluence",
+        "authMethods": ["oauth2", "apitoken"],
+        "scopes": ["write:page:confluence"]
+      }
+    },
+    {
+      "name": "createConfluenceFooterComment",
+      "description": "Create a footer comment or reply on a Confluence page.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "pageId": {
+            "type": "string",
+            "description": "The Confluence page ID."
+          },
+          "body": {
+            "type": "string",
+            "description": "The comment body text."
+          },
+          "parentCommentId": {
+            "type": "string",
+            "description": "Optional parent comment ID for replies."
+          },
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          }
+        },
+        "required": ["pageId", "body", "cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "write_confluence",
+        "authMethods": ["oauth2", "apitoken"],
+        "scopes": ["write:page:confluence"]
+      }
+    },
+    {
+      "name": "createConfluenceInlineComment",
+      "description": "Create an inline comment tied to selected text on a Confluence page.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "pageId": {
+            "type": "string",
+            "description": "The Confluence page ID."
+          },
+          "body": {
+            "type": "string",
+            "description": "The comment body text."
+          },
+          "inlineMarkerRef": {
+            "type": "string",
+            "description": "Reference to the inline text selection the comment is anchored to."
+          },
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          }
+        },
+        "required": ["pageId", "body", "inlineMarkerRef", "cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "write_confluence",
+        "authMethods": ["oauth2", "apitoken"],
+        "scopes": ["write:page:confluence"]
+      }
+    },
+
+    {
+      "name": "searchConfluenceUsingCql",
+      "description": "Search Confluence content using CQL.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "cql": {
+            "type": "string",
+            "description": "The CQL query string."
+          },
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          },
+          "maxResults": {
+            "type": "integer",
+            "description": "Maximum number of results to return."
+          },
+          "startAt": {
+            "type": "integer",
+            "description": "Index of the first result (for pagination)."
+          }
+        },
+        "required": ["cql", "cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "search_confluence",
+        "authMethods": ["oauth2", "apitoken"],
+        "scopes": ["search:confluence"]
+      }
+    },
+
+    {
+      "name": "getJsmOpsAlerts",
+      "description": "Get an operations alert by ID, alias, or search query. NOTE: API token authentication only. Admin enablement required.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "identifier": {
+            "type": "string",
+            "description": "Alert ID, alias, or search query."
+          },
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          }
+        },
+        "required": ["identifier", "cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "read_jsm",
+        "authMethods": ["apitoken"],
+        "scopes": [
+          "read:ops-alert:jira-service-management",
+          "read:ops-config:jira-service-management",
+          "read:jira-user"
+        ],
+        "adminEnablementRequired": true
+      }
+    },
+    {
+      "name": "getJsmOpsScheduleInfo",
+      "description": "List on-call schedules or get current/next responders. NOTE: API token authentication only. Admin enablement required.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          },
+          "scheduleId": {
+            "type": "string",
+            "description": "Optional schedule ID to retrieve specific schedule info."
+          }
+        },
+        "required": ["cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "read_jsm",
+        "authMethods": ["apitoken"],
+        "scopes": [
+          "read:ops-config:jira-service-management",
+          "read:jira-user"
+        ],
+        "adminEnablementRequired": true
+      }
+    },
+    {
+      "name": "getJsmOpsTeamInfo",
+      "description": "List operation teams and team details. NOTE: API token authentication only. Admin enablement required.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          },
+          "teamId": {
+            "type": "string",
+            "description": "Optional team ID for specific team details."
+          }
+        },
+        "required": ["cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "read_jsm",
+        "authMethods": ["apitoken"],
+        "scopes": [
+          "read:ops-config:jira-service-management",
+          "read:jira-user"
+        ],
+        "adminEnablementRequired": true
+      }
+    },
+    {
+      "name": "updateJsmOpsAlert",
+      "description": "Perform alert actions: acknowledge, unacknowledge, close, or escalate an alert. NOTE: API token authentication only. Admin enablement required.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "identifier": {
+            "type": "string",
+            "description": "Alert ID or alias."
+          },
+          "action": {
+            "type": "string",
+            "enum": ["acknowledge", "unacknowledge", "close", "escalate"],
+            "description": "The action to perform on the alert."
+          },
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          },
+          "note": {
+            "type": "string",
+            "description": "Optional note to attach to the action."
+          }
+        },
+        "required": ["identifier", "action", "cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "write_jsm",
+        "authMethods": ["apitoken"],
+        "scopes": [
+          "read:ops-alert:jira-service-management",
+          "write:ops-alert:jira-service-management"
+        ],
+        "adminEnablementRequired": true
+      }
+    },
+
+    {
+      "name": "bitbucketWorkspace",
+      "description": "Get Bitbucket workspace details. Supports actions: list, get. NOTE: API token authentication only. Admin enablement and linked org required.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["list", "get"],
+            "description": "The action to perform."
+          },
+          "workspaceSlug": {
+            "type": "string",
+            "description": "Workspace slug (required for get action)."
+          }
+        },
+        "required": ["action"]
+      },
+      "annotations": {
+        "permissionGroup": "read_bitbucket",
+        "authMethods": ["apitoken"],
+        "scopes": ["read:workspace:bitbucket"],
+        "adminEnablementRequired": true,
+        "requiresLinkedOrg": true
+      }
+    },
+    {
+      "name": "bitbucketRepository",
+      "description": "Get Bitbucket repository details and content. Supports actions: list, get, defaultReviewers. NOTE: API token authentication only. Admin enablement and linked org required.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["list", "get", "defaultReviewers"],
+            "description": "The action to perform."
+          },
+          "workspaceSlug": {
+            "type": "string",
+            "description": "The workspace slug."
+          },
+          "repoSlug": {
+            "type": "string",
+            "description": "The repository slug (required for get and defaultReviewers)."
+          }
+        },
+        "required": ["action", "workspaceSlug"]
+      },
+      "annotations": {
+        "permissionGroup": "read_bitbucket",
+        "authMethods": ["apitoken"],
+        "scopes": ["read:repository:bitbucket"],
+        "adminEnablementRequired": true,
+        "requiresLinkedOrg": true
+      }
+    },
+    {
+      "name": "bitbucketUser",
+      "description": "Get pull requests for the authenticated Bitbucket user. Supports actions: pullRequests. NOTE: API token authentication only. Admin enablement and linked org required.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["pullRequests"],
+            "description": "The action to perform."
+          }
+        },
+        "required": ["action"]
+      },
+      "annotations": {
+        "permissionGroup": "read_bitbucket",
+        "authMethods": ["apitoken"],
+        "scopes": ["read:pullrequest:bitbucket"],
+        "adminEnablementRequired": true,
+        "requiresLinkedOrg": true
+      }
+    },
+    {
+      "name": "bitbucketDeployment",
+      "description": "Get Bitbucket deployment information. Supports actions: list, get. NOTE: API token authentication only. Admin enablement and linked org required.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["list", "get"],
+            "description": "The action to perform."
+          },
+          "workspaceSlug": {
+            "type": "string",
+            "description": "The workspace slug."
+          },
+          "repoSlug": {
+            "type": "string",
+            "description": "The repository slug."
+          },
+          "deploymentUuid": {
+            "type": "string",
+            "description": "Deployment UUID (required for get action)."
+          }
+        },
+        "required": ["action", "workspaceSlug", "repoSlug"]
+      },
+      "annotations": {
+        "permissionGroup": "read_bitbucket",
+        "authMethods": ["apitoken"],
+        "scopes": ["read:pipeline:bitbucket"],
+        "adminEnablementRequired": true,
+        "requiresLinkedOrg": true
+      }
+    },
+    {
+      "name": "bitbucketPullRequest",
+      "description": "Get or manage Bitbucket pull requests. Read actions: list, get, comments, diff. Write actions: create, merge, approve, comment. NOTE: API token authentication only. Admin enablement and linked org required.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["list", "get", "comments", "diff", "create", "merge", "approve", "comment"],
+            "description": "The action to perform."
+          },
+          "workspaceSlug": {
+            "type": "string",
+            "description": "The workspace slug."
+          },
+          "repoSlug": {
+            "type": "string",
+            "description": "The repository slug."
+          },
+          "pullRequestId": {
+            "type": "integer",
+            "description": "Pull request ID (required for get, comments, diff, merge, approve, comment)."
+          },
+          "payload": {
+            "type": "object",
+            "description": "Request payload for create or comment actions."
+          }
+        },
+        "required": ["action", "workspaceSlug", "repoSlug"]
+      },
+      "annotations": {
+        "permissionGroup": "read_bitbucket",
+        "authMethods": ["apitoken"],
+        "scopes": ["read:pullrequest:bitbucket", "write:pullrequest:bitbucket"],
+        "adminEnablementRequired": true,
+        "requiresLinkedOrg": true
+      }
+    },
+    {
+      "name": "bitbucketRepoContent",
+      "description": "Get or create Bitbucket repository content. Read actions: branch.get, commit.get, files.get. Write actions: branch.create, commit.create. NOTE: API token authentication only. Admin enablement and linked org required.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["branch.get", "commit.get", "files.get", "branch.create", "commit.create"],
+            "description": "The action to perform."
+          },
+          "workspaceSlug": {
+            "type": "string",
+            "description": "The workspace slug."
+          },
+          "repoSlug": {
+            "type": "string",
+            "description": "The repository slug."
+          },
+          "payload": {
+            "type": "object",
+            "description": "Request payload for create actions or filter parameters for get actions."
+          }
+        },
+        "required": ["action", "workspaceSlug", "repoSlug"]
+      },
+      "annotations": {
+        "permissionGroup": "read_bitbucket",
+        "authMethods": ["apitoken"],
+        "scopes": ["read:repository:bitbucket", "write:repository:bitbucket"],
+        "adminEnablementRequired": true,
+        "requiresLinkedOrg": true
+      }
+    },
+    {
+      "name": "bitbucketPipeline",
+      "description": "Get or manage Bitbucket pipelines. Read actions: list, get, steps, step.get, step.log. Write actions: run. NOTE: API token authentication only. Admin enablement and linked org required.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["list", "get", "steps", "step.get", "step.log", "run"],
+            "description": "The action to perform."
+          },
+          "workspaceSlug": {
+            "type": "string",
+            "description": "The workspace slug."
+          },
+          "repoSlug": {
+            "type": "string",
+            "description": "The repository slug."
+          },
+          "pipelineUuid": {
+            "type": "string",
+            "description": "Pipeline UUID (required for get, steps, step.get, step.log)."
+          },
+          "stepUuid": {
+            "type": "string",
+            "description": "Step UUID (required for step.get, step.log)."
+          }
+        },
+        "required": ["action", "workspaceSlug", "repoSlug"]
+      },
+      "annotations": {
+        "permissionGroup": "read_bitbucket",
+        "authMethods": ["apitoken"],
+        "scopes": ["read:pipeline:bitbucket", "write:pipeline:bitbucket"],
+        "adminEnablementRequired": true,
+        "requiresLinkedOrg": true
+      }
+    },
+    {
+      "name": "bitbucketEnvironment",
+      "description": "Get or manage Bitbucket deployment environments. Read actions: list, get. Write actions: create, delete, update. NOTE: API token authentication only. Admin enablement and linked org required.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["list", "get", "create", "delete", "update"],
+            "description": "The action to perform."
+          },
+          "workspaceSlug": {
+            "type": "string",
+            "description": "The workspace slug."
+          },
+          "repoSlug": {
+            "type": "string",
+            "description": "The repository slug."
+          },
+          "environmentUuid": {
+            "type": "string",
+            "description": "Environment UUID (required for get, delete, update)."
+          },
+          "payload": {
+            "type": "object",
+            "description": "Request payload for create or update actions."
+          }
+        },
+        "required": ["action", "workspaceSlug", "repoSlug"]
+      },
+      "annotations": {
+        "permissionGroup": "write_bitbucket",
+        "authMethods": ["apitoken"],
+        "scopes": ["read:pipeline:bitbucket", "admin:pipeline:bitbucket"],
+        "adminEnablementRequired": true,
+        "requiresLinkedOrg": true
+      }
+    },
+
+    {
+      "name": "getTeamworkGraphContext",
+      "description": "Retrieves connected context from Teamwork Graph for any Atlassian entity. Returns all relationships and linked objects within one traversal — including cross-product and third-party connections (GitHub, Azure DevOps, GitLab, Jenkins, Spinnaker, Loom). Supported entry points: Jira issues/projects/sprints/versions/comments, Confluence pages/blogposts/whiteboards/databases/spaces, Goals/Projects/Focus Areas, People/Teams/Orgs, DevOps PRs/repos/deployments/services/builds/designs, Loom videos/meetings, Compass components, incidents, conversations, calendar events, external documents. NOTE: Beta — will be billed in Rovo credits at GA.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "ari": {
+            "type": "string",
+            "description": "Atlassian Resource Identifier (ARI) of the entity to retrieve context for."
+          },
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          }
+        },
+        "required": ["ari", "cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "read_teamwork_graph",
+        "authMethods": ["oauth2", "apitoken"],
+        "scopes": [
+          "read:jira-work",
+          "read:page:confluence",
+          "read:comment:confluence",
+          "read:space:confluence",
+          "read:account",
+          "read:3p-data:mcp",
+          "read:home:mcp",
+          "read:whiteboard:confluence",
+          "read:confluence:mcp",
+          "read:focus:mcp",
+          "read:loom:mcp",
+          "read:talent:mcp"
+        ],
+        "beta": true,
+        "billingNote": "Will be billed at minimum 1 Rovo credit per call at GA. AI inferencing or multi-step queries may be billed at a higher rate."
+      }
+    },
+    {
+      "name": "getTeamworkGraphObject",
+      "description": "Fetches all available data for one or more objects (Atlassian or third-party) using their ARIs or URLs. Intended for use with objects returned by getTeamworkGraphContext. NOTE: Beta — will be billed in Rovo credits at GA.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "arisOrUrls": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "List of ARIs or URLs of objects to fetch."
+          },
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          }
+        },
+        "required": ["arisOrUrls", "cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "read_teamwork_graph",
+        "authMethods": ["oauth2", "apitoken"],
+        "scopes": [
+          "read:jira-work",
+          "read:page:confluence",
+          "read:comment:confluence",
+          "read:space:confluence",
+          "read:account",
+          "read:3p-data:mcp",
+          "read:home:mcp",
+          "read:whiteboard:confluence",
+          "read:confluence:mcp",
+          "read:focus:mcp",
+          "read:loom:mcp",
+          "read:talent:mcp"
+        ],
+        "beta": true,
+        "billingNote": "Will be billed at minimum 1 Rovo credit per call at GA. AI inferencing or multi-step queries may be billed at a higher rate."
+      }
+    },
+
+    {
+      "name": "searchAtlassian",
+      "description": "Search across Jira and Confluence using natural language via Rovo. NOTE: Beta.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Natural language search query."
+          },
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          }
+        },
+        "required": ["query", "cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "search_atlassian",
+        "authMethods": ["oauth2", "apitoken"],
+        "scopes": ["search:rovo:mcp"],
+        "beta": true
+      }
+    },
+    {
+      "name": "fetchAtlassian",
+      "description": "Fetch Jira or Confluence content by Atlassian Resource Identifier (ARI). NOTE: Beta.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "ari": {
+            "type": "string",
+            "description": "Atlassian Resource Identifier (ARI) of the content to fetch."
+          },
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          }
+        },
+        "required": ["ari", "cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "search_atlassian",
+        "authMethods": ["oauth2", "apitoken"],
+        "scopes": ["search:rovo:mcp"],
+        "beta": true
+      }
+    },
+
+    {
+      "name": "getCompassComponent",
+      "description": "Get details for a Compass component by ID. NOTE: OAuth 2.1 authentication only.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "componentId": {
+            "type": "string",
+            "description": "The Compass component ID."
+          },
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          }
+        },
+        "required": ["componentId", "cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "read_compass",
+        "authMethods": ["oauth2"],
+        "scopes": ["read:component:compass"]
+      }
+    },
+    {
+      "name": "getCompassComponents",
+      "description": "Search or list Compass components. NOTE: OAuth 2.1 authentication only.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          },
+          "query": {
+            "type": "string",
+            "description": "Optional search query to filter components."
+          }
+        },
+        "required": ["cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "read_compass",
+        "authMethods": ["oauth2"],
+        "scopes": ["read:component:compass"]
+      }
+    },
+    {
+      "name": "getCompassComponentActivityEvents",
+      "description": "List recent activity events for a Compass component. NOTE: OAuth 2.1 authentication only.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "componentId": {
+            "type": "string",
+            "description": "The Compass component ID."
+          },
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          }
+        },
+        "required": ["componentId", "cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "read_compass",
+        "authMethods": ["oauth2"],
+        "scopes": ["read:component:compass"]
+      }
+    },
+    {
+      "name": "getCompassComponentLabels",
+      "description": "Get the labels applied to a Compass component. NOTE: OAuth 2.1 authentication only.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "componentId": {
+            "type": "string",
+            "description": "The Compass component ID."
+          },
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          }
+        },
+        "required": ["componentId", "cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "read_compass",
+        "authMethods": ["oauth2"],
+        "scopes": ["read:component:compass"]
+      }
+    },
+    {
+      "name": "getCompassComponentTypes",
+      "description": "List available Compass component types. NOTE: OAuth 2.1 authentication only.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          }
+        },
+        "required": ["cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "read_compass",
+        "authMethods": ["oauth2"],
+        "scopes": ["read:component:compass"]
+      }
+    },
+    {
+      "name": "getCompassCustomFieldDefinitions",
+      "description": "List custom field definitions in Compass. NOTE: OAuth 2.1 authentication only.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          }
+        },
+        "required": ["cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "read_compass",
+        "authMethods": ["oauth2"],
+        "scopes": ["read:component:compass"]
+      }
+    },
+    {
+      "name": "getCompassComponentsOwnedByMyTeams",
+      "description": "List Compass components owned by your teams. NOTE: OAuth 2.1 authentication only.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          }
+        },
+        "required": ["cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "read_compass",
+        "authMethods": ["oauth2"],
+        "scopes": ["read:component:compass"]
+      }
+    },
+    {
+      "name": "createCompassComponent",
+      "description": "Create a Compass component. NOTE: OAuth 2.1 authentication only.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The component name."
+          },
+          "typeId": {
+            "type": "string",
+            "description": "The component type ID."
+          },
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          },
+          "description": {
+            "type": "string",
+            "description": "Optional component description."
+          }
+        },
+        "required": ["name", "typeId", "cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "write_compass",
+        "authMethods": ["oauth2"],
+        "scopes": ["write:component:compass"]
+      }
+    },
+    {
+      "name": "createCompassComponentRelationship",
+      "description": "Create a relationship between two Compass components. NOTE: OAuth 2.1 authentication only.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sourceComponentId": {
+            "type": "string",
+            "description": "The source component ID."
+          },
+          "targetComponentId": {
+            "type": "string",
+            "description": "The target component ID."
+          },
+          "relationshipType": {
+            "type": "string",
+            "description": "The type of relationship between the components."
+          },
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          }
+        },
+        "required": ["sourceComponentId", "targetComponentId", "relationshipType", "cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "write_compass",
+        "authMethods": ["oauth2"],
+        "scopes": ["write:component:compass"]
+      }
+    },
+    {
+      "name": "createCompassCustomFieldDefinition",
+      "description": "Create a Compass custom field definition. NOTE: OAuth 2.1 authentication only.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The custom field name."
+          },
+          "type": {
+            "type": "string",
+            "description": "The custom field type."
+          },
+          "cloudId": {
+            "type": "string",
+            "description": "The Atlassian cloud site ID."
+          }
+        },
+        "required": ["name", "type", "cloudId"]
+      },
+      "annotations": {
+        "permissionGroup": "write_compass",
+        "authMethods": ["oauth2"],
+        "scopes": ["write:component:compass"]
+      }
+    }
+  ]
+}

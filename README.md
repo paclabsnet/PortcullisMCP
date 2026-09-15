@@ -682,8 +682,6 @@ Yes. Portcullis has zero external dependencies by default. You can use a local O
 
 Every escalation token has a mandatory TTL (Time-To-Live). Additionally, users can visit the Portcullis-Gate management page (by default: http://localhost:7777) to see a list of all active escalation tokens and revoke them immediately. Once revoked, the token is deleted from the Gate's local store and any subsequent tool calls will be denied.
 
-(Note: this only applies to single-tenant mode. Multi-tenant mode does not allow escalation)
-
 
 **How do I know the human actually reviewed the arguments in the Guard UI?**
 

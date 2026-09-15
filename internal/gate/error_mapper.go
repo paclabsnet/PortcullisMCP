@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
@@ -43,12 +44,8 @@ func (g *Gate) buildEscalationMessage(e *shared.EscalationPendingError, traceID 
 	guardEndpoint := g.cfg.Peers.Guard.Endpoints.ApprovalUI
 
 	var approvalURL string
-	if guardEndpoint != "" {
-		if g.isProactive() && e.EscalationJTI != "" {
-			approvalURL = guardEndpoint + "/approve?jti=" + url.QueryEscape(e.EscalationJTI)
-		} else if e.PendingJWT != "" {
-			approvalURL = guardEndpoint + "/approve?token=" + url.QueryEscape(e.PendingJWT)
-		}
+	if guardEndpoint != "" && e.EscalationJTI != "" {
+		approvalURL = guardEndpoint + "/approve?jti=" + url.QueryEscape(e.EscalationJTI)
 	}
 	if approvalURL == "" && e.Reference != "" {
 		approvalURL = e.Reference
@@ -119,9 +116,31 @@ func (g *Gate) policyErrToResult(ctx context.Context, err error, toolName, trace
 	var escalationErr *shared.EscalationPendingError
 	var denyErr *shared.DenyError
 	var identityErr *shared.IdentityVerificationError
+	var guardUnavailableErr *GuardUnavailableError
 
-	if result, handled := g.provider.MapPolicyError(ctx, err, toolName, traceID, &g.cfg); handled {
-		return result, nil
+	// When escalation is disabled, intercept EscalationPendingError: emit a SIEM
+	// log and return the configured marker instead of the Guard approval URL.
+	if g.cfg.Escalation == "disabled" && errors.As(err, &escalationErr) {
+		if g.logger != nil {
+			sid, _ := SessionIDFromContext(ctx)
+			g.logger.Log(DecisionLogEntry{
+				Timestamp: time.Now().UTC(),
+				SessionID: sid,
+				TraceID:   traceID,
+				ToolName:  toolName,
+				Decision:  "deny",
+				Reason:    "escalation disabled: escalation intercepted",
+				Source:    "gate-policy",
+			})
+		}
+		marker := g.cfg.Responsibility.Escalation.NoEscalationMarker
+		if marker == "" {
+			marker = "Access denied."
+		}
+		return &mcp.CallToolResult{
+			IsError: true,
+			Content: []mcp.Content{&mcp.TextContent{Text: marker}},
+		}, nil
 	}
 
 	switch {
@@ -146,6 +165,18 @@ func (g *Gate) policyErrToResult(ctx context.Context, err error, toolName, trace
 		if effectiveTraceID == "" {
 			effectiveTraceID = traceID
 		}
+		if g.logger != nil {
+			sid, _ := SessionIDFromContext(ctx)
+			g.logger.Log(DecisionLogEntry{
+				Timestamp: time.Now().UTC(),
+				SessionID: sid,
+				TraceID:   effectiveTraceID,
+				ToolName:  toolName,
+				Decision:  "deny",
+				Reason:    denyErr.Reason,
+				Source:    "gate-policy",
+			})
+		}
 		return &mcp.CallToolResult{
 			IsError: true,
 			Content: []mcp.Content{&mcp.TextContent{Text: g.buildDenyMessage(denyErr.Reason, effectiveTraceID)}},
@@ -166,6 +197,12 @@ func (g *Gate) policyErrToResult(ctx context.Context, err error, toolName, trace
 		return &mcp.CallToolResult{
 			IsError: true,
 			Content: []mcp.Content{&mcp.TextContent{Text: g.buildDenyMessage("", traceID)}},
+		}, nil
+	case errors.As(err, &guardUnavailableErr):
+		slog.Error("guard unavailable during escalation", "jti", guardUnavailableErr.JTI, "error", guardUnavailableErr.Err, "tool", toolName)
+		return &mcp.CallToolResult{
+			IsError: true,
+			Content: []mcp.Content{&mcp.TextContent{Text: "Authorization system unavailable. Please try again later or contact your administrator."}},
 		}, nil
 	}
 	slog.Error("keep call failed", "error", err, "tool", toolName, "request_id", traceID)

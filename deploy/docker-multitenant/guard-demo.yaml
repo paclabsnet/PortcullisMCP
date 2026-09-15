@@ -1,0 +1,52 @@
+# Portcullis Guard — multi-tenant demo configuration
+#
+# Guard issues escalation tokens after a human approves a pending request.
+# In multi-tenant mode each tenant is identified by their bearer-token session;
+# Guard itself requires no per-user authentication (the approval link is
+# short-lived and signed by Keep).
+#
+# Approval UI: http://localhost:8444  (human opens this in their browser)
+# Token API:   http://guard:8445      (Gate calls this on the internal network)
+
+mode: dev
+
+server:
+  endpoints:
+    approval_ui:
+      listen: "0.0.0.0:8444"
+
+    token_api:
+      listen: "0.0.0.0:8445"
+      auth:
+        type: "bearer"
+        credentials:
+          bearer_token: "dev-guard-token"  # must match peers.guard.auth.credentials.bearer_token in gate-demo.yaml
+
+responsibility:
+  issuance:
+    # Must match responsibility.issuance.signing_key in keep-demo.yaml so Guard
+    # can verify the Keep-signed pending JWT before issuing an escalation token.
+    approval_request_verification_key: "dev-keep-signing-secret"
+    signing_key: "a-string-secret-at-least-256-bits-long"
+    token_ttl: 86400
+
+  interface:
+    templates: "/templates"
+    # gate_management_port is not set in multi-tenant mode — Gate's management UI
+    # is not exposed in the Docker stack.
+
+operations:
+  storage:
+    backend: "redis"
+    config:
+      addr: "redis:6379"
+      password: "portcullis-dev-secret"
+      key_prefix: "portcullis:guard:"
+
+  telemetry:
+    exporter: "noop"
+    service_name: "portcullis-guard"
+
+  logging:
+    level: "debug"
+    format: "text"

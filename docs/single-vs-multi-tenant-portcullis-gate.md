@@ -13,11 +13,10 @@ Portcullis-Gate is the "Edge" of the Portcullis system. It is the primary interf
 | **Transport** | `stdio` (launched by local Agent) | `HTTP (SSE/Streamable)` (long-running) |
 | **Identity Source** | Local OS / Interactive OIDC Login | Header-based (`X-Portcullis-Token`) |
 | **State Storage** | Local Memory / JSON File | Distributed Redis |
-| **Escalation** | Human-in-the-loop (Guard UI) | Policy-only (Deny/Allow) *[1]* |
+| **Escalation** | Human-in-the-loop (Guard UI) | Human-in-the-loop (Guard UI) |
 | **Local Filesystem** | Enabled (FastPath support) | Disabled (Isolation requirement) |
 | **Scaling** | Vertical (one gate per agent) | Horizontal (stateless cluster) |
 
-*[1] Human-in-the-loop escalation for multi-tenant mode is on the roadmap and requires integration with centralized enterprise notification systems (e.g., Slack or Microsoft Teams), or a specialized web interface*
 
 ---
 

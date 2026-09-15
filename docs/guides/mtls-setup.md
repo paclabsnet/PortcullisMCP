@@ -221,12 +221,12 @@ peers:
       credentials:
         bearer_token: "envvar://GUARD_BEARER_TOKEN"
 
+escalation: session
+
 responsibility:
   workspace:
     directory: "~/sandbox"
   escalation:
-    strategy: "proactive"
-    poll_interval: 60
     token_store: "~/.portcullis/tokens.json"
 
 operations:

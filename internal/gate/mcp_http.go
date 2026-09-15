@@ -113,6 +113,8 @@ func (h *MCPHTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// logic (handleToolCall, forwarder) can forward it to the PDP without
 		// re-reading the request headers.
 		ctx = context.WithValue(ctx, identityKey, shared.UserIdentity{RawToken: rawToken})
+		// Inject the credential fingerprint for escalation storage partitioning.
+		ctx = withCredentialFingerprint(ctx, computeFingerprint(rawToken))
 	}
 
 	if hdrs := extractClientHeaders(r, h.forwardHeaders); len(hdrs) > 0 {

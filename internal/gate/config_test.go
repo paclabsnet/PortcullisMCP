@@ -24,9 +24,11 @@ import (
 
 // validBaseConfig returns a minimal valid Config so individual tests can vary
 // exactly one field at a time without triggering unrelated errors.
+// Escalation is set to "disabled" so no Guard peer is required.
 func validBaseConfig() Config {
 	return Config{
-		Mode: "dev",
+		Mode:       "dev",
+		Escalation: "disabled",
 		Peers: PeersConfig{
 			Keep: cfgloader.PeerAuth{Endpoint: "http://keep.example.com"},
 		},
@@ -85,40 +87,33 @@ func TestConfig_Validate_OIDCLoginRequired(t *testing.T) {
 	}
 }
 
-func TestConfig_Validate_ApprovalManagementStrategy(t *testing.T) {
+func TestConfig_Validate_EscalationField(t *testing.T) {
 	tests := []struct {
-		strategy string
-		wantErr  bool
+		escalation string
+		guardUI    string
+		wantErr    bool
 	}{
-		{"user-driven", false},
-		{"proactive", false},
-		{"Proactive", true},
-		{"USER-DRIVEN", true},
-		{"proactve", true},
-		{"unknown", true},
+		{"", "http://guard.example.com", false},            // empty defaults to "session", guard required
+		{"session", "http://guard.example.com", false},     // explicit session with guard
+		{"fingerprint", "http://guard.example.com", false}, // fingerprint with guard
+		{"disabled", "", false},                            // disabled, no guard needed
+		{"session", "", true},                              // session without guard -> error
+		{"fingerprint", "", true},                          // fingerprint without guard -> error
+		{"proactive", "", true},                            // invalid value -> error
+		{"user-driven", "", true},                          // invalid value -> error
+		{"DISABLED", "", true},                             // case-sensitive -> error
 	}
 
 	for _, tc := range tests {
-		t.Run(tc.strategy, func(t *testing.T) {
+		t.Run(tc.escalation+"/guard="+tc.guardUI, func(t *testing.T) {
 			cfg := validBaseConfig()
-			cfg.Responsibility.Escalation.Strategy = tc.strategy
-			if tc.strategy == "proactive" {
-				cfg.Peers.Guard.Endpoints.ApprovalUI = "http://guard.example.com"
-			}
+			cfg.Escalation = tc.escalation
+			cfg.Peers.Guard.Endpoints.ApprovalUI = tc.guardUI
 			_, err := cfg.Validate(nil)
 			if (err != nil) != tc.wantErr {
 				t.Errorf("Validate() error = %v, wantErr %v", err, tc.wantErr)
 			}
 		})
-	}
-}
-
-func TestConfig_Validate_ProactiveRequiresGuardEndpoint(t *testing.T) {
-	cfg := validBaseConfig()
-	cfg.Responsibility.Escalation.Strategy = "proactive"
-	cfg.Peers.Guard.Endpoints.ApprovalUI = ""
-	if _, err := cfg.Validate(nil); err == nil {
-		t.Error("expected error when proactive strategy set but peers.guard.endpoints.approval_ui is empty")
 	}
 }
 
@@ -200,10 +195,13 @@ func TestConfig_Validate_ProductionMode(t *testing.T) {
 }
 
 // validMultiTenantConfig returns a minimal valid multi-tenant Config.
+// Escalation is set to "disabled" so no Redis or Guard peer is required.
+// Use validMultiTenantEscalationConfig for escalation-enabled scenarios.
 func validMultiTenantConfig() Config {
 	return Config{
-		Mode:    "dev",
-		Tenancy: "multi",
+		Mode:       "dev",
+		Tenancy:    "multi",
+		Escalation: "disabled",
 		Server: cfgloader.ServerConfig{
 			SessionTTL: 3600,
 			Endpoints: map[string]cfgloader.EndpointConfig{
@@ -212,6 +210,37 @@ func validMultiTenantConfig() Config {
 		},
 		Peers: PeersConfig{
 			Keep: cfgloader.PeerAuth{Endpoint: "http://keep.example.com"},
+		},
+		Identity: IdentityConfig{Strategy: "os"},
+	}
+}
+
+// validMultiTenantEscalationConfig returns a multi-tenant Config with active escalation.
+// Requires Redis and Guard to be configured.
+func validMultiTenantEscalationConfig() Config {
+	return Config{
+		Mode:       "dev",
+		Tenancy:    "multi",
+		Escalation: "session",
+		Server: cfgloader.ServerConfig{
+			SessionTTL: 3600,
+			Endpoints: map[string]cfgloader.EndpointConfig{
+				MCPEndpoint: {Listen: "0.0.0.0:8443"},
+			},
+		},
+		Peers: PeersConfig{
+			Keep: cfgloader.PeerAuth{Endpoint: "http://keep.example.com"},
+			Guard: GateSpecificGuardConfig{
+				GuardPeerConfig: cfgloader.GuardPeerConfig{
+					Endpoints: cfgloader.GuardEndpoints{ApprovalUI: "http://guard.example.com"},
+				},
+			},
+		},
+		Operations: cfgloader.OperationsConfig{
+			Storage: cfgloader.StorageConfig{
+				Backend: "redis",
+				Config:  map[string]any{"addr": "redis:6379"},
+			},
 		},
 		Identity: IdentityConfig{Strategy: "os"},
 	}
@@ -268,12 +297,21 @@ func TestConfig_TenancyValidation(t *testing.T) {
 		}
 	})
 
-	t.Run("multi: escalation must be disabled", func(t *testing.T) {
+	t.Run("multi: active escalation without redis rejected", func(t *testing.T) {
 		cfg := validMultiTenantConfig()
-		cfg.Responsibility.Escalation.Enabled = true
+		cfg.Escalation = "session"
+		cfg.Peers.Guard.Endpoints.ApprovalUI = "http://guard.example.com"
+		// No redis configured
 		_, err := cfg.Validate(nil)
-		if err == nil || !strings.Contains(err.Error(), "escalation.enabled") {
-			t.Errorf("expected escalation disabled error, got: %v", err)
+		if err == nil || !strings.Contains(err.Error(), "redis") {
+			t.Errorf("expected redis required error, got: %v", err)
+		}
+	})
+
+	t.Run("multi: active escalation with redis and guard valid", func(t *testing.T) {
+		cfg := validMultiTenantEscalationConfig()
+		if _, err := cfg.Validate(nil); err != nil {
+			t.Errorf("active escalation with redis+guard should be valid; got: %v", err)
 		}
 	})
 
@@ -286,8 +324,8 @@ func TestConfig_TenancyValidation(t *testing.T) {
 		}
 	})
 
-	t.Run("multi: guard must not be configured (approval_ui)", func(t *testing.T) {
-		cfg := validMultiTenantConfig()
+	t.Run("multi: guard must not be configured when escalation is disabled (approval_ui)", func(t *testing.T) {
+		cfg := validMultiTenantConfig() // Escalation: "disabled"
 		cfg.Peers.Guard.Endpoints.ApprovalUI = "http://guard.example.com"
 		_, err := cfg.Validate(nil)
 		if err == nil || !strings.Contains(err.Error(), "peers.guard") {
@@ -295,8 +333,8 @@ func TestConfig_TenancyValidation(t *testing.T) {
 		}
 	})
 
-	t.Run("multi: guard must not be configured (endpoint)", func(t *testing.T) {
-		cfg := validMultiTenantConfig()
+	t.Run("multi: guard must not be configured when escalation is disabled (endpoint)", func(t *testing.T) {
+		cfg := validMultiTenantConfig() // Escalation: "disabled"
 		cfg.Peers.Guard.Endpoint = "http://guard.example.com"
 		_, err := cfg.Validate(nil)
 		if err == nil || !strings.Contains(err.Error(), "peers.guard") {
@@ -345,10 +383,10 @@ func TestConfig_TenancyValidation(t *testing.T) {
 		}
 	})
 
-	t.Run("single: escalation enabled without guard rejected", func(t *testing.T) {
+	t.Run("single: escalation session without guard rejected", func(t *testing.T) {
 		cfg := validBaseConfig()
 		cfg.Tenancy = "single"
-		cfg.Responsibility.Escalation.Enabled = true
+		cfg.Escalation = "session"
 		// No guard configured
 		_, err := cfg.Validate(nil)
 		if err == nil || !strings.Contains(err.Error(), "peers.guard") {
@@ -356,13 +394,57 @@ func TestConfig_TenancyValidation(t *testing.T) {
 		}
 	})
 
-	t.Run("single: escalation enabled with guard valid", func(t *testing.T) {
+	t.Run("single: escalation session with approval_ui only is valid (token_api falls back)", func(t *testing.T) {
 		cfg := validBaseConfig()
 		cfg.Tenancy = "single"
-		cfg.Responsibility.Escalation.Enabled = true
+		cfg.Escalation = "session"
 		cfg.Peers.Guard.Endpoints.ApprovalUI = "http://guard.example.com"
+		// token_api not set — resolvedAPIEndpoint falls back to approval_ui
 		if _, err := cfg.Validate(nil); err != nil {
-			t.Errorf("single with escalation+guard should be valid; got: %v", err)
+			t.Errorf("approval_ui only should be valid; got: %v", err)
+		}
+	})
+
+	t.Run("single: escalation session with both endpoints is valid", func(t *testing.T) {
+		cfg := validBaseConfig()
+		cfg.Tenancy = "single"
+		cfg.Escalation = "session"
+		cfg.Peers.Guard.Endpoints.ApprovalUI = "http://guard.example.com"
+		cfg.Peers.Guard.Endpoints.TokenAPI = "https://guard-api.example.com"
+		if _, err := cfg.Validate(nil); err != nil {
+			t.Errorf("both endpoints configured should be valid; got: %v", err)
+		}
+	})
+
+	t.Run("single: escalation session with token_api but no approval_ui rejected", func(t *testing.T) {
+		// token_api alone is not enough: the agent cannot be shown an approval URL.
+		cfg := validBaseConfig()
+		cfg.Tenancy = "single"
+		cfg.Escalation = "session"
+		cfg.Peers.Guard.Endpoints.TokenAPI = "https://guard-api.example.com"
+		_, err := cfg.Validate(nil)
+		if err == nil || !strings.Contains(err.Error(), "approval_ui") {
+			t.Errorf("expected approval_ui error when only token_api is set; got: %v", err)
+		}
+	})
+
+	t.Run("single: escalation fingerprint with token_api but no approval_ui rejected", func(t *testing.T) {
+		cfg := validBaseConfig()
+		cfg.Tenancy = "single"
+		cfg.Escalation = "fingerprint"
+		cfg.Peers.Guard.Endpoints.TokenAPI = "https://guard-api.example.com"
+		_, err := cfg.Validate(nil)
+		if err == nil || !strings.Contains(err.Error(), "approval_ui") {
+			t.Errorf("expected approval_ui error for fingerprint escalation; got: %v", err)
+		}
+	})
+
+	t.Run("single: escalation disabled requires no guard", func(t *testing.T) {
+		cfg := validBaseConfig()
+		cfg.Tenancy = "single"
+		cfg.Escalation = "disabled"
+		if _, err := cfg.Validate(nil); err != nil {
+			t.Errorf("single with escalation=disabled should be valid; got: %v", err)
 		}
 	})
 }
@@ -588,12 +670,13 @@ func TestConfig_ValidateMultiTenant_MCPListenEmpty(t *testing.T) {
 	}
 }
 
-func TestConfig_ValidateMultiTenant_GuardTokenAPIAlsoBlocked(t *testing.T) {
-	cfg := validMultiTenantConfig()
+func TestConfig_ValidateMultiTenant_GuardTokenAPIBlockedWhenDisabled(t *testing.T) {
+	// Guard configuration must not be present when escalation is "disabled".
+	cfg := validMultiTenantConfig() // Escalation: "disabled"
 	cfg.Peers.Guard.Endpoints.TokenAPI = "http://guard.example.com/token"
 	_, err := cfg.Validate(nil)
 	if err == nil || !strings.Contains(err.Error(), "peers.guard") {
-		t.Errorf("expected peers.guard error for token_api, got: %v", err)
+		t.Errorf("expected peers.guard error for token_api when disabled, got: %v", err)
 	}
 }
 

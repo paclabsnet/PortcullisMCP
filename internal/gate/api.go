@@ -162,8 +162,8 @@ func (ms *ManagementServer) handleUI(w http.ResponseWriter, _ *http.Request) {
 	}
 }
 
-func (ms *ManagementServer) handleList(w http.ResponseWriter, _ *http.Request) {
-	tokens := ms.store.All()
+func (ms *ManagementServer) handleList(w http.ResponseWriter, r *http.Request) {
+	tokens := ms.store.All(r.Context())
 	type portcullisClaims struct {
 		ArgRestrictions []map[string]any `json:"arg_restrictions,omitempty"`
 		Tools           []string         `json:"tools,omitempty"`

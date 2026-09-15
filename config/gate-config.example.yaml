@@ -3,6 +3,21 @@
 
 mode: dev
 
+# escalation controls whether human-in-the-loop approval is active and how
+# approvals are scoped.
+#
+#   session     - approvals are bound to the MCP session ID (default).
+#                 In single-tenant mode this is always "0", so approvals survive
+#                 Gate restarts. In multi-tenant mode each Agent session is isolated.
+#   fingerprint - approvals are bound to the credential hash. Logging in again
+#                 (new token) clears all prior approvals.
+#   disabled    - escalation is off; all EscalationPending responses are denied
+#                 and logged to the SIEM.
+#
+# Requires peers.guard.endpoints.approval_ui (and optionally token_api) when
+# not "disabled".
+escalation: session
+
 server:
   endpoints:
     management_ui:
@@ -71,8 +86,6 @@ responsibility:
       #   update: allow
       #   delete: verify
   escalation:
-    strategy: "proactive"
-    poll_interval: 60
     token_store: "~/.portcullis/tokens.json"
   decision_logs:
     flush_interval: 30

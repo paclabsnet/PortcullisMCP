@@ -4,7 +4,12 @@
 
 **Goal:** Shift `portcullis-gate` from a local developer utility to a robust, identity-aware server capable of supporting multiple simultaneous users (Customers) via a central Agent.
 
-**Architecture:** Introduce `tenancy: multi` mode. Replace the legacy `mcp.StdioTransport{}` with a stateless MCP-over-HTTP transport mapping sessions to Redis. In multi-tenant mode, local tools and "human-in-the-loop" escalations are forcibly disabled, and escalation decisions emit SIEM audit logs instead.
+**Architecture:** Introduce `tenancy: multi` mode. Replace the legacy `mcp.StdioTransport{}` with a stateless MCP-over-HTTP transport mapping sessions to Redis. 
+
+**NOTE**
+the following statement is no longer true, as of mid-may 2026, leaving it here for historical reasons
+
+*In multi-tenant mode, local tools and "human-in-the-loop" escalations are forcibly disabled, and escalation decisions emit SIEM audit logs instead.*
 
 **Tech Stack:** Go, MCP Go SDK (`github.com/modelcontextprotocol/go-sdk/mcp`), Redis (`github.com/redis/go-redis/v9`), Miniredis (`github.com/alicebob/miniredis/v2`)
 
@@ -117,7 +122,14 @@ git commit -m "refactor: abstract interfaces and inject into Gate struct"
 - [ ] **Step 1: Refactor core methods**
 Update `handleToolCall`, `FastPath`, `maybeStorePendingEscalation`, `collectEscalationTokens`, and `policyErrToResult` to accept and use `context.Context` for session and identity data.
 **Global State Rule (Single-Tenant):** 
-In `tenancy: single` mode, all interactions with `PendingEscalationStore` and `EscalationTokenStore` MUST NOT be session-prefixed. This ensures that pending requests and final approvals are global to the user across all desktop agents for the best UX. (In multi-tenant mode, these stores are bypassed entirely).
+
+**NOTE**
+The following statement is also no longer true:
+
+*In `tenancy: single` mode, all interactions with `PendingEscalationStore` and `EscalationTokenStore` MUST NOT be session-prefixed. This ensures that pending requests and final approvals are global to the user across all desktop agents for the best UX.*
+
+(the stores are now session-prefixed, although for single-tenant gate the session id is 0)
+
 
 - [ ] **Step 2: Update OIDC Login**
 Update the OIDC callback handler in `internal/gate/oidclogin.go` to save the final user token into the `IdentitySource` (implemented by `IdentityCache`) upon successful authentication.

@@ -23,6 +23,11 @@
 
 mode: dev
 
+# "session" binds approvals to the MCP session (single-tenant: always session "0").
+# Approvals survive Gate restarts and re-logins because the session ID is constant.
+# Use "fingerprint" if you want approvals invalidated when the user logs in again.
+escalation: session
+
 server:
   endpoints:
     management_ui:
@@ -71,7 +76,6 @@ responsibility:
           - "~/.portcullis"
           - "/etc"
   escalation:
-    strategy: "proactive"
     token_store: "~/.portcullis/tokens.json"
   agent_interaction:
     instructions:

@@ -177,7 +177,6 @@ func (s *Server) Run(ctx context.Context) error {
 	apiMux := http.NewServeMux()
 	apiMux.HandleFunc("GET /healthz", s.handleHealthz)
 	apiMux.HandleFunc("GET /readyz", s.handleReadyz)
-	apiMux.Handle("GET /token/unclaimed/list", s.machineAuthMiddleware(s.handleTokenUnclaimedList))
 	apiMux.Handle("POST /token/deposit", s.machineAuthMiddleware(s.handleTokenDeposit))
 	apiMux.Handle("POST /token/claim", s.machineAuthMiddleware(s.handleTokenClaim))
 	apiMux.Handle("POST /pending", s.machineAuthMiddleware(s.handlePendingStore))
@@ -443,12 +442,16 @@ func (s *Server) handleApproveAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = s.unclaimedStore.AddUnclaimed(r.Context(), UnclaimedToken{
+	if err := s.unclaimedStore.AddUnclaimed(r.Context(), UnclaimedToken{
 		UserID:    claims.UserID,
 		JTI:       claims.ID,
 		Raw:       escalationToken,
 		ExpiresAt: expiry,
-	})
+	}); err != nil {
+		slog.Error("failed to persist approved escalation token", "jti", claims.ID, "error", err)
+		http.Error(w, "failed to store approved token", http.StatusInternalServerError)
+		return
+	}
 
 	gatePort := s.cfg.Responsibility.Interface.GateManagementPort
 	var gateURL string
@@ -517,27 +520,6 @@ func (s *Server) handlePendingStore(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "registered", "jti": body.JTI})
 }
 
-func (s *Server) handleTokenUnclaimedList(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("user_id")
-	if userID == "" {
-		http.Error(w, "user_id is required", http.StatusBadRequest)
-		return
-	}
-
-	if err := shared.CheckLen(userID, "user_id", s.cfg.Limits.MaxUserIDBytes); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	tokens, err := s.unclaimedStore.ListUnclaimed(r.Context(), userID)
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	writeJSON(w, http.StatusOK, tokens)
-}
-
 func (s *Server) handleTokenDeposit(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.Limits.MaxRequestBodyBytes > 0 {
 		r.Body = http.MaxBytesReader(w, r.Body, int64(s.cfg.Limits.MaxRequestBodyBytes))
@@ -582,12 +564,16 @@ func (s *Server) handleTokenDeposit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = s.unclaimedStore.AddUnclaimed(r.Context(), UnclaimedToken{
+	if err := s.unclaimedStore.AddUnclaimed(r.Context(), UnclaimedToken{
 		UserID:    claims.UserID,
 		JTI:       claims.ID,
 		Raw:       escalationToken,
 		ExpiresAt: expiry,
-	})
+	}); err != nil {
+		slog.Error("failed to persist deposited escalation token", "jti", claims.ID, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to store deposited token"})
+		return
+	}
 
 	writeJSON(w, http.StatusCreated, map[string]string{"status": "deposited", "jti": claims.ID})
 }

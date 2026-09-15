@@ -25,6 +25,10 @@
 
 mode: dev
 
+# "session" binds approvals to the MCP session (single-tenant: always session "0").
+# Use "fingerprint" to tie approvals to the credential, or "disabled" to turn off escalation.
+escalation: session
+
 server:
   endpoints:
     management_ui:
@@ -61,7 +65,6 @@ responsibility:
           - "/etc"
       
   escalation:
-    strategy: "proactive"
     token_store: "~/.portcullis/tokens.json"
 
 # decision_logs:

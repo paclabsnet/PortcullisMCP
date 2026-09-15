@@ -252,20 +252,32 @@ func (r *Router) CallTool(ctx context.Context, serverName, toolName string, args
 		span.SetStatus(codes.Error, err.Error())
 		return nil, err
 	}
+	debugLogMCPCall(serverName, backendToolName, args)
 	result, err := session.CallTool(ctx, &mcp.CallToolParams{
 		Name:      backendToolName,
 		Arguments: args,
 	})
+	if err != nil {
+		slog.Debug("keep: MCP← tool call error", "backend", serverName, "tool", backendToolName, "error", err)
+	} else if result != nil {
+		debugLogMCPResult(serverName, backendToolName, result.IsError, result.Content)
+	}
 	if err != nil && isDeadSessionError(err) {
 		// The cached session is dead (SSE stream dropped, server-side timeout, etc.).
 		// Drop it and retry once with a fresh session.
 		slog.Warn("keep: MCP session appears dead; dropping and reconnecting", "backend", serverName, "error", err)
 		r.dropSession(serverName)
 		if session2, sessErr := r.sessionFor(ctx, serverName); sessErr == nil {
+			debugLogMCPCall(serverName, backendToolName, args)
 			result, err = session2.CallTool(ctx, &mcp.CallToolParams{
 				Name:      backendToolName,
 				Arguments: args,
 			})
+			if err != nil {
+				slog.Debug("keep: MCP← tool call error (retry)", "backend", serverName, "tool", backendToolName, "error", err)
+			} else if result != nil {
+				debugLogMCPResult(serverName, backendToolName, result.IsError, result.Content)
+			}
 		} else {
 			slog.Warn("keep: reconnect after dead session failed", "backend", serverName, "error", sessErr)
 		}
@@ -1265,6 +1277,7 @@ func (t *headerInjectingRoundTripper) RoundTrip(req *http.Request) (*http.Respon
 			}
 		}
 
+		debugLogHeaders("keep: backend→ outgoing headers (post-injection)", outReq.Header, "backend", t.conn.cfg.Name)
 		resp, err = t.inner.RoundTrip(outReq)
 	}
 

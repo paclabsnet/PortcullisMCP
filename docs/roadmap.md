@@ -3,42 +3,6 @@
 Some of these tasks were deferred from Phase 2 because they are complicated and involve access to potentially expensive
 cloud resources
 
-### Task: Static Tool List - modify Keep configuration to allow admins to load the tool list for a remote MCP into a config file, rather than querying the MCP at startup
-
-#### Problem:
-For a lot of third-party MCPs, the tool/list is gated behind OAuth. So Keep can't get the tool/list at startup.
-
-
-#### Proposed Solution
-
-For single-tenant mode, we can load the tool list from some sort of config file at Keep, and pass that list back to Portcullis-Gate
-
-#### Implementation
-
-Update the `mcp_backend` structure to include a new element:
-
-```
-    tool_list:
-      source:  file | remote
-      file: <path> 
-```     
-
-If the tool list acquisition is static, we would expect details about the file that contains the JSON that represents the tool list.  We would expect that this JSON would be the equivalent of fetching the tool list from an MCP and saving that JSON as a file. (although we don't necessarily need fields that don't provide useful information about the actual tool list)
-
-#### Backwards compatibility
-
-If the tool_list section is not included, the default is remote.
-
-
-#### Security
-
-- We'll assume that if the mcp_backend is listed, it is available for use. adding an extra tier of authorization for the tool list seems unnecessary.
-
-
-#### Priority
-- priority: high
-
-
 
 ### Task: Allow Gate to act as a Proxy for third-party MCPs that shouldn't be unified within the Portcullis MCP
 
@@ -157,7 +121,33 @@ Using Figma as an example:
 
 
 ### Task: Support 'escalate' in multi-tenant environments
-Providing a way for a user of an AI-enabled console to escalate privileges for an AI Agent is tricky, and we need time to figure out how to explain the approval process to the user.
+
+#### Problem
+We want multi-tenant Portcullis to optionally offer the `escalate` feature, in a presentation that is consistent with single-tenant `escalate`
+
+#### Proposed Solution
+
+* Store the escalation tokens and pending tokens in Portcullis-Gate per-tenant storage
+* Allow the escalate feature to be enabled/disabled globally
+
+
+#### Proposed Implementation
+* Create a Redis store in Gate for holding *Pending JWTs* and *Escalation Tokens*
+  * on a per-user basis
+  * with proper cleanup
+* Create a file-based Store interface in Go for the legacy filesystem-based storage
+* Add a config rule to the YAML
+* Update the management web page to present each user with their own custom view of the escalation tokens
+* Allow revoke on these Redis-stored tokens
+* Get rid of the cut-and-paste for JWTs (everywhere, not just in multi-tenant)
+* allow customers to create their own custom template for that page
+
+#### Interesting Questions
+* Do we have a top-level for escalation, or a toggle per system?
+* 
+
+
+
 
 priority: medium
 
@@ -175,6 +165,8 @@ help avoid that issue.
 - priority: very low
 
 2026-05-05 : I have no idea what this means. What are unknown keys in this context???
+2026-05-11 : Perhaps this means that bad YAML defaults the localfs tool to escalate for
+             every call, instead of a list of absolute deny options
 
 
 ### Task: Support vault:// secret resolution for map[string]string config fields
@@ -233,21 +225,6 @@ for different service / tool combos
 
 
 
-### Task: Acquire Human Credentials (at Portcullis-Gate)
-- [x] OIDC login - Gate (via the Agent) sends the user to a login page and accepts the oidc-token as a callback
-  after a successful login.
-- [x] Token file — Gate reads `identity.oidc.token_file`; fails hard (no OS fallback)
-  when source is "oidc" and token is missing or invalid; `~` is now expanded
-  correctly on read
-- [x] HMAC JWT from Agent header - if the Agent is set up with user identity at startup time, it can send that identity to Gate (via the http protocol) 
-      as a header. This is primarily useful for the multi-tenant configuration
-- [ ] Keychain storage — optional future  source of identity
-- [ ] Certificate - optional future source of identity
-- [ ] Device authorization grant (RFC 8628) — probably not necessary
-- priority: low
-- comment: different organizations have different ways of providing identity. Would 
-  prefer to wait for feedback before trying to implement specific additional identity sources
-
 
 
 
@@ -257,29 +234,13 @@ not sure if this is necessary. It might be helpful for troubleshooting
 - comment: not sure if the juice is worth the squeeze
 
 
-### Task: Add a login capability to Portcullis-Guard [DONE]
-This would potentially prevent a particularly nasty rogue agent from knowingly creating a request that would require
-escalation, waiting for the response, abusing some sort of direct HTTP mechanism to edit and approve the request, and
-then trying again, without the user being aware that it was happening.
-- priority: medium-low
-- comment: much of this is just a port of the equivalent work we've done for 
-  Portcullis-Gate login
 
 
-### Task: Allow the 'edit' capability for escalation claims to be turned on and off by configuration [DONE]
-This should be straightforward - the edit capability is already on a templated web page, so it should
-be easy enough to remove the edit option via template rules
-- priority: medium
 
 ### Task: Consider some mechanism to explain the escalation claims in human language
 This might be very tricky, given how complex some MCP requests can be.
 - priority: low
 
-### Task: Configuration option to disable the Portcullis-Gate web page, thus eliminating port contention  [DONE]
-- priority: medium-low
-- comment: without the web interface, Portcullis-Gate can't offer oidc-login
-- comment: if we offer the streamable-http version, there won't generally be port 
-  contention 
 
 ### Task: Potential for limited-use of the escalation tokens at Portcullis-Gate
 Configuration option at Portculils-Gate to allow escalation tokens to be used a limited number of times before being

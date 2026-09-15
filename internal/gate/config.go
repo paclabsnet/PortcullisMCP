@@ -49,7 +49,8 @@ func LoadConfig(ctx context.Context, path string) (Config, cfgloader.PostureRepo
 
 // Config holds the full portcullis-gate configuration loaded from gate.yaml.
 type Config struct {
-	Tenancy        string                     `yaml:"tenancy"` // "single" (default) or "multi"
+	Tenancy        string                     `yaml:"tenancy"`    // "single" (default) or "multi"
+	Escalation     string                     `yaml:"escalation"` // "session" (default) | "fingerprint" | "disabled"
 	Mode           string                     `yaml:"mode"`
 	Server         cfgloader.ServerConfig     `yaml:"server"`
 	Identity       IdentityConfig             `yaml:"identity"`
@@ -134,27 +135,42 @@ func (c *Config) Validate(sources cfgloader.SourceMap) (cfgloader.PostureReport,
 		return cfgloader.PostureReport{}, err
 	}
 
+	// Default and validate the top-level Escalation field.
+	if c.Escalation == "" {
+		c.Escalation = "session"
+	}
+	switch c.Escalation {
+	case "session", "fingerprint", "disabled":
+		// valid
+	default:
+		return cfgloader.PostureReport{}, fmt.Errorf("invalid escalation %q: must be \"session\", \"fingerprint\", or \"disabled\"", c.Escalation)
+	}
+	// Fail-fast: active escalation requires both Guard endpoints to be configured.
+	// peers.guard.endpoints.approval_ui is shown to the agent as the click-through
+	// approval link; peers.guard.endpoints.token_api (or approval_ui as fallback)
+	// is used for machine-to-machine RegisterPending/ClaimToken calls.
+	// Missing either endpoint puts the user in a broken state: invited to approve
+	// an escalation that cannot complete.
+	if c.Escalation == "session" || c.Escalation == "fingerprint" {
+		if c.Peers.Guard.Endpoints.ApprovalUI == "" {
+			return cfgloader.PostureReport{}, fmt.Errorf(
+				"peers.guard.endpoints.approval_ui must be set when escalation is %q", c.Escalation)
+		}
+		if c.Peers.Guard.resolvedAPIEndpoint() == "" {
+			return cfgloader.PostureReport{}, fmt.Errorf(
+				"peers.guard.endpoints.token_api (or approval_ui) must be set when escalation is %q", c.Escalation)
+		}
+	}
+
 	switch c.Tenancy {
 	case "", "single":
-		// Single-tenant: escalation + guard rules.
-		if c.Responsibility.Escalation.Enabled && c.Peers.Guard.resolvedAPIEndpoint() == "" {
-			return cfgloader.PostureReport{}, fmt.Errorf("peers.guard must be configured when responsibility.escalation.enabled is true")
-		}
+		// Single-tenant: no additional rules beyond the top-level Escalation check above.
 	case "multi":
 		if err := c.validateMultiTenant(); err != nil {
 			return cfgloader.PostureReport{}, err
 		}
 	default:
 		return cfgloader.PostureReport{}, fmt.Errorf("invalid tenancy %q: must be \"single\" or \"multi\"", c.Tenancy)
-	}
-
-	switch c.Responsibility.Escalation.Strategy {
-	case "", "user-driven", "proactive":
-	default:
-		return cfgloader.PostureReport{}, fmt.Errorf("invalid responsibility.escalation.strategy %q: must be \"user-driven\" or \"proactive\"", c.Responsibility.Escalation.Strategy)
-	}
-	if c.Tenancy != "multi" && c.Responsibility.Escalation.Strategy == "proactive" && c.Peers.Guard.Endpoints.ApprovalUI == "" {
-		return cfgloader.PostureReport{}, fmt.Errorf("peers.guard.endpoints.approval_ui is required when escalation strategy is \"proactive\"")
 	}
 
 	report := cfgloader.BuildPostureReport(c, sources, SecretAllowlist)
@@ -188,17 +204,17 @@ func (c *Config) validateMultiTenant() error {
 	if c.Responsibility.Tools.LocalFS.Enabled {
 		return fmt.Errorf("responsibility.tools.portcullis-localfs.enabled must be false in multi-tenant mode")
 	}
-	// Rule 3: Escalation (human-in-the-loop) must be disabled.
-	if c.Responsibility.Escalation.Enabled {
-		return fmt.Errorf("responsibility.escalation.enabled must be false in multi-tenant mode")
-	}
-	// Rule 4: Management UI must not be configured.
+	// Rule 3: Management UI must not be configured.
 	if _, hasMgmt := c.Server.Endpoints[ManagementUIEndpoint]; hasMgmt {
 		return fmt.Errorf("server.endpoints.management_ui must not be configured in multi-tenant mode")
 	}
-	// Rule 5: Guard must not be configured.
-	if c.Peers.Guard.Endpoint != "" || c.Peers.Guard.Endpoints.ApprovalUI != "" || c.Peers.Guard.Endpoints.TokenAPI != "" {
-		return fmt.Errorf("peers.guard must not be configured in multi-tenant mode")
+	// Rule 4: Guard must not be configured when escalation is disabled.
+	if c.Escalation == "disabled" && (c.Peers.Guard.Endpoint != "" || c.Peers.Guard.Endpoints.ApprovalUI != "" || c.Peers.Guard.Endpoints.TokenAPI != "") {
+		return fmt.Errorf("peers.guard must not be configured in multi-tenant mode when escalation is \"disabled\"")
+	}
+	// Rule 5: Active escalation requires Redis storage in multi-tenant mode.
+	if c.Escalation != "disabled" && c.Operations.Storage.Backend != "redis" {
+		return fmt.Errorf("operations.storage.backend must be \"redis\" in multi-tenant mode when escalation is not \"disabled\"")
 	}
 	// Rule 6: OIDC-login is not compatible with multi-tenant mode.
 	if c.Identity.Strategy == "oidc-login" {
@@ -433,11 +449,8 @@ func (s LocalFSStrategyConfig) Validate() error {
 }
 
 type EscalationConfig struct {
-	Enabled            bool   `yaml:"enabled"`
-	Strategy           string `yaml:"strategy"`             // "proactive" | "user-driven" (default: "user-driven")
-	PollInterval       int    `yaml:"poll_interval"`        // seconds between polls (default: 60)
 	TokenStore         string `yaml:"token_store"`
-	NoEscalationMarker string `yaml:"no_escalation_marker"` // marker returned instead of escalation in multi-tenant mode
+	NoEscalationMarker string `yaml:"no_escalation_marker"` // marker returned when escalation is disabled
 }
 
 type ForbiddenConfig struct {

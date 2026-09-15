@@ -16,13 +16,30 @@ package gate
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
+	"github.com/paclabsnet/PortcullisMCP/internal/telemetry"
 )
+
+// GuardUnavailableError is returned by StorePending when the Guard service
+// cannot be reached. policyErrToResult converts it to an agent-friendly
+// "Authorization system unavailable" message.
+type GuardUnavailableError struct {
+	JTI string
+	Err error
+}
+
+func (e *GuardUnavailableError) Error() string {
+	return fmt.Sprintf("escalation required but Guard is currently unreachable (jti=%s): %v", e.JTI, e.Err)
+}
+
+func (e *GuardUnavailableError) Unwrap() error { return e.Err }
 
 // pendingEscalation tracks an in-flight escalation request awaiting Guard approval.
 type pendingEscalation struct {
@@ -40,13 +57,9 @@ type EscalationManager interface {
 	CollectTokens(ctx context.Context, serverName, toolName string) []shared.EscalationToken
 
 	// StorePending records a pending escalation from an EscalationPendingError.
-	// In proactive mode it also pushes the request to Guard. Returns a
-	// user-facing error only if the proactive push fails.
+	// It also pushes the request to Guard. Returns a user-facing error only if
+	// the proactive push fails.
 	StorePending(ctx context.Context, serverName, toolName string, err error) error
-
-	// StartPolling starts the background Guard poll worker. It is a no-op if
-	// Guard is not configured.
-	StartPolling(ctx context.Context)
 }
 
 // DefaultEscalationManager implements EscalationManager using a live GuardSource.
@@ -54,58 +67,137 @@ type DefaultEscalationManager struct {
 	guard       GuardSource
 	pending     PendingEscalationStore
 	escalations EscalationTokenStore
-	cfg         EscalationConfig
 	provider    TenancyProvider
 	identity    IdentitySource
+	scope       string // "session" | "fingerprint" | ""
 }
 
 // NewEscalationManager creates a DefaultEscalationManager. guard may be nil if
 // Guard is not configured; CollectTokens and StorePending still work but skip
-// all Guard interactions.
+// all Guard interactions. scope is the top-level Config.Escalation value and
+// controls per-request key partitioning ("session", "fingerprint", or "").
 func NewEscalationManager(
 	guard GuardSource,
 	pending PendingEscalationStore,
 	escalations EscalationTokenStore,
-	cfg EscalationConfig,
+	_ EscalationConfig,
 	provider TenancyProvider,
 	identity IdentitySource,
+	scope string,
 ) *DefaultEscalationManager {
 	return &DefaultEscalationManager{
 		guard:       guard,
 		pending:     pending,
 		escalations: escalations,
-		cfg:         cfg,
 		provider:    provider,
 		identity:    identity,
+		scope:       scope,
 	}
+}
+
+// pendingKey returns the storage key for a pending escalation request,
+// partitioned by the caller's session or credential fingerprint when a scope
+// is configured.
+func (m *DefaultEscalationManager) pendingKey(ctx context.Context, serverName, toolName string) string {
+	bare := serverName + "/" + toolName
+	prefix := resolveStoragePrefix(ctx, m.scope, m.identity)
+	if prefix == "" {
+		return bare
+	}
+	return prefix + ":" + bare
 }
 
 // CollectTokens returns escalation tokens, opportunistically claiming a
 // Guard-approved token for the given server/tool before returning.
+//
+// When a pending escalation is found and a Guard claim is attempted, the
+// outcome is recorded as a structured "lazy_claim" log entry containing:
+//
+//	phase, jti, trace_id, scope_type, scope_key_hash, guard_status_code,
+//	outcome ("success"|"not_found"|"error"), error_class, elapsed_ms.
+//
+// scope_key_hash is the first 8 hex characters of the SHA-256 digest of the
+// raw storage prefix string (e.g. "sess:abc123" or "fp:xyz"), providing a
+// stable, non-reversible token for log correlation without leaking credentials.
+// The algorithm is SHA-256 / hex / first 8 chars and MUST NOT change between
+// versions to ensure log queries remain valid across upgrades.
 func (m *DefaultEscalationManager) CollectTokens(ctx context.Context, serverName, toolName string) []shared.EscalationToken {
-	tokens := m.escalations.All()
+	tokens := m.escalations.All(ctx)
 
 	if m.guard == nil {
 		return tokens
 	}
 
-	key := serverName + "/" + toolName
-	pending, hasPending := m.pending.Get(key)
+	key := m.pendingKey(ctx, serverName, toolName)
+	pending, hasPending := m.pending.Get(ctx, key)
 
 	if !hasPending {
 		return tokens
 	}
 	if pending.ExpiresAt.Before(time.Now()) {
-		m.pending.Delete(key)
+		m.pending.Delete(ctx, key)
 		return tokens
 	}
+
+	// Compute scope_key_hash: first 8 hex chars of SHA-256(rawPrefix).
+	// Algorithm: SHA-256 / hex encoding / truncated to 8 characters.
+	rawPrefix := resolveStoragePrefix(ctx, m.scope, m.identity)
+	h := sha256.Sum256([]byte(rawPrefix))
+	scopeKeyHash := hex.EncodeToString(h[:])[:8]
+
+	traceID := telemetry.TraceIDFromContext(ctx)
 
 	claimCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	raw, err := m.guard.ClaimToken(claimCtx, pending.JTI)
-	if err != nil {
-		slog.Warn("guard claim token failed", "jti", pending.JTI, "error", err)
+	start := time.Now()
+	raw, claimErr := m.guard.ClaimToken(claimCtx, pending.JTI)
+	elapsedMs := time.Since(start).Milliseconds()
+
+	// Determine guard_status_code, outcome, and error_class for telemetry.
+	guardStatusCode := 0
+	outcome := "success"
+	errorClass := ""
+
+	if claimErr != nil {
+		outcome = "error"
+		var apiErr *GuardAPIError
+		if errors.As(claimErr, &apiErr) {
+			guardStatusCode = apiErr.StatusCode
+			switch apiErr.StatusCode {
+			case 401, 403:
+				errorClass = "unauthorized"
+			case 503, 502, 504:
+				errorClass = "service_unavailable"
+			default:
+				errorClass = "http_error"
+			}
+		} else if errors.Is(claimErr, context.DeadlineExceeded) {
+			errorClass = "network_timeout"
+		} else {
+			errorClass = "unknown"
+		}
+	} else if raw == "" {
+		outcome = "not_found"
+		guardStatusCode = 404
+	} else {
+		guardStatusCode = 200
+	}
+
+	slog.Info("lazy_claim",
+		"phase", "lazy_claim",
+		"jti", pending.JTI,
+		"trace_id", traceID,
+		"scope_type", m.scope,
+		"scope_key_hash", scopeKeyHash,
+		"guard_status_code", guardStatusCode,
+		"outcome", outcome,
+		"error_class", errorClass,
+		"elapsed_ms", elapsedMs,
+	)
+
+	if claimErr != nil {
+		slog.Warn("guard claim token failed", "jti", pending.JTI, "error", claimErr)
 		return tokens
 	}
 	if raw == "" {
@@ -122,18 +214,14 @@ func (m *DefaultEscalationManager) CollectTokens(ctx context.Context, serverName
 		"jti", pending.JTI, "token_id", tok.TokenID,
 		"server", serverName, "tool", toolName)
 
-	m.pending.Delete(key)
-	return m.escalations.All()
+	m.pending.Delete(ctx, key)
+	return m.escalations.All(ctx)
 }
 
-// StorePending records a pending escalation. It is a no-op if the provider
-// disallows human-in-the-loop, if err is not an EscalationPendingError, if
-// the JTI is empty, or if Guard is not configured.
+// StorePending records a pending escalation. It is a no-op if err is not an
+// EscalationPendingError, if the JTI is empty, or if Guard is not configured.
+// Callers must only invoke StorePending when escalation is active (Escalation != "disabled").
 func (m *DefaultEscalationManager) StorePending(ctx context.Context, serverName, toolName string, err error) error {
-	if m.provider != nil && !m.provider.Capabilities().AllowHumanInLoop {
-		return nil
-	}
-
 	var escalationErr *shared.EscalationPendingError
 	if !errors.As(err, &escalationErr) {
 		return nil
@@ -145,22 +233,21 @@ func (m *DefaultEscalationManager) StorePending(ctx context.Context, serverName,
 		return nil
 	}
 
-	if m.cfg.Strategy == "proactive" {
-		pushCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		defer cancel()
-		if regErr := m.guard.RegisterPending(pushCtx, escalationErr.EscalationJTI, escalationErr.PendingJWT); regErr != nil {
-			slog.Error("proactive: failed to register pending escalation with Guard",
-				"jti", escalationErr.EscalationJTI, "error", regErr)
-			return fmt.Errorf("escalation required but Guard is currently unreachable")
-		}
-		slog.Info("proactive: registered pending escalation with Guard",
-			"jti", escalationErr.EscalationJTI, "server", serverName, "tool", toolName)
+	// Always register proactively with Guard (standardized flow; Strategy field removed).
+	pushCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if regErr := m.guard.RegisterPending(pushCtx, escalationErr.EscalationJTI, escalationErr.PendingJWT); regErr != nil {
+		slog.Error("failed to register pending escalation with Guard",
+			"jti", escalationErr.EscalationJTI, "error", regErr)
+		return &GuardUnavailableError{JTI: escalationErr.EscalationJTI, Err: regErr}
 	}
+	slog.Info("registered pending escalation with Guard",
+		"jti", escalationErr.EscalationJTI, "server", serverName, "tool", toolName)
 
-	key := serverName + "/" + toolName
+	key := m.pendingKey(ctx, serverName, toolName)
 	expiry := time.Now().Add(24 * time.Hour)
 
-	m.pending.Store(key, pendingEscalation{
+	m.pending.Store(ctx, key, pendingEscalation{
 		ServerName: serverName,
 		ToolName:   toolName,
 		JTI:        escalationErr.EscalationJTI,
@@ -172,85 +259,3 @@ func (m *DefaultEscalationManager) StorePending(ctx context.Context, serverName,
 	return nil
 }
 
-// StartPolling starts the background Guard poll worker. It is a no-op if Guard
-// is not configured.
-func (m *DefaultEscalationManager) StartPolling(ctx context.Context) {
-	if m.guard == nil {
-		return
-	}
-	interval := 60 * time.Second
-	if m.cfg.PollInterval > 0 {
-		interval = time.Duration(m.cfg.PollInterval) * time.Second
-	}
-	slog.Info("guard poll worker starting", "interval", interval)
-	go func() {
-		m.claimAllUnclaimedTokens(ctx)
-		m.pollGuardWorker(ctx)
-	}()
-}
-
-func (m *DefaultEscalationManager) pollGuardWorker(ctx context.Context) {
-	interval := 60 * time.Second
-	if m.cfg.PollInterval > 0 {
-		interval = time.Duration(m.cfg.PollInterval) * time.Second
-	}
-
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			m.claimAllUnclaimedTokens(ctx)
-		}
-	}
-}
-
-func (m *DefaultEscalationManager) claimAllUnclaimedTokens(ctx context.Context) {
-	if m.identity == nil {
-		return
-	}
-	userID := m.identity.Get(ctx).UserID
-	if userID == "" {
-		return
-	}
-
-	listCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	unclaimed, err := m.guard.ListUnclaimedTokens(listCtx, userID)
-	if err != nil {
-		slog.Warn("poll guard unclaimed tokens failed", "error", err)
-		return
-	}
-	slog.Info("polled guard for unclaimed tokens", "user_id", userID, "count", len(unclaimed))
-	if len(unclaimed) == 0 {
-		return
-	}
-
-	for _, entry := range unclaimed {
-		claimCtx, claimCancel := context.WithTimeout(ctx, 5*time.Second)
-		raw, claimErr := m.guard.ClaimToken(claimCtx, entry.JTI)
-		claimCancel()
-
-		if claimErr != nil {
-			slog.Warn("guard poll claim failed", "jti", entry.JTI, "error", claimErr)
-			continue
-		}
-		if raw == "" {
-			continue
-		}
-
-		tok, storeErr := m.escalations.Add(ctx, raw)
-		if storeErr != nil {
-			slog.Warn("store polled token failed", "jti", entry.JTI, "error", storeErr)
-			continue
-		}
-
-		slog.Info("claimed escalation token via poll", "jti", entry.JTI, "token_id", tok.TokenID)
-
-		m.pending.DeleteByJTI(entry.JTI)
-	}
-}
