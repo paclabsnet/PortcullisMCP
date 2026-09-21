@@ -90,6 +90,11 @@ demo-start:
 	@echo "VERSION=$(VERSION)" > deploy/docker-singletenant/.env
 	@docker compose -f deploy/docker-singletenant/docker-compose.yml up -d --build
 	@echo "Demo stack running. Keep: http://localhost:8080  Guard: http://localhost:8444  OPA: http://localhost:8181"
+	@if [ ! -f policies/rego/bundle.tar.gz ]; then \
+		echo "WARNING: policies/rego/bundle.tar.gz not found — OPA has no policy bundle. Run 'cd policies/rego && ./build.sh' and restart."; \
+	elif find policies/rego \( -name "*.rego" -o -name "data.json" \) -newer policies/rego/bundle.tar.gz | grep -q .; then \
+		echo "WARNING: policy files are newer than bundle.tar.gz — OPA may be running stale policies. Run 'cd policies/rego && ./build.sh' and restart."; \
+	fi
 
 # Stop demo stack
 demo-stop:

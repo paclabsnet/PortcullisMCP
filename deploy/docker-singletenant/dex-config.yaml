@@ -29,13 +29,30 @@ staticClients:
 enablePasswordDB: true
 
 staticPasswords:
-  - email: "demo@paclabs.net"
+  - email: "developer@paclabs.net"
     hash: "$2y$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"  # bcrypt of "password"
-    username: "demo"
-    userID: "demo@paclabs.net"
-    name: "Joe Demo"
+    username: "developer"
+    userID: "developer@paclabs.net"
+    name: "Dana Developer"
     groups:
       - "developer"
+
+  - email: "admin@paclabs.net"
+    hash: "$2y$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"  # bcrypt of "password"
+    username: "admin"
+    userID: "admin@paclabs.net"
+    name: "Alex Admin"
+    groups:
+      - "admin"
+      - "developer"
+
+  - email: "clerk@paclabs.net"
+    hash: "$2y$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"  # bcrypt of "password"
+    username: "clerk"
+    userID: "clerk@paclabs.net"
+    name: "Casey Clerk"
+    groups:
+      - "clerk"
 
 oauth2:
   skipApprovalScreen: true

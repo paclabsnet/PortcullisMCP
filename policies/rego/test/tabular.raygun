@@ -1977,7 +1977,7 @@ tests:
             "principal": {
               "user_id": "alice@example.com",
               "display_name": "Alice Developer",
-              "groups": ["developer", "NOT_admin"]
+              "groups": ["clerk", "NOT_admin"]
             },
             "context": {
               "escalation_tokens":[
@@ -2013,7 +2013,7 @@ tests:
             "principal": {
               "user_id": "alice@example.com",
               "display_name": "Alice Developer",
-              "groups": ["developer", "NOT_admin"]
+              "groups": ["clerk", "NOT_admin"]
             },
             "context": {
               "escalation_tokens":[
@@ -2071,7 +2071,7 @@ tests:
             "principal": {
               "user_id": "alice@example.com",
               "display_name": "Alice Developer",
-              "groups": ["developer", "NOT_admin"]
+              "groups": ["clerk", "NOT_admin"]
             },
             "context": {
               "NOTE":"One of these tokens was signed with the wrong key, leaving it here to exercise the filter",
@@ -2085,4 +2085,222 @@ tests:
           },
           "session_id": "tbd123",
           "trace_id": "req-abc123_gte_3000"
+        }
+
+
+  # -------------------------------------------------------------------------
+  # update_customer: clerk gets escalate, developer gets deny
+  # -------------------------------------------------------------------------
+
+  - name: mock-enterprise-api - update_customer - clerk gets escalate
+    skip: false
+    description: clerk is in the escalate group for update_customer; should be asked for approval
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"escalate"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {
+            "action":{
+              "service": "mock-enterprise-api",
+              "tool_name": "update_customer"
+            },
+            "resource":{
+              "arguments": {
+                "customer_id": "CUST-999",
+                "email": "new@example.com"
+              }
+            },
+            "principal": {
+              "user_id": "casey@paclabs.net",
+              "display_name": "Casey Clerk",
+              "groups": ["clerk"]
+            },
+            "context": {
+              "escalation_tokens":[]
+            }
+          },
+          "session_id": "tbd123",
+          "trace_id": "req-update-customer-clerk"
+        }
+
+
+  - name: mock-enterprise-api - update_customer - developer gets deny
+    skip: false
+    description: developer is not in the allow or escalate group for update_customer; should be denied
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"deny"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {
+            "action":{
+              "service": "mock-enterprise-api",
+              "tool_name": "update_customer"
+            },
+            "resource":{
+              "arguments": {
+                "customer_id": "CUST-999",
+                "email": "new@example.com"
+              }
+            },
+            "principal": {
+              "user_id": "dana@paclabs.net",
+              "display_name": "Dana Developer",
+              "groups": ["developer"]
+            },
+            "context": {
+              "escalation_tokens":[]
+            }
+          },
+          "session_id": "tbd123",
+          "trace_id": "req-update-customer-developer"
+        }
+
+
+  - name: mock-enterprise-api - update_customer - admin gets allow
+    skip: false
+    description: admin is in the allow group for update_customer; should be allowed without escalation
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"allow"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {
+            "action":{
+              "service": "mock-enterprise-api",
+              "tool_name": "update_customer"
+            },
+            "resource":{
+              "arguments": {
+                "customer_id": "CUST-999",
+                "email": "new@example.com"
+              }
+            },
+            "principal": {
+              "user_id": "alex@paclabs.net",
+              "display_name": "Alex Admin",
+              "groups": ["admin", "developer"]
+            },
+            "context": {
+              "escalation_tokens":[]
+            }
+          },
+          "session_id": "tbd123",
+          "trace_id": "req-update-customer-admin"
+        }
+
+
+  # -------------------------------------------------------------------------
+  # update_order_status: developer gets escalate, clerk gets deny
+  # -------------------------------------------------------------------------
+
+  - name: mock-enterprise-api - update_order_status - developer gets escalate
+    skip: false
+    description: developer is in the escalate group for update_order_status; should be asked for approval
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"escalate"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {
+            "action":{
+              "service": "mock-enterprise-api",
+              "tool_name": "update_order_status"
+            },
+            "resource":{
+              "arguments": {
+                "order_id": "ORD-1051",
+                "status": "shipped"
+              }
+            },
+            "principal": {
+              "user_id": "dana@paclabs.net",
+              "display_name": "Dana Developer",
+              "groups": ["developer"]
+            },
+            "context": {
+              "escalation_tokens":[]
+            }
+          },
+          "session_id": "tbd123",
+          "trace_id": "req-update-order-developer"
+        }
+
+
+  - name: mock-enterprise-api - update_order_status - clerk gets deny
+    skip: false
+    description: clerk is not in the allow or escalate group for update_order_status; should be denied
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"deny"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {
+            "action":{
+              "service": "mock-enterprise-api",
+              "tool_name": "update_order_status"
+            },
+            "resource":{
+              "arguments": {
+                "order_id": "ORD-1051",
+                "status": "shipped"
+              }
+            },
+            "principal": {
+              "user_id": "casey@paclabs.net",
+              "display_name": "Casey Clerk",
+              "groups": ["clerk"]
+            },
+            "context": {
+              "escalation_tokens":[]
+            }
+          },
+          "session_id": "tbd123",
+          "trace_id": "req-update-order-clerk"
+        }
+
+
+  - name: mock-enterprise-api - update_order_status - admin gets allow
+    skip: false
+    description: admin is in the allow group for update_order_status; should be allowed without escalation
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"allow"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {
+            "action":{
+              "service": "mock-enterprise-api",
+              "tool_name": "update_order_status"
+            },
+            "resource":{
+              "arguments": {
+                "order_id": "ORD-1051",
+                "status": "shipped"
+              }
+            },
+            "principal": {
+              "user_id": "alex@paclabs.net",
+              "display_name": "Alex Admin",
+              "groups": ["admin", "developer"]
+            },
+            "context": {
+              "escalation_tokens":[]
+            }
+          },
+          "session_id": "tbd123",
+          "trace_id": "req-update-order-admin"
         }
