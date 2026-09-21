@@ -148,6 +148,7 @@
 					"groups" : [ "admin" ]
 				}, 
                                 "escalate": {
+                                        "groups": ["clerk"],
                                         "arg_restrictions" :[
 						{ "type":"prefix","key_path":"resource.arguments.customer_id", "data":"" },
                                                 { "type":"gte","key_path":"resource.arguments.customer_id", "data":0 }
@@ -164,6 +165,7 @@
 					"groups" : [ "admin" ]
 				},
                                 "escalate": {
+                                        "groups" : ["developer"],
                                         "arg_restrictions" :[
 						{ "type":"any","key_path":"resource.arguments.order_id" }
                                         ]

@@ -180,6 +180,14 @@ trace_id := object.get(input, "trace_id", 0)
 
 escalation_grant_list := util.find_applicable_escalation_grants( context.escalation_tokens, action, principal, data.config.escalation_secret)
 
+# True when the escalate rule restricts by group AND the user already satisfies
+# the allow rule — in that case the escalate response should not be generated.
+# Escalate rules without a groups key (e.g. fetch) are intentionally unaffected.
+user_superseded_by_allow if {
+	"groups" in object.keys(rules_section.escalate)
+	allowdeny.request_matches_rule_criteria( input.authorization_request, rules_section.allow )
+}
+
 
 response_list contains { "decision":   "deny",	
 			  "reason":  "invalid input request",
@@ -257,6 +265,7 @@ response_list contains {
 
 					not rules_section.escalate == null
 					escalate.request_matches_base_criteria( input.authorization_request, rules_section.escalate )
+					not user_superseded_by_allow
 					
 #					print("#DEBUG: escalate scenario: we match the base case, do we match the escalation case?")
 #					print("#DEBUG++: escalation_grants: ", escalation_grant_list)

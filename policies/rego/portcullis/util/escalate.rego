@@ -7,56 +7,33 @@ import data.portcullis.util
 
 
 #
-#  BASE CASE - No escalation tokens apply
+#  BASE CASE - Is this user eligible to request escalation?
 #
+#  If the escalate rule specifies groups, the user must be in one of them.
+#  If arg_restrictions are also present, they must match too.
+#  If no groups are specified (e.g. fetch), any user whose args match is eligible.
+#
+
+# groups + arg_restrictions: user must be in group AND args must match
 request_matches_base_criteria( request, rules) := true if {
+   "groups" in object.keys(rules)
+   "arg_restrictions" in object.keys(rules)
+   util.has_group_membership( request.principal.groups, rules.groups)
+   util.any_arg_restriction_rule_honored( rules.arg_restrictions, request)
+}
 
-    request_principal_not_in_escalation_group( request, rules)
-
-} else := request_not_in_escalation_group_and_maches_arg_restrictions( request, rules)
-
-
-# the simplest case - there are no argument restriction rules, and there's just
-# a list of groups to which the user doesn't belong normally
-request_principal_not_in_escalation_group( request, rules) := true if {
-
-#   print("#DEBUG: request_principal_not_in_escalation_group: request: ", request, ", rules: ", rules)
-
-   "escalate_to_groups" in object.keys(rules)
+# groups only, no arg_restrictions: group membership alone is sufficient
+request_matches_base_criteria( request, rules) := true if {
+   "groups" in object.keys(rules)
    not "arg_restrictions" in object.keys(rules)
+   util.has_group_membership( request.principal.groups, rules.groups)
+}
 
-#   print("#DEBUG++: principal groups: ", request.principal.groups, ", escalate_to_groups: ", rules.escalate_to_groups)
-
-   not util.has_group_membership( request.principal.groups, rules.escalate_to_groups)
-
-} else := request_has_arg_restrictions( request, rules)
-
-
-# there are both requirements that the user not belong to a particular group
-# and that the request adhere to certain argument criteria
-request_not_in_escalation_group_and_maches_arg_restrictions( request, rules) := true if {
-
-   "escalate_to_groups" in object.keys(rules)
+# no groups, arg_restrictions only: backward-compatible (fetch, write_file, etc.)
+request_matches_base_criteria( request, rules) := true if {
+   not "groups" in object.keys(rules)
    "arg_restrictions" in object.keys(rules)
-   
-   # we have to match both criteria. the negative test for escalate_to_groups
-   # and the positive test for arg restrictions
-   not util.has_group_membership( request.principal.groups, rules.escalate_to_groups)
    util.any_arg_restriction_rule_honored( rules.arg_restrictions, request)
-
-} else := util.any_arg_restriction_rule_honored( rules.arg_restrictions, request)
-
-
-request_has_arg_restrictions( request, rules ) := true if {
-
-#    print("#DEBUG: request_has_arg_restrictions: ", rules)
-
-   "arg_restrictions" in object.keys(rules)
-
-#   print("#DEBUG++: comparing arg_restrictions against arguments ", request.resource.arguments)
-
-   util.any_arg_restriction_rule_honored( rules.arg_restrictions, request)
-
 }
 
 

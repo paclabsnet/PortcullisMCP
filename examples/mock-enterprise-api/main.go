@@ -257,6 +257,18 @@ func (a *apiServer) handleQueryOrder(_ context.Context, _ *mcp.CallToolRequest, 
 			"created_at": time.Now().Add(-2 * time.Hour).Format(time.RFC3339),
 			"updated_at": time.Now().Add(-2 * time.Hour).Format(time.RFC3339),
 		},
+		{
+			"order_id":    "ORD-1067",
+			"customer_id": in.CustomerID,
+			"status":      "pending",
+			"total":       89.50,
+			"items": []map[string]interface{}{
+				{"sku": "THINGAMAJIG-D", "qty": 3, "unit_price": 19.83},
+				{"sku": "WIDGET-A", "qty": 1, "unit_price": 49.99},
+			},
+			"created_at": time.Now().Add(-30 * time.Minute).Format(time.RFC3339),
+			"updated_at": time.Now().Add(-30 * time.Minute).Format(time.RFC3339),
+		},
 	}
 
 	if in.Status != "" {
