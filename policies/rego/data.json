@@ -175,7 +175,7 @@
 					"groups" : [ "*" ]
 				}
 			},
-			"delete_order": {
+			"archive_order": {
 				"allow" : {
 					"groups" : [ "admin" ]
 				}
