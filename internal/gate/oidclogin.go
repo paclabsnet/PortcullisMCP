@@ -25,12 +25,24 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 )
 
 const defaultPKCESessionExpiry = 10 * time.Minute
+
+// pkceSessionRecord is the on-disk representation of a PKCE session used in
+// duplicate_mcp_hack mode. The secondary writes this file so the primary can
+// complete the token exchange when it receives the OAuth callback.
+type pkceSessionRecord struct {
+	State        string    `json:"state"`
+	CodeVerifier string    `json:"code_verifier"`
+	Nonce        string    `json:"nonce"`
+	ExpiresAt    time.Time `json:"expires_at"`
+}
 
 // pkceSession holds the PKCE state for an in-flight login attempt.
 type pkceSession struct {
@@ -72,6 +84,10 @@ type OIDCLoginManager struct {
 	// login_callback_timeout_seconds; defaults to defaultPKCESessionExpiry.
 	pkceSessionExpiry time.Duration
 
+	// duplicate_mcp_hack file paths — empty unless duplicate_mcp_hack is enabled in config.
+	pkceSessionFile string // secondary writes PKCE session here; primary reads to complete callback
+	tokenCacheFile  string // primary writes JWT here after exchange/refresh; secondary polls this file
+
 	// OIDC discovery — protected by discoverMu.
 	// authEndpoint and tokenEndpoint are empty until a successful discovery.
 	// Failed discovery attempts are not cached; the next StartLogin call retries.
@@ -101,6 +117,8 @@ func NewOIDCLoginManager(cfg OIDCLoginConfig, mgmtPort int, callbackTimeoutSecs 
 		onRefreshFailed:   onRefreshFailed,
 		sessions:          make(map[string]*pkceSession),
 		pkceSessionExpiry: expiry,
+		pkceSessionFile:   cfg.PKCESessionFile,
+		tokenCacheFile:    cfg.TokenCacheFile,
 	}
 }
 
@@ -190,6 +208,10 @@ func (m *OIDCLoginManager) StartLogin(ctx context.Context) (string, error) {
 	m.sessions[state] = session
 	m.mu.Unlock()
 
+	// In duplicate_mcp_hack mode, write the PKCE session to disk so the primary
+	// instance can complete the token exchange when it receives the callback.
+	m.writePKCESessionFile(session)
+
 	// Build redirect URI
 	redirectURI := m.redirectURI()
 
@@ -241,6 +263,29 @@ func (m *OIDCLoginManager) HandleCallback(ctx context.Context, queryState, code,
 	}
 	m.mu.Unlock()
 
+	if ok && m.pkceSessionFile != "" {
+		// Primary handled this callback from its own in-memory session. Clean up
+		// any on-disk PKCE session written when this login was initiated, so
+		// sensitive verifier/nonce data is not left on disk until expiry.
+		if _, cleanErr := m.readAndConsumePKCESessionFile(queryState); cleanErr == nil {
+			slog.Debug("duplicate-mcp-hack: cleaned up PKCE session file after primary-handled callback")
+		}
+	}
+
+	if !ok && m.pkceSessionFile != "" {
+		// In duplicate_mcp_hack mode, try the on-disk PKCE session written by the
+		// secondary instance. The primary (which owns the callback port) reads
+		// it here to complete the exchange on the secondary's behalf.
+		fileSession, fileErr := m.readAndConsumePKCESessionFile(queryState)
+		if fileErr == nil {
+			session = fileSession
+			ok = true
+			slog.Info("duplicate-mcp-hack: completing token exchange using PKCE session file")
+		} else {
+			slog.Debug("duplicate-mcp-hack: pkce session file not usable", "error", fileErr)
+		}
+	}
+
 	if !ok {
 		m.sm.SetSystemError(SubstateInvalid, "Invalid login session", "Unknown or expired state parameter")
 		return fmt.Errorf("unknown or expired state parameter")
@@ -275,6 +320,10 @@ func (m *OIDCLoginManager) HandleCallback(ctx context.Context, queryState, code,
 
 	m.sm.SetAuthenticated()
 	slog.Info("oidc-login: login successful", "expiry", tokens.Expiry)
+
+	// In duplicate_mcp_hack mode, write the token file so the secondary instance
+	// can pick it up via its file poller.
+	m.writeTokenFile(tokens.IDToken)
 
 	// Update identity directly via the IdentitySource interface.
 	if m.identity != nil {
@@ -429,6 +478,7 @@ func (m *OIDCLoginManager) refreshLoop(initial *OIDCTokenSet, stop <-chan struct
 				m.tokens = nil
 				m.mu.Unlock()
 				m.sm.SetUnauthenticated()
+				m.deleteTokenFile()
 				if m.onUnauthenticated != nil {
 					m.onUnauthenticated()
 				}
@@ -439,6 +489,7 @@ func (m *OIDCLoginManager) refreshLoop(initial *OIDCTokenSet, stop <-chan struct
 			m.tokens = nil
 			m.mu.Unlock()
 			m.sm.SetSystemError(SubstateRefreshFailed, "Token refresh failed", err.Error())
+			m.deleteTokenFile()
 			if m.onRefreshFailed != nil {
 				m.onRefreshFailed(err)
 			}
@@ -448,6 +499,12 @@ func (m *OIDCLoginManager) refreshLoop(initial *OIDCTokenSet, stop <-chan struct
 		m.mu.Lock()
 		m.tokens = newTokens
 		m.mu.Unlock()
+
+		// In duplicate_mcp_hack mode, update the token file so the secondary picks
+		// up the refreshed token via its file poller.
+		if newTokens.IDToken != "" {
+			m.writeTokenFile(newTokens.IDToken)
+		}
 
 		// Update identity directly on refresh.
 		if m.identity != nil && newTokens.IDToken != "" {
@@ -557,6 +614,134 @@ func (m *OIDCLoginManager) doRefresh() (*OIDCTokenSet, error) {
 		IDToken:      idToken,
 		Expiry:       expiry,
 	}, nil
+}
+
+// writePKCESessionFile writes the PKCE session to disk in duplicate_mcp_hack mode
+// so the primary instance can complete the token exchange on callback.
+// Called after m.mu is released. Failures are logged as warnings only.
+func (m *OIDCLoginManager) writePKCESessionFile(session *pkceSession) {
+	if m.pkceSessionFile == "" {
+		return
+	}
+	path, err := expandHome(m.pkceSessionFile)
+	if err != nil {
+		slog.Warn("duplicate-mcp-hack: failed to expand pkce session file path", "error", err)
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		slog.Warn("duplicate-mcp-hack: failed to create pkce session directory", "error", err)
+		return
+	}
+	rec := pkceSessionRecord{
+		State:        session.state,
+		CodeVerifier: session.codeVerifier,
+		Nonce:        session.nonce,
+		ExpiresAt:    session.expiresAt,
+	}
+	data, err := json.Marshal(rec)
+	if err != nil {
+		slog.Warn("duplicate-mcp-hack: failed to marshal pkce session", "error", err)
+		return
+	}
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		slog.Warn("duplicate-mcp-hack: failed to write pkce session file", "error", err)
+		return
+	}
+	slog.Debug("duplicate-mcp-hack: wrote PKCE session file")
+}
+
+// readAndConsumePKCESessionFile reads the on-disk PKCE session file, validates
+// the state, deletes the file immediately (regardless of exchange outcome), and
+// returns a pkceSession suitable for completing the token exchange.
+// Called from HandleCallback when the state is not found in memory.
+func (m *OIDCLoginManager) readAndConsumePKCESessionFile(queryState string) (*pkceSession, error) {
+	path, err := expandHome(m.pkceSessionFile)
+	if err != nil {
+		return nil, fmt.Errorf("expand pkce session file path: %w", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read pkce session file: %w", err)
+	}
+	var rec pkceSessionRecord
+	if err := json.Unmarshal(data, &rec); err != nil {
+		return nil, fmt.Errorf("parse pkce session file: %w", err)
+	}
+	if rec.State != queryState {
+		return nil, fmt.Errorf("pkce session file state mismatch")
+	}
+	if time.Now().After(rec.ExpiresAt) {
+		return nil, fmt.Errorf("pkce session file expired")
+	}
+	// Delete immediately to minimise the exposure window, even if the
+	// subsequent token exchange fails.
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		slog.Warn("duplicate-mcp-hack: failed to delete PKCE session file after consumption", "error", err)
+	}
+	return &pkceSession{
+		codeVerifier: rec.CodeVerifier,
+		state:        rec.State,
+		nonce:        rec.Nonce,
+		expiresAt:    rec.ExpiresAt,
+	}, nil
+}
+
+// writeTokenFile writes the OIDC ID token to the token cache file in
+// duplicate_mcp_hack mode. The secondary instance polls this file to authenticate.
+// Failures are logged as warnings only — the in-memory token is unaffected.
+func (m *OIDCLoginManager) writeTokenFile(idToken string) {
+	if m.tokenCacheFile == "" || idToken == "" {
+		return
+	}
+	path, err := expandHome(m.tokenCacheFile)
+	if err != nil {
+		slog.Warn("duplicate-mcp-hack: failed to expand token cache file path", "error", err)
+		return
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		slog.Warn("duplicate-mcp-hack: failed to create token cache directory", "error", err)
+		return
+	}
+	// Atomic write: create a temp file in the same directory, write, then rename.
+	// This prevents the poller from reading a partial token during an in-place overwrite.
+	tmp, err := os.CreateTemp(dir, ".oidc-token-*.tmp")
+	if err != nil {
+		slog.Warn("duplicate-mcp-hack: failed to create temp token file", "error", err)
+		return
+	}
+	tmpPath := tmp.Name()
+	_, werr := fmt.Fprintf(tmp, "%s\n", idToken)
+	cerr := tmp.Close()
+	if werr != nil || cerr != nil {
+		os.Remove(tmpPath)
+		slog.Warn("duplicate-mcp-hack: failed to write token cache file", "error", werr)
+		return
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		slog.Warn("duplicate-mcp-hack: failed to rename token cache file", "error", err)
+		return
+	}
+	slog.Debug("duplicate-mcp-hack: token cache file updated")
+}
+
+// deleteTokenFile removes the token cache file in duplicate_mcp_hack mode, signalling
+// to the secondary instance that the session has ended and it should return to
+// the unauthenticated state.
+func (m *OIDCLoginManager) deleteTokenFile() {
+	if m.tokenCacheFile == "" {
+		return
+	}
+	path, err := expandHome(m.tokenCacheFile)
+	if err != nil {
+		return
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		slog.Warn("duplicate-mcp-hack: failed to delete token cache file", "error", err)
+		return
+	}
+	slog.Info("duplicate-mcp-hack: token file deleted; secondary instance will return to unauthenticated state")
 }
 
 // isInvalidGrant reports whether an error string contains "invalid_grant",

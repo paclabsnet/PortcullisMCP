@@ -447,6 +447,57 @@ func TestConfig_TenancyValidation(t *testing.T) {
 			t.Errorf("single with escalation=disabled should be valid; got: %v", err)
 		}
 	})
+
+	t.Run("duplicate_mcp_hack: valid with oidc-login", func(t *testing.T) {
+		cfg := validBaseConfig()
+		cfg.DuplicateMCPHack = true
+		cfg.Identity.Strategy = "oidc-login"
+		cfg.Identity.Config = map[string]any{
+			"issuer_url": "https://idp.example.com",
+			"client_id":  "my-client",
+		}
+		if _, err := cfg.Validate(nil); err != nil {
+			t.Errorf("duplicate_mcp_hack with oidc-login should be valid; got: %v", err)
+		}
+	})
+
+	t.Run("duplicate_mcp_hack: defaults applied when file paths empty", func(t *testing.T) {
+		cfg := validBaseConfig()
+		cfg.DuplicateMCPHack = true
+		cfg.Identity.Strategy = "oidc-login"
+		cfg.Identity.Config = map[string]any{
+			"issuer_url": "https://idp.example.com",
+			"client_id":  "my-client",
+		}
+		if _, err := cfg.Validate(nil); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.Identity.OIDCLogin.TokenCacheFile == "" {
+			t.Error("expected TokenCacheFile to be defaulted")
+		}
+		if cfg.Identity.OIDCLogin.PKCESessionFile == "" {
+			t.Error("expected PKCESessionFile to be defaulted")
+		}
+	})
+
+	t.Run("duplicate_mcp_hack: requires oidc-login strategy", func(t *testing.T) {
+		cfg := validBaseConfig()
+		cfg.DuplicateMCPHack = true
+		cfg.Identity.Strategy = "os"
+		_, err := cfg.Validate(nil)
+		if err == nil || !strings.Contains(err.Error(), "duplicate_mcp_hack") {
+			t.Errorf("expected duplicate_mcp_hack error, got: %v", err)
+		}
+	})
+
+	t.Run("duplicate_mcp_hack: forbidden in multi-tenant mode", func(t *testing.T) {
+		cfg := validMultiTenantConfig()
+		cfg.DuplicateMCPHack = true
+		_, err := cfg.Validate(nil)
+		if err == nil || !strings.Contains(err.Error(), "duplicate_mcp_hack") {
+			t.Errorf("expected duplicate_mcp_hack forbidden error, got: %v", err)
+		}
+	})
 }
 
 // --- GateSpecificGuardConfig.resolvedAPIEndpoint ---
