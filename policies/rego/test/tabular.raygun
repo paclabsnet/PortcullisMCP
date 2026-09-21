@@ -545,7 +545,7 @@ tests:
 
 
 
-  - name: mock-enterprise-api - delete_order - returns allow if you're an admin
+  - name: mock-enterprise-api - archive_order - returns allow if you're an admin
     skip: false
     description: the user is an admin
     decision-path: /v1/data/portcullis/tabular/decision
@@ -558,7 +558,7 @@ tests:
           "authorization_request": {
             "action":{
               "service": "mock-enterprise-api",
-              "tool_name": "delete_order"
+              "tool_name": "archive_order"
             },
             "resource":{
             },
@@ -577,7 +577,7 @@ tests:
         }
 
 
-  - name: mock-enterprise-api - delete_order - returns deny if you're not an admin
+  - name: mock-enterprise-api - archive_order - returns deny if you're not an admin
     skip: false
     description: the user is not an admin
     decision-path: /v1/data/portcullis/tabular/decision
@@ -590,7 +590,7 @@ tests:
           "authorization_request": {
             "action":{
               "service": "mock-enterprise-api",
-              "tool_name": "delete_order"
+              "tool_name": "archive_order"
             },
             "resource":{
             },

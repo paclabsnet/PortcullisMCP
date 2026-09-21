@@ -26,7 +26,7 @@ in the deploy/docker-multitenant directory:
 | `get_customer` | yes | yes | no |
 | `query_inventory` | yes | yes | yes |
 | `update_order_status` | yes | no | no |
-| `delete_order` | yes | no | no |
+| `archive_order` | yes | no | no |
 | `fetch_url` | yes | yes | yes |
 
 ## Using the tokens

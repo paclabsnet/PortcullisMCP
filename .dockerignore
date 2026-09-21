@@ -1,0 +1,17 @@
+# Symlinks and local dev artifacts that should not be sent to Docker build context
+claude_mcp_logs
+
+# Git metadata
+.git
+
+# Local config and secrets
+*.env
+.env*
+
+# Test artifacts and coverage
+*.test
+coverage.out
+
+# OS artifacts
+.DS_Store
+Thumbs.db

@@ -77,9 +77,9 @@ func main() {
 	}, api.handleQueryInventory)
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "delete_order",
-		Description: "Delete an order (admin only)",
-	}, api.handleDeleteOrder)
+		Name:        "archive_order",
+		Description: "Archive an order, removing it from active views (admin only)",
+	}, api.handleArchiveOrder)
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "query_order",
@@ -122,7 +122,7 @@ func main() {
 
 	addr := ":3000"
 	log.Printf("Mock HTTP MCP Server listening on http://localhost%s/mcp", addr)
-	log.Printf("Available tools: get_customer, update_order_status, query_inventory, delete_order, query_order, update_customer, echo_user, echo_header")
+	log.Printf("Available tools: get_customer, update_order_status, query_inventory, archive_order, query_order, update_customer, echo_user, echo_header")
 	log.Printf("Health check: http://localhost%s/health", addr)
 
 	if err := http.ListenAndServe(addr, nil); err != nil {
@@ -145,7 +145,7 @@ type inventoryInput struct {
 	ProductSKU string `json:"product_sku"`
 }
 
-type deleteOrderInput struct {
+type archiveOrderInput struct {
 	OrderID string `json:"order_id"`
 }
 
@@ -414,16 +414,16 @@ func unsafeDecodeJWTClaims(raw string) (map[string]interface{}, error) {
 	return claims, nil
 }
 
-func (a *apiServer) handleDeleteOrder(_ context.Context, _ *mcp.CallToolRequest, in deleteOrderInput) (*mcp.CallToolResult, any, error) {
+func (a *apiServer) handleArchiveOrder(_ context.Context, _ *mcp.CallToolRequest, in archiveOrderInput) (*mcp.CallToolResult, any, error) {
 	if in.OrderID == "" {
 		return nil, nil, fmt.Errorf("order_id is required")
 	}
 
 	result := map[string]interface{}{
-		"order_id":   in.OrderID,
-		"status":     "deleted",
-		"deleted_at": time.Now().Format(time.RFC3339),
-		"message":    fmt.Sprintf("Order %s has been permanently deleted", in.OrderID),
+		"order_id":    in.OrderID,
+		"status":      "archived",
+		"archived_at": time.Now().Format(time.RFC3339),
+		"message":     fmt.Sprintf("Order %s has been archived and removed from active views", in.OrderID),
 	}
 
 	data, _ := json.MarshalIndent(result, "", "  ")

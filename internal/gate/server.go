@@ -456,9 +456,6 @@ func (g *Gate) refreshKeepTools(ctx context.Context) ([]string, error) {
 }
 
 func (g *Gate) handleLoginTool(ctx context.Context, force bool) string {
-	if g.isSecondary {
-		return "Login is managed by the primary Portcullis Gate instance. Your session will be picked up automatically within a few seconds of the primary completing authentication."
-	}
 	switch g.cfg.Identity.Strategy {
 	case "os", "oidc-file":
 		return "Login is not necessary."

@@ -118,7 +118,7 @@ response_list contains
 				  "trace_id": trace_id} if {
 
    action.service in ["mock-enterprise-api"]
-   not action.tool_name in ["get_customer", "update_order_status", "query_inventory", "delete_order"]
+   not action.tool_name in ["get_customer", "update_order_status", "query_inventory", "archive_order"]
 
 }
 
@@ -329,7 +329,7 @@ response_list contains
 				  "trace_id": trace_id} if {
 
    action.service in ["mock-enterprise-api"]
-   action.tool_name in ["delete_order"]
+   action.tool_name in ["archive_order"]
    util.has_group_membership( principal.groups, ["admin"])
 
 }
