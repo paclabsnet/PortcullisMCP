@@ -49,8 +49,9 @@ func LoadConfig(ctx context.Context, path string) (Config, cfgloader.PostureRepo
 
 // Config holds the full portcullis-gate configuration loaded from gate.yaml.
 type Config struct {
-	Tenancy        string                     `yaml:"tenancy"`    // "single" (default) or "multi"
-	Escalation     string                     `yaml:"escalation"` // "session" (default) | "fingerprint" | "disabled"
+	Tenancy        string                     `yaml:"tenancy"`       // "single" (default) or "multi"
+	Escalation     string                     `yaml:"escalation"`    // "session" (default) | "fingerprint" | "disabled"
+	DuplicateMCPHack bool                     `yaml:"duplicate_mcp_hack"` // workaround for hosts that launch two gate processes (e.g. Claude Desktop on Windows)
 	Mode           string                     `yaml:"mode"`
 	Server         cfgloader.ServerConfig     `yaml:"server"`
 	Identity       IdentityConfig             `yaml:"identity"`
@@ -102,6 +103,17 @@ func (c *Config) Validate(sources cfgloader.SourceMap) (cfgloader.PostureReport,
 	}
 	if err := c.Identity.Validate(); err != nil {
 		return cfgloader.PostureReport{}, err
+	}
+	if c.DuplicateMCPHack {
+		if c.Identity.Strategy != "oidc-login" {
+			return cfgloader.PostureReport{}, fmt.Errorf("duplicate_mcp_hack requires identity.strategy \"oidc-login\"")
+		}
+		if c.Identity.OIDCLogin.TokenCacheFile == "" {
+			c.Identity.OIDCLogin.TokenCacheFile = "~/.portcullis/oidc-login.token"
+		}
+		if c.Identity.OIDCLogin.PKCESessionFile == "" {
+			c.Identity.OIDCLogin.PKCESessionFile = "~/.portcullis/oidc-pkce-session.json"
+		}
 	}
 	if err := c.Peers.Guard.Validate(); err != nil {
 		return cfgloader.PostureReport{}, err
@@ -220,6 +232,10 @@ func (c *Config) validateMultiTenant() error {
 	if c.Identity.Strategy == "oidc-login" {
 		return fmt.Errorf("identity.strategy \"oidc-login\" is not allowed in multi-tenant mode; use a header-based token strategy")
 	}
+	// Rule 9: duplicate_mcp_hack is a single-tenant stdio concern only.
+	if c.DuplicateMCPHack {
+		return fmt.Errorf("duplicate_mcp_hack is not allowed in multi-tenant mode")
+	}
 	// Rule 7: SessionTTL must be positive.
 	if c.Server.SessionTTL <= 0 {
 		return fmt.Errorf("server.session_ttl must be greater than 0 in multi-tenant mode")
@@ -319,12 +335,14 @@ type OIDCFileConfig struct {
 
 // OIDCLoginConfig holds settings for the oidc-login interactive login flow.
 type OIDCLoginConfig struct {
-	IssuerURL    string   `yaml:"issuer_url" mapstructure:"issuer_url"`
-	RedirectURI  string   `yaml:"redirect_uri" mapstructure:"redirect_uri"`
-	ClientID     string   `yaml:"client_id" mapstructure:"client_id"`
-	ClientSecret string   `yaml:"client_secret" mapstructure:"client_secret"`
-	Scopes       []string `yaml:"scopes" mapstructure:"scopes"`
-	Flow         string   `yaml:"flow" mapstructure:"flow"`
+	IssuerURL       string   `yaml:"issuer_url"        mapstructure:"issuer_url"`
+	RedirectURI     string   `yaml:"redirect_uri"      mapstructure:"redirect_uri"`
+	ClientID        string   `yaml:"client_id"         mapstructure:"client_id"`
+	ClientSecret    string   `yaml:"client_secret"     mapstructure:"client_secret"`
+	Scopes          []string `yaml:"scopes"            mapstructure:"scopes"`
+	Flow            string   `yaml:"flow"              mapstructure:"flow"`
+	TokenCacheFile  string   `yaml:"token_cache_file"  mapstructure:"token_cache_file"`  // duplicate_mcp_hack: primary writes JWT here; secondary polls this file
+	PKCESessionFile string   `yaml:"pkce_session_file" mapstructure:"pkce_session_file"` // duplicate_mcp_hack: secondary writes PKCE session here; primary reads to complete callback
 }
 
 // OSConfig holds overrides for the OS identity source.

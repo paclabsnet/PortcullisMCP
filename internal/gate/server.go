@@ -127,6 +127,7 @@ type Gate struct {
 
 	stateMachine *StateMachine
 	oidcLogin    *OIDCLoginManager
+	isSecondary  bool // true when duplicate_mcp_hack mode is active and this instance could not bind the management port
 }
 
 // New creates a Gate from the given config.
@@ -455,6 +456,9 @@ func (g *Gate) refreshKeepTools(ctx context.Context) ([]string, error) {
 }
 
 func (g *Gate) handleLoginTool(ctx context.Context, force bool) string {
+	if g.isSecondary {
+		return "Login is managed by the primary Portcullis Gate instance. Your session will be picked up automatically within a few seconds of the primary completing authentication."
+	}
 	switch g.cfg.Identity.Strategy {
 	case "os", "oidc-file":
 		return "Login is not necessary."
@@ -515,7 +519,36 @@ func (g *Gate) Run(ctx context.Context) error {
 			return fmt.Errorf("init management api: %w", err)
 		}
 		if err := mgmt.Start(ctx); err != nil {
-			return fmt.Errorf("start management api: %w", err)
+			if g.cfg.DuplicateMCPHack {
+				g.isSecondary = true
+				slog.Warn("gate: running in duplicate-mcp-hack secondary mode — management UI disabled; will authenticate via token file written by primary instance")
+			} else {
+				slog.Info("gate: failed to bind management port — on Windows, Claude Desktop launches two copies of each MCP server; if this is the cause, set duplicate_mcp_hack: true in gate.yaml to enable coordination between instances")
+				return fmt.Errorf("start management api: %w", err)
+			}
+		}
+
+		if g.isSecondary {
+			tokenCacheFile, err := expandHome(g.cfg.Identity.OIDCLogin.TokenCacheFile)
+			if err != nil {
+				return fmt.Errorf("duplicate-mcp-hack: expand token cache file path: %w", err)
+			}
+			poller := NewTokenFilePoller(tokenCacheFile, 5*time.Second, func(rawJWT string) {
+				if rawJWT != "" {
+					if err := g.identity.SetToken(rawJWT); err != nil {
+						slog.Warn("duplicate-mcp-hack: failed to set token from file", "error", err)
+						return
+					}
+					g.stateMachine.SetAuthenticated()
+					slog.Info("duplicate-mcp-hack: picked up OIDC token from token file; gate is now authenticated")
+					go g.refreshKeepTools(ctx)
+				} else {
+					g.identity.Clear()
+					g.stateMachine.SetUnauthenticated()
+					slog.Warn("duplicate-mcp-hack: token file removed; gate returning to unauthenticated state")
+				}
+			})
+			poller.Start(ctx)
 		}
 
 	}
