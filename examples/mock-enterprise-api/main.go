@@ -92,6 +92,11 @@ func main() {
 	}, api.handleUpdateCustomer)
 
 	mcp.AddTool(server, &mcp.Tool{
+		Name:        "disable_customer",
+		Description: "Disable customer, which will prevent the customer from generating new orders",
+	}, api.handleDisableCustomer)
+
+	mcp.AddTool(server, &mcp.Tool{
 		Name: "echo_header",
 		Description: "Echo back the identity of the caller. The caller's identity is injected " +
 			"automatically by Portcullis via the X-User-Identity HTTP header — no arguments " +
@@ -122,7 +127,7 @@ func main() {
 
 	addr := ":3000"
 	log.Printf("Mock HTTP MCP Server listening on http://localhost%s/mcp", addr)
-	log.Printf("Available tools: get_customer, update_order_status, query_inventory, archive_order, query_order, update_customer, echo_user, echo_header")
+	log.Printf("Available tools: get_customer, update_order_status, query_inventory, archive_order, query_order, update_customer, disable_customer, echo_user, echo_header")
 	log.Printf("Health check: http://localhost%s/health", addr)
 
 	if err := http.ListenAndServe(addr, nil); err != nil {
@@ -293,6 +298,24 @@ func (a *apiServer) handleQueryOrder(_ context.Context, _ *mcp.CallToolRequest, 
 	}, nil, nil
 }
 
+func (a *apiServer) handleDisableCustomer(_ context.Context, _ *mcp.CallToolRequest, in updateCustomerInput) (*mcp.CallToolResult, any, error) {
+
+	if in.CustomerID == "" {
+		return nil, nil, fmt.Errorf("customer_id is required")
+	}
+
+	result := map[string]interface{}{
+		"customer_id": in.CustomerID,
+		"status":      "disabled",
+	}
+
+	data, _ := json.MarshalIndent(result, "", "  ")
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{Text: string(data)}},
+	}, nil, nil
+
+}
+
 func (a *apiServer) handleUpdateCustomer(_ context.Context, _ *mcp.CallToolRequest, in updateCustomerInput) (*mcp.CallToolResult, any, error) {
 	if in.CustomerID == "" {
 		return nil, nil, fmt.Errorf("customer_id is required")
@@ -313,11 +336,11 @@ func (a *apiServer) handleUpdateCustomer(_ context.Context, _ *mcp.CallToolReque
 	}
 
 	result := map[string]interface{}{
-		"customer_id": in.CustomerID,
-		"status":      "updated",
+		"customer_id":    in.CustomerID,
+		"status":         "updated",
 		"updated_fields": updated,
-		"updated_at":  time.Now().Format(time.RFC3339),
-		"message":     fmt.Sprintf("Customer %s profile updated successfully", in.CustomerID),
+		"updated_at":     time.Now().Format(time.RFC3339),
+		"message":        fmt.Sprintf("Customer %s profile updated successfully", in.CustomerID),
 	}
 
 	data, _ := json.MarshalIndent(result, "", "  ")

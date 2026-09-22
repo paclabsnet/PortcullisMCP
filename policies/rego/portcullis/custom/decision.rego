@@ -34,11 +34,11 @@ trace_id := object.get(input, "trace_id", 0)
 #
 #
 response_list contains { "decision":   "workflow",	
-			  "reason":  "this requires user group membership",
+			  "reason":  "this requires admin group membership",
 			  "trace_id": trace_id } if {
 
 	action.service in ["mock-enterprise-api"]
-	action.tool_name in ["delete_customer"]
+	action.tool_name in ["disable_customer"]
 		
 	not util.has_group_membership(principal.groups, ["admin"])
 
@@ -51,7 +51,7 @@ response_list contains { "decision":   "allow",
 			  "trace_id": trace_id } if {
 
 	action.service in ["mock-enterprise-api"]
-	action.tool_name in ["delete_customer"]
+	action.tool_name in ["disable_customer"]
 		
 	util.has_group_membership(principal.groups, ["admin"])
 

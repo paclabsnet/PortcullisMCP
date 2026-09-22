@@ -843,7 +843,7 @@ tests:
       type: inline
       value: >
         {
-          "authorization_request": {                
+          "authorization_request": {
             "action": {
                 "tool_name": "fetch",
                 "service" : "fetch"
@@ -876,6 +876,79 @@ tests:
           },
             "session_id": "sess-abc123",
             "trace_id": "req-def456"
+        }
+
+
+####################################################
+#
+# disable_customer - tabular fallover to custom policy
+#
+# disable_customer has no entry in the tabular policy data, so
+# response_list will be empty and the tabular policy falls over
+# to custom.decision (tabular/decision.rego line 295-297).
+
+  - name: tabular fallover - admin can call disable_customer
+    description: no tabular rule exists; custom policy allows admin users
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"allow"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {
+            "action": {
+              "service": "mock-enterprise-api",
+              "tool_name": "disable_customer"
+            },
+            "resource": {
+              "arguments": {
+                "customer_id": "CUST-001"
+              }
+            },
+            "principal": {
+              "user_id": "alice@example.com",
+              "display_name": "Alice Admin",
+              "groups": ["admin", "support"]
+            },
+            "context": {
+              "escalation_tokens": []
+            }
+          },
+          "session_id": "sess-fallover-001",
+          "trace_id": "req-fallover-001"
+        }
+
+  - name: tabular fallover - non-admin gets workflow for disable_customer
+    description: no tabular rule exists; custom policy requires workflow for non-admin users
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"workflow"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {
+            "action": {
+              "service": "mock-enterprise-api",
+              "tool_name": "disable_customer"
+            },
+            "resource": {
+              "arguments": {
+                "customer_id": "CUST-002"
+              }
+            },
+            "principal": {
+              "user_id": "bob@example.com",
+              "display_name": "Bob Support",
+              "groups": ["support", "developer"]
+            },
+            "context": {
+              "escalation_tokens": []
+            }
+          },
+          "session_id": "sess-fallover-002",
+          "trace_id": "req-fallover-002"
         }
 
 
@@ -1558,12 +1631,12 @@ tests:
 
 
 
-  - name: mock-enterprise-api - delete_customer - returns allow if you're an admin
+  - name: mock-enterprise-api - delete_customer - returns deny, since there is no 'delete_customer' tool
     skip: false
     description: the user is an admin
     decision-path: /v1/data/portcullis/tabular/decision
     expects:
-      - substring: '"decision":"allow"'
+      - substring: '"decision":"deny"'
     input:
       type: inline
       value: >
@@ -1591,12 +1664,12 @@ tests:
 
 
 
-  - name: mock-enterprise-api - delete_customer - returns workflow if you're not an admin
+  - name: mock-enterprise-api - delete_customer - returns deny since this tool does not exist
     skip: false
     description: the user is not an admin, so the workflow system may be invoked
     decision-path: /v1/data/portcullis/tabular/decision
     expects:
-      - substring: '"decision":"workflow"'
+      - substring: '"decision":"deny"'
     input:
       type: inline
       value: >
