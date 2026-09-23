@@ -1697,6 +1697,146 @@ tests:
 
 
 
+####################################################
+#
+# parallel escalation rulesets — update_customer
+#
+# update_customer has two independent escalation paths:
+#   element 0: clerks can escalate for any customer_id (gte 0)
+#   element 1: developers can escalate for customer_id >= 9000 (test accounts)
+# Admins get allow directly; all others get deny.
+
+
+  - name: clerk can escalate update_customer with any customer_id
+    description: matches element 0 of the escalate array; no token present
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"escalate"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {
+            "action": {
+              "service": "mock-enterprise-api",
+              "tool_name": "update_customer"
+            },
+            "resource": {
+              "arguments": {
+                "customer_id": 100
+              }
+            },
+            "principal": {
+              "user_id": "carol@example.com",
+              "display_name": "Carol Clerk",
+              "groups": ["clerk", "support"]
+            },
+            "context": {
+              "escalation_tokens": []
+            }
+          },
+          "session_id": "sess-par-001",
+          "trace_id": "req-par-001"
+        }
+
+  - name: developer can escalate update_customer with high customer_id
+    description: matches element 1 of the escalate array (customer_id >= 9000); no token present
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"escalate"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {
+            "action": {
+              "service": "mock-enterprise-api",
+              "tool_name": "update_customer"
+            },
+            "resource": {
+              "arguments": {
+                "customer_id": 9500
+              }
+            },
+            "principal": {
+              "user_id": "dave@example.com",
+              "display_name": "Dave Developer",
+              "groups": ["developer", "team-backend"]
+            },
+            "context": {
+              "escalation_tokens": []
+            }
+          },
+          "session_id": "sess-par-002",
+          "trace_id": "req-par-002"
+        }
+
+  - name: developer is denied update_customer with low customer_id
+    description: customer_id 100 fails element 1 (needs >= 9000); developer not in clerk group so element 0 also fails; result is deny
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"deny"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {
+            "action": {
+              "service": "mock-enterprise-api",
+              "tool_name": "update_customer"
+            },
+            "resource": {
+              "arguments": {
+                "customer_id": 100
+              }
+            },
+            "principal": {
+              "user_id": "dave@example.com",
+              "display_name": "Dave Developer",
+              "groups": ["developer", "team-backend"]
+            },
+            "context": {
+              "escalation_tokens": []
+            }
+          },
+          "session_id": "sess-par-003",
+          "trace_id": "req-par-003"
+        }
+
+  - name: developer with valid escalation token is allowed update_customer for high customer_id
+    description: element 1 base criteria pass (developer, customer_id 9001 >= 9000); signed token grants allow
+    decision-path: /v1/data/portcullis/tabular/decision
+    expects:
+      - substring: '"decision":"allow"'
+    input:
+      type: inline
+      value: >
+        {
+          "authorization_request": {
+            "action": {
+              "service": "mock-enterprise-api",
+              "tool_name": "update_customer"
+            },
+            "resource": {
+              "arguments": {
+                "customer_id": 9001
+              }
+            },
+            "principal": {
+              "user_id": "dave@example.com",
+              "display_name": "Dave Developer",
+              "groups": ["developer", "team-backend"]
+            },
+            "context": {
+              "escalation_tokens": [
+                {"raw": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJwb3J0Y3VsbGlzLWd1YXJkIiwiaWF0IjoxNzkwMDkyNTEzLCJzdWIiOiJkYXZlQGV4YW1wbGUuY29tIiwicG9ydGN1bGxpcyI6eyJzZXJ2aWNlcyI6WyJtb2NrLWVudGVycHJpc2UtYXBpIl0sInRvb2xzIjpbInVwZGF0ZV9jdXN0b21lciJdLCJhcmdfcmVzdHJpY3Rpb25zIjpbeyJ0eXBlIjoiYW55Iiwia2V5X3BhdGgiOiJyZXNvdXJjZS5hcmd1bWVudHMuY3VzdG9tZXJfaWQiLCJkYXRhIjoiOTAwMSJ9XX19.kb8ahX25zUN8JAZykB47ctqZblxiDhoS4t3g_tdIqEc"}
+              ]
+            }
+          },
+          "session_id": "sess-par-004",
+          "trace_id": "req-par-004"
+        }
+
 
 
   - name: mock_calculator  - returns allow for good value 1000

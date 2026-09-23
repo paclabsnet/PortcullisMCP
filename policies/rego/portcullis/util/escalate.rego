@@ -9,13 +9,18 @@ import data.portcullis.util
 #
 #  BASE CASE - Is this user eligible to request escalation?
 #
-#  If the escalate rule specifies groups, the user must be in one of them.
-#  If arg_restrictions are also present, they must match too.
-#  If no groups are specified (e.g. fetch), any user whose args match is eligible.
+#  escalate is now an array of independent escalation paths.
+#  The user is eligible if they satisfy at least one element.
 #
 
+# Array form: iterate and succeed if any element matches.
+request_matches_base_criteria( request, rules_array) := true if {
+   some element in rules_array
+   request_matches_base_criteria_element( request, element)
+}
+
 # groups + arg_restrictions: user must be in group AND args must match
-request_matches_base_criteria( request, rules) := true if {
+request_matches_base_criteria_element( request, rules) := true if {
    "groups" in object.keys(rules)
    "arg_restrictions" in object.keys(rules)
    util.has_group_membership( request.principal.groups, rules.groups)
@@ -23,14 +28,14 @@ request_matches_base_criteria( request, rules) := true if {
 }
 
 # groups only, no arg_restrictions: group membership alone is sufficient
-request_matches_base_criteria( request, rules) := true if {
+request_matches_base_criteria_element( request, rules) := true if {
    "groups" in object.keys(rules)
    not "arg_restrictions" in object.keys(rules)
    util.has_group_membership( request.principal.groups, rules.groups)
 }
 
 # no groups, arg_restrictions only: backward-compatible (fetch, write_file, etc.)
-request_matches_base_criteria( request, rules) := true if {
+request_matches_base_criteria_element( request, rules) := true if {
    not "groups" in object.keys(rules)
    "arg_restrictions" in object.keys(rules)
    util.any_arg_restriction_rule_honored( rules.arg_restrictions, request)
@@ -130,18 +135,18 @@ request_matches_escalation_criteria( request, rules, escalation_grant_list) := t
 # process, which will only allow the user to approve argument escalation approvals
 #
 #
-find_matching_escalation_criteria( request, rules, escalation_grant_list) := escalation_claim_list if {
+find_matching_escalation_criteria( request, rules_array, escalation_grant_list) := escalation_claim_list if {
 
-   # if there aren't any arg restrictions, we can't match them
-   "arg_restrictions" in object.keys(rules)
-   count(rules.arg_restrictions) > 0
-
-#   request_arguments := object.get(request, ["resource", "arguments"], [])
-
-   escalation_claim_list := find_rule_arg_restrictions_matching_request_args(
-      rules.arg_restrictions,
-      request
-   )
+   # collect claims from every matching element (array order preserved), take the first
+   all_claims := [ claims |
+      some element in rules_array
+      "arg_restrictions" in object.keys(element)
+      count(element.arg_restrictions) > 0
+      claims := find_rule_arg_restrictions_matching_request_args(element.arg_restrictions, request)
+      count(claims) > 0
+   ]
+   count(all_claims) > 0
+   escalation_claim_list := all_claims[0]
 
 } else := []
 

@@ -138,7 +138,7 @@ func main() {
 type apiServer struct{}
 
 type customerInput struct {
-	CustomerID string `json:"customer_id"`
+	CustomerID int `json:"customer_id"`
 }
 
 type orderInput struct {
@@ -155,12 +155,12 @@ type archiveOrderInput struct {
 }
 
 type queryOrderInput struct {
-	CustomerID string `json:"customer_id"`
+	CustomerID int    `json:"customer_id"`
 	Status     string `json:"status,omitempty"` // optional filter: "pending", "shipped", "delivered", "cancelled"
 }
 
 type updateCustomerInput struct {
-	CustomerID string `json:"customer_id"`
+	CustomerID int `json:"customer_id"`
 	Name       string `json:"name,omitempty"`
 	Email      string `json:"email,omitempty"`
 	Phone      string `json:"phone,omitempty"`
@@ -168,7 +168,7 @@ type updateCustomerInput struct {
 }
 
 func (a *apiServer) handleGetCustomer(_ context.Context, _ *mcp.CallToolRequest, in customerInput) (*mcp.CallToolResult, any, error) {
-	if in.CustomerID == "" {
+	if in.CustomerID == 0 {
 		return nil, nil, fmt.Errorf("customer_id is required")
 	}
 
@@ -234,7 +234,7 @@ func (a *apiServer) handleQueryInventory(_ context.Context, _ *mcp.CallToolReque
 }
 
 func (a *apiServer) handleQueryOrder(_ context.Context, _ *mcp.CallToolRequest, in queryOrderInput) (*mcp.CallToolResult, any, error) {
-	if in.CustomerID == "" {
+	if in.CustomerID == 0 {
 		return nil, nil, fmt.Errorf("customer_id is required")
 	}
 
@@ -266,7 +266,7 @@ func (a *apiServer) handleQueryOrder(_ context.Context, _ *mcp.CallToolRequest, 
 			"order_id":    "ORD-1067",
 			"customer_id": in.CustomerID,
 			"status":      "pending",
-			"total":       89.50,
+			"total":       109.48,
 			"items": []map[string]interface{}{
 				{"sku": "THINGAMAJIG-D", "qty": 3, "unit_price": 19.83},
 				{"sku": "WIDGET-A", "qty": 1, "unit_price": 49.99},
@@ -300,7 +300,7 @@ func (a *apiServer) handleQueryOrder(_ context.Context, _ *mcp.CallToolRequest, 
 
 func (a *apiServer) handleDisableCustomer(_ context.Context, _ *mcp.CallToolRequest, in updateCustomerInput) (*mcp.CallToolResult, any, error) {
 
-	if in.CustomerID == "" {
+	if in.CustomerID == 0 {
 		return nil, nil, fmt.Errorf("customer_id is required")
 	}
 
@@ -317,7 +317,7 @@ func (a *apiServer) handleDisableCustomer(_ context.Context, _ *mcp.CallToolRequ
 }
 
 func (a *apiServer) handleUpdateCustomer(_ context.Context, _ *mcp.CallToolRequest, in updateCustomerInput) (*mcp.CallToolResult, any, error) {
-	if in.CustomerID == "" {
+	if in.CustomerID == 0 {
 		return nil, nil, fmt.Errorf("customer_id is required")
 	}
 
@@ -340,7 +340,7 @@ func (a *apiServer) handleUpdateCustomer(_ context.Context, _ *mcp.CallToolReque
 		"status":         "updated",
 		"updated_fields": updated,
 		"updated_at":     time.Now().Format(time.RFC3339),
-		"message":        fmt.Sprintf("Customer %s profile updated successfully", in.CustomerID),
+		"message":        fmt.Sprintf("Customer %d profile updated successfully", in.CustomerID),
 	}
 
 	data, _ := json.MarshalIndent(result, "", "  ")
