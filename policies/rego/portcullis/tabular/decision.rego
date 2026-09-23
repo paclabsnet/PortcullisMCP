@@ -184,7 +184,8 @@ escalation_grant_list := util.find_applicable_escalation_grants( context.escalat
 # the allow rule — in that case the escalate response should not be generated.
 # Escalate rules without a groups key (e.g. fetch) are intentionally unaffected.
 user_superseded_by_allow if {
-	"groups" in object.keys(rules_section.escalate)
+	some e in rules_section.escalate
+	"groups" in object.keys(e)
 	allowdeny.request_matches_rule_criteria( input.authorization_request, rules_section.allow )
 }
 
