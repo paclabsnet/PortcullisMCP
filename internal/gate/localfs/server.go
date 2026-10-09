@@ -31,6 +31,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -98,6 +99,13 @@ func RelativeBase(dirs []string) string {
 	if err != nil {
 		return ""
 	}
+	return relativeBase(resolved, wildcard)
+}
+
+// relativeBase is the single implementation of the relative-path base rule:
+// the first resolved sandbox dir, else the cwd for a wildcard-only policy,
+// else "".
+func relativeBase(resolved []string, wildcard bool) string {
 	if len(resolved) > 0 {
 		return resolved[0]
 	}
@@ -299,7 +307,7 @@ func withinDirs(full string, dirs []string) bool {
 // deeply nested new paths like /some/dir/a/b/c where none of the intermediates
 // exist yet.
 func (s *fsServer) resolve(path string) (string, error) {
-	sandbox, sandboxDirs, wildcard, ready := s.snapshotPolicy()
+	_, sandboxDirs, wildcard, ready := s.snapshotPolicy()
 	if !ready {
 		return "", fmt.Errorf("localfs: policy not yet available — waiting for Keep")
 	}
@@ -307,15 +315,11 @@ func (s *fsServer) resolve(path string) (string, error) {
 		return "", fmt.Errorf("path is required")
 	}
 	if !filepath.IsAbs(path) {
-		base := sandbox
-		if base == "" && wildcard {
-			wd, err := os.Getwd()
-			if err != nil {
-				return "", fmt.Errorf("resolve path: %w", err)
-			}
-			base = wd
+		if base := relativeBase(sandboxDirs, wildcard); base != "" || !wildcard {
+			path = filepath.Join(base, path)
+		} else {
+			return "", fmt.Errorf("resolve path: cannot determine working directory")
 		}
-		path = filepath.Join(base, path)
 	}
 	clean := filepath.Clean(path)
 
@@ -886,11 +890,15 @@ func (s *fsServer) getFileInfo(_ context.Context, _ *mcp.CallToolRequest, in pat
 }
 
 func (s *fsServer) listAllowedDirectories(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
-	_, sandboxDirs, _, ready := s.snapshotPolicy()
+	_, sandboxDirs, wildcard, ready := s.snapshotPolicy()
 	if !ready {
 		return errResult(fmt.Errorf("localfs: policy not yet available — waiting for Keep")), nil, nil
 	}
-	dirList := strings.Join(sandboxDirs, "\n  ")
+	dirs := append([]string(nil), sandboxDirs...)
+	if wildcard {
+		dirs = append(dirs, WildcardDir+" (any directory)")
+	}
+	dirList := strings.Join(dirs, "\n  ")
 	text := "All directories on this computer are accessible, subject to Portcullis policy enforcement.\n\n" +
 		"Fast-path directories (no policy check required):\n  " + dirList + "\n\n" +
 		"Operations outside the fast-path directories are sent to portcullis-keep for policy evaluation. " +
@@ -1045,9 +1053,15 @@ func (s *fsServer) searchWithinFiles(_ context.Context, _ *mcp.CallToolRequest, 
 		// sandbox cannot expose a file outside it.
 		realPath, err := filepath.EvalSymlinks(path)
 		if err != nil {
+			// Typically a broken link; skip it but leave a trace.
+			slog.Debug("localfs: search_within_files skipping unresolvable path", "path", path, "error", err)
 			return nil
 		}
 		if !wildcard && !withinDirs(realPath, sandboxDirs) {
+			slog.Debug("localfs: search_within_files skipping link outside sandbox", "path", path)
+			return nil
+		}
+		if realPath != path && isBinaryExt(strings.ToLower(filepath.Ext(realPath))) {
 			return nil
 		}
 
@@ -1062,6 +1076,8 @@ func (s *fsServer) searchWithinFiles(_ context.Context, _ *mcp.CallToolRequest, 
 			return nil
 		}
 
+		// Report the path as walked (the name the user asked about, including
+		// any link name), not the symlink target the content was read from.
 		rel, _ := filepath.Rel(root, path)
 		lines := strings.Split(string(data), "\n")
 		for lineNum, line := range lines {

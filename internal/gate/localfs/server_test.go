@@ -1368,3 +1368,83 @@ func TestWildcardWorkspace(t *testing.T) {
 	}
 	assertAllowed(t, call(t, session, "read_text_file", map[string]any{"path": f}))
 }
+
+func TestListAllowedDirectories_Wildcard(t *testing.T) {
+	a := t.TempDir()
+	tests := []struct {
+		name     string
+		dirs     []string
+		wantAll  []string
+		wantNone []string
+	}{
+		{"wildcard only reports wildcard", []string{"*"}, []string{"*"}, nil},
+		{"wildcard plus dir reports both", []string{"*", a}, []string{"*", filepath.Base(a)}, nil},
+		{"dir only has no wildcard entry", []string{a}, []string{filepath.Base(a)}, []string{"(any directory)"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, session, err := Connect(context.Background(), tt.dirs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			text := resultText(t, call(t, session, "list_allowed_directories", map[string]any{}))
+			for _, w := range tt.wantAll {
+				if !strings.Contains(text, w) {
+					t.Errorf("missing %q in %q", w, text)
+				}
+			}
+			for _, w := range tt.wantNone {
+				if strings.Contains(text, w) {
+					t.Errorf("unexpected %q in %q", w, text)
+				}
+			}
+		})
+	}
+}
+
+func TestSearchWithinFiles_SymlinkReporting(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires elevated privileges on Windows")
+	}
+	parent := t.TempDir()
+	sandbox := filepath.Join(parent, "sb")
+	outside := filepath.Join(parent, "out")
+	for _, d := range []string{sandbox, outside} {
+		if err := os.MkdirAll(d, 0750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	real := filepath.Join(sandbox, "real.txt")
+	_ = os.WriteFile(real, []byte("needle here\n"), 0640)
+	_ = os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("needle secret\n"), 0640)
+	if err := os.Symlink(real, filepath.Join(sandbox, "alias.txt")); err != nil {
+		t.Skipf("symlink: %v", err)
+	}
+	_ = os.Symlink(filepath.Join(outside, "secret.txt"), filepath.Join(sandbox, "escape.txt"))
+	_ = os.Symlink(filepath.Join(sandbox, "nope"), filepath.Join(sandbox, "broken.txt"))
+
+	_, session, err := Connect(context.Background(), []string{sandbox})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := call(t, session, "search_within_files", map[string]any{"path": sandbox, "pattern": "needle"})
+	assertAllowed(t, res)
+	text := resultText(t, res)
+	tests := []struct {
+		name string
+		frag string
+		want bool
+	}{
+		{"real file reported", "real.txt:1: needle here", true},
+		{"link reported under its own name", "alias.txt:1: needle here", true},
+		{"escaping link skipped", "secret", false},
+		{"broken link skipped", "broken.txt", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := strings.Contains(text, tt.frag); got != tt.want {
+				t.Errorf("contains(%q) = %v, want %v; output:\n%s", tt.frag, got, tt.want, text)
+			}
+		})
+	}
+}

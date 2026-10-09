@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestMemorySessionStore(t *testing.T) {
@@ -127,6 +128,79 @@ func TestMemorySessionStore(t *testing.T) {
 			if string(gotState) != id {
 				t.Errorf("state = %q, want %q", gotState, id)
 			}
+		}
+	})
+}
+
+func TestMemorySessionStore_BoundsAndAtomicity(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1000, 0)
+	newStore := func(max int, ttl time.Duration) *MemorySessionStore {
+		s := NewMemorySessionStore()
+		s.maxEntries, s.ttl = max, ttl
+		s.now = func() time.Time { return now }
+		return s
+	}
+
+	t.Run("SaveSessionIfAbsent only first wins", func(t *testing.T) {
+		s := newStore(10, time.Hour)
+		ok1, _ := s.SaveSessionIfAbsent(ctx, "a", "", []byte("1"))
+		ok2, _ := s.SaveSessionIfAbsent(ctx, "a", "", []byte("2"))
+		st, _, _ := s.GetSession(ctx, "a")
+		if !ok1 || ok2 || string(st) != "1" {
+			t.Errorf("ok1=%v ok2=%v state=%q", ok1, ok2, st)
+		}
+	})
+
+	t.Run("concurrent SaveSessionIfAbsent has exactly one winner", func(t *testing.T) {
+		s := newStore(10, time.Hour)
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+		wins := 0
+		for i := 0; i < 50; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if ok, _ := s.SaveSessionIfAbsent(ctx, "x", "", []byte("v")); ok {
+					mu.Lock()
+					wins++
+					mu.Unlock()
+				}
+			}()
+		}
+		wg.Wait()
+		if wins != 1 {
+			t.Errorf("wins = %d, want 1", wins)
+		}
+	})
+
+	t.Run("size cap evicts least recently used", func(t *testing.T) {
+		s := newStore(2, time.Hour)
+		_ = s.SaveSession(ctx, "a", "", nil)
+		now = now.Add(time.Second)
+		_ = s.SaveSession(ctx, "b", "", nil)
+		now = now.Add(time.Second)
+		_, _, _ = s.GetSession(ctx, "a") // refresh a
+		now = now.Add(time.Second)
+		_ = s.SaveSession(ctx, "c", "", nil)
+		if _, _, err := s.GetSession(ctx, "b"); !errors.Is(err, ErrSessionNotFound) {
+			t.Errorf("b should be evicted, err=%v", err)
+		}
+		if len(s.data) != 2 {
+			t.Errorf("len = %d, want 2", len(s.data))
+		}
+	})
+
+	t.Run("idle entries expire", func(t *testing.T) {
+		s := newStore(10, time.Minute)
+		_ = s.SaveSession(ctx, "a", "", nil)
+		now = now.Add(2 * time.Minute)
+		if _, _, err := s.GetSession(ctx, "a"); !errors.Is(err, ErrSessionNotFound) {
+			t.Errorf("err = %v, want not found", err)
+		}
+		ok, _ := s.SaveSessionIfAbsent(ctx, "a", "", nil)
+		if !ok {
+			t.Error("expired ID should be bindable")
 		}
 	})
 }

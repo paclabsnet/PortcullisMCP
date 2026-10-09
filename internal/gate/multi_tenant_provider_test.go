@@ -15,6 +15,7 @@
 package gate
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -97,4 +98,51 @@ func TestMultiTenantProvider_SessionIDPersistence(t *testing.T) {
 			t.Errorf("hijack attempt err = %v, want forbidden", err)
 		}
 	})
+}
+
+// TestMultiTenantProvider_BindRace verifies that when another request binds the
+// ID between GetSession and the save, the loser is validated against the
+// winner's fingerprint rather than overwriting it.
+func TestMultiTenantProvider_BindRace(t *testing.T) {
+	tests := []struct {
+		name          string
+		racerToken    string
+		wantForbidden bool
+	}{
+		{"racer same credential accepted", "tok-a", false},
+		{"racer different credential rejected", "tok-b", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mem := NewMemorySessionStore()
+			store := &racingStore{MemorySessionStore: mem, onMiss: func() {
+				_ = mem.SaveSession(context.Background(), "sdk-r", "", credentialFingerprint(tt.racerToken))
+			}}
+			p := NewMultiTenantProvider("X-User-Token", store, nil)
+			_, _, err := p.Authenticate(mtAuthReq("sdk-r", "tok-a"))
+			if tt.wantForbidden != (err != nil && strings.Contains(err.Error(), "forbidden")) {
+				t.Errorf("err = %v, wantForbidden = %v", err, tt.wantForbidden)
+			}
+			st, _, _ := mem.GetSession(context.Background(), "sdk-r")
+			if !bytes.Equal(st, credentialFingerprint(tt.racerToken)) {
+				t.Error("racer's binding was overwritten")
+			}
+		})
+	}
+}
+
+// racingStore simulates a concurrent bind landing right after a not-found Get.
+type racingStore struct {
+	*MemorySessionStore
+	onMiss func()
+	fired  bool
+}
+
+func (r *racingStore) GetSession(ctx context.Context, id string) ([]byte, string, error) {
+	st, u, err := r.MemorySessionStore.GetSession(ctx, id)
+	if err != nil && !r.fired {
+		r.fired = true
+		r.onMiss()
+	}
+	return st, u, err
 }

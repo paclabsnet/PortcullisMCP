@@ -68,8 +68,21 @@ func (p *MultiTenantProvider) Authenticate(r *http.Request) (string, string, err
 				// (trust on first use) so the ID stays stable across requests and
 				// later mismatches are rejected. Do NOT mint a replacement ID: the
 				// client would never learn it.
-				if err := p.sessions.SaveSession(ctx, sessionID, "", fp); err != nil {
+				// SaveSessionIfAbsent makes the bind atomic: if a concurrent request
+				// bound the ID first, validate against its fingerprint instead of
+				// overwriting it.
+				stored, err := p.sessions.SaveSessionIfAbsent(ctx, sessionID, "", fp)
+				if err != nil {
 					return "", "", err
+				}
+				if !stored {
+					existing, _, err := p.sessions.GetSession(ctx, sessionID)
+					if err != nil {
+						return "", "", err
+					}
+					if !bytes.Equal(existing, fp) {
+						return "", "", errors.New("forbidden: session fingerprint mismatch")
+					}
 				}
 			case err != nil:
 				return "", "", err
