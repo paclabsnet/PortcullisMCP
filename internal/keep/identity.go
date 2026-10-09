@@ -25,6 +25,7 @@ import (
 	"log/slog"
 	"math/big"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -113,9 +114,9 @@ func (n *hmacVerifyingNormalizer) Normalize(ctx context.Context, id shared.UserI
 	if id.SourceType != "oidc" && id.SourceType != "hmac" {
 		slog.Warn("keep: rejecting unverifiable identity source in hmac-verify mode",
 			"user_id", id.UserID,
-			"source", id.SourceType,
+			"source", sanitizeForLog(id.SourceType),
 		)
-		return shared.Principal{}, &shared.IdentityVerificationError{Reason: fmt.Sprintf("unverifiable identity source %q in hmac-verify mode", id.SourceType)}
+		return shared.Principal{}, &shared.IdentityVerificationError{Reason: "unverifiable identity source in hmac-verify mode"}
 	}
 
 	if id.RawToken == "" {
@@ -312,7 +313,7 @@ func (n *passthroughNormalizer) Normalize(_ context.Context, id shared.UserIdent
 		slog.Warn("keep: identity passthrough — claims are unverified and MUST NOT be used in production; "+
 			"set identity.accept_forged_identities=true to suppress this warning",
 			"user_id", id.UserID,
-			"source", id.SourceType,
+			"source", sanitizeForLog(id.SourceType),
 		)
 	}
 	return shared.Principal{
@@ -367,9 +368,9 @@ func (n *oidcVerifyingNormalizer) Normalize(ctx context.Context, id shared.UserI
 	if id.SourceType != "oidc" {
 		slog.Warn("keep: rejecting unverifiable identity source in oidc-verify mode",
 			"user_id", id.UserID,
-			"source", id.SourceType,
+			"source", sanitizeForLog(id.SourceType),
 		)
-		return shared.Principal{}, &shared.IdentityVerificationError{Reason: fmt.Sprintf("unverifiable identity source %q in oidc-verify mode", id.SourceType)}
+		return shared.Principal{}, &shared.IdentityVerificationError{Reason: "unverifiable identity source in oidc-verify mode"}
 	}
 
 	if id.RawToken == "" {
@@ -751,4 +752,13 @@ func buildPrincipalCache(ctx context.Context, storage cfgloader.StorageConfig, n
 	default:
 		return nil, fmt.Errorf("unknown storage backend %q for normalization cache: must be \"memory\" or \"redis\"", storage.Backend)
 	}
+}
+
+// sanitizeForLog quotes and truncates a client-supplied string for logging.
+func sanitizeForLog(v string) string {
+	const maxLen = 32
+	if len(v) > maxLen {
+		v = v[:maxLen] + "..."
+	}
+	return strconv.Quote(v)
 }

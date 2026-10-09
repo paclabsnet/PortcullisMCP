@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -23,6 +24,12 @@ func aliasTestRouter(aliasToReal map[string]string) *Router {
 		cfg:         BackendConfig{Name: "backend", Type: "stdio", Command: "echo"},
 		aliasToReal: aliasToReal,
 	}
+	// Derive the hidden set from the alias map (inverse of buildAliasIndex input).
+	toolMap := make(map[string]string, len(aliasToReal))
+	for alias, real := range aliasToReal {
+		toolMap[real] = alias
+	}
+	_, r.backends["backend"].hiddenNames = buildAliasIndex(toolMap)
 	r.backends["plain"] = &backendConn{
 		cfg: BackendConfig{Name: "plain", Type: "stdio", Command: "echo"},
 	}
@@ -132,4 +139,72 @@ func (c *countingPDP) GetStaticPolicy(_ context.Context, _ string) (json.RawMess
 func (c *countingPDP) Evaluate(_ context.Context, _ AuthorizedRequest) (shared.PDPResponse, error) {
 	c.calls++
 	return shared.PDPResponse{Decision: "allow"}, nil
+}
+
+func TestBuildAliasIndex(t *testing.T) {
+	tests := []struct {
+		name       string
+		toolMap    map[string]string // real -> alias
+		wantHidden []string
+		wantNil    bool
+	}{
+		{"empty", nil, nil, true},
+		{"simple", map[string]string{"delete_x": "safe_delete"}, []string{"delete_x"}, false},
+		{"real name that is another alias is not hidden",
+			map[string]string{"a": "b", "b": "c"}, []string{"a"}, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			a2r, hidden := buildAliasIndex(tc.toolMap)
+			if tc.wantNil {
+				if a2r != nil || hidden != nil {
+					t.Fatalf("want nil results, got %v %v", a2r, hidden)
+				}
+				return
+			}
+			if len(hidden) != len(tc.wantHidden) {
+				t.Fatalf("hidden = %v, want %v", hidden, tc.wantHidden)
+			}
+			for _, n := range tc.wantHidden {
+				if _, ok := hidden[n]; !ok {
+					t.Errorf("%q not hidden", n)
+				}
+			}
+		})
+	}
+}
+
+func TestSanitizeForLog(t *testing.T) {
+	tests := []struct{ name, in, want string }{
+		{"plain", "oidc", `"oidc"`},
+		{"newline escaped", "a\nb", `"a\nb"`},
+		{"truncated", strings.Repeat("x", 100), `"` + strings.Repeat("x", 32) + `..."`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sanitizeForLog(tc.in); got != tc.want {
+				t.Errorf("got %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestVerifyingNormalizers_DoNotReflectSourceType(t *testing.T) {
+	const evil = "<script>evil-source</script>"
+	norms := map[string]IdentityNormalizer{
+		"hmac": &hmacVerifyingNormalizer{},
+		"oidc": &oidcVerifyingNormalizer{},
+	}
+	for name, n := range norms {
+		t.Run(name, func(t *testing.T) {
+			_, err := n.Normalize(context.Background(), shared.UserIdentity{SourceType: evil})
+			var ive *shared.IdentityVerificationError
+			if !errors.As(err, &ive) {
+				t.Fatalf("err = %v, want IdentityVerificationError", err)
+			}
+			if strings.Contains(err.Error(), "evil-source") {
+				t.Errorf("error reflects client value: %q", err.Error())
+			}
+		})
+	}
 }

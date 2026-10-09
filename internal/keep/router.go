@@ -68,7 +68,8 @@ type backendConn struct {
 	cfg         BackendConfig
 	client      *mcp.Client
 	session     *mcp.ClientSession
-	aliasToReal map[string]string // alias → real backend tool name; nil if no aliases
+	aliasToReal map[string]string   // alias → real backend tool name; nil if no aliases
+	hiddenNames map[string]struct{} // real names exposed only under an alias; nil if none
 }
 
 // NewRouter creates a Router from the backend configs but does not yet connect.
@@ -803,18 +804,31 @@ func (r *Router) IsHiddenToolName(serverName, toolName string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	conn, ok := r.backends[serverName]
-	if !ok || len(conn.aliasToReal) == 0 {
+	if !ok {
 		return false
 	}
-	if _, isAlias := conn.aliasToReal[toolName]; isAlias {
-		return false
+	_, hidden := conn.hiddenNames[toolName]
+	return hidden
+}
+
+// buildAliasIndex derives the alias→real map and the set of hidden real names
+// from a ToolMap (real → alias). A real name that is itself an alias of
+// another tool is never hidden. Both results are nil when toolMap is empty.
+func buildAliasIndex(toolMap map[string]string) (map[string]string, map[string]struct{}) {
+	if len(toolMap) == 0 {
+		return nil, nil
 	}
-	for _, real := range conn.aliasToReal {
-		if real == toolName {
-			return true
+	aliasToReal := make(map[string]string, len(toolMap))
+	for realName, alias := range toolMap {
+		aliasToReal[alias] = realName
+	}
+	hidden := make(map[string]struct{}, len(toolMap))
+	for realName := range toolMap {
+		if _, isAlias := aliasToReal[realName]; !isAlias {
+			hidden[realName] = struct{}{}
 		}
 	}
-	return false
+	return aliasToReal, hidden
 }
 
 // resolveToolName returns the real backend tool name for the given alias, or
@@ -930,15 +944,7 @@ func (r *Router) Reload(ctx context.Context, backends []BackendConfig) error {
 		}
 	}
 	for _, conn := range r.backends {
-		if len(conn.cfg.ToolMap) == 0 {
-			conn.aliasToReal = nil
-		} else {
-			m := make(map[string]string, len(conn.cfg.ToolMap))
-			for realName, alias := range conn.cfg.ToolMap {
-				m[alias] = realName
-			}
-			conn.aliasToReal = m
-		}
+		conn.aliasToReal, conn.hiddenNames = buildAliasIndex(conn.cfg.ToolMap)
 	}
 
 	// Snapshot names and configs before releasing the lock so the survey and

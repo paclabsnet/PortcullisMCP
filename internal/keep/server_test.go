@@ -76,6 +76,10 @@ func (m *mockRouter) Reload(ctx context.Context, backends []BackendConfig) error
 	return nil
 }
 
+func (m *mockRouter) IsHiddenToolName(serverName, toolName string) bool {
+	return false
+}
+
 // mockNormalizer is a test implementation of IdentityNormalizer.
 type mockNormalizer struct {
 	err error
