@@ -125,6 +125,9 @@ func (r *Router) CallTool(ctx context.Context, serverName, toolName string, args
 		attribute.String("tool.name", toolName),
 	)
 
+	if r.IsHiddenToolName(serverName, toolName) {
+		return nil, fmt.Errorf("%w: %q", errUnknownTool, toolName)
+	}
 	backendToolName := r.resolveToolName(serverName, toolName)
 	identityType := r.backendType(serverName)
 
@@ -785,6 +788,33 @@ func (r *Router) applyIdentityExchange(ctx context.Context, serverName string) c
 		return withExchangedIdentity(ctx, nil) // fail-degraded: omit injection
 	}
 	return withExchangedIdentity(ctx, identity)
+}
+
+// errUnknownTool is returned when a caller uses the real (pre-alias) name of a
+// tool that the backend config exposes only under an alias.
+var errUnknownTool = errors.New("unknown tool")
+
+// IsHiddenToolName reports whether toolName is the real (pre-alias) name of a
+// tool that the named backend exposes only under an alias. Such names must be
+// treated as unknown so the PDP never evaluates, and the backend never
+// receives, a call made under a name the policy was not written for.
+// A name that is itself a configured alias is never hidden.
+func (r *Router) IsHiddenToolName(serverName, toolName string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	conn, ok := r.backends[serverName]
+	if !ok || len(conn.aliasToReal) == 0 {
+		return false
+	}
+	if _, isAlias := conn.aliasToReal[toolName]; isAlias {
+		return false
+	}
+	for _, real := range conn.aliasToReal {
+		if real == toolName {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveToolName returns the real backend tool name for the given alias, or
