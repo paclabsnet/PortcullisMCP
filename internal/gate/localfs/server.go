@@ -55,19 +55,58 @@ type Server struct {
 // from the local filesystem the server marks itself ready but will deny all
 // paths in resolve().
 func (s *Server) UpdatePolicy(sandboxDirs []string) error {
-	resolved := make([]string, 0, len(sandboxDirs))
+	resolved, wildcard, err := resolveSandboxDirs(sandboxDirs)
+	if err != nil {
+		return err
+	}
+	s.fs.setPolicy(resolved, wildcard)
+	return nil
+}
+
+// WildcardDir is the workspace entry that means "every path on the machine".
+const WildcardDir = "*"
+
+// resolveSandboxDirs symlink-resolves each directory, skipping missing ones.
+// A WildcardDir entry is not resolved; it is reported via the wildcard result.
+func resolveSandboxDirs(sandboxDirs []string) (resolved []string, wildcard bool, err error) {
+	resolved = make([]string, 0, len(sandboxDirs))
 	for _, d := range sandboxDirs {
-		r, err := filepath.EvalSymlinks(filepath.Clean(d))
-		if err != nil {
-			if os.IsNotExist(err) {
+		if d == WildcardDir {
+			wildcard = true
+			continue
+		}
+		r, evalErr := filepath.EvalSymlinks(filepath.Clean(d))
+		if evalErr != nil {
+			if os.IsNotExist(evalErr) {
 				continue
 			}
-			return fmt.Errorf("localfs: resolve sandbox dir %q: %w", d, err)
+			return nil, false, fmt.Errorf("localfs: resolve sandbox dir %q: %w", d, evalErr)
 		}
 		resolved = append(resolved, r)
 	}
-	s.fs.setPolicy(resolved)
-	return nil
+	return resolved, wildcard, nil
+}
+
+// RelativeBase returns the directory against which relative tool paths are
+// resolved for the given workspace directories: the first one that exists
+// (symlink-resolved), or the process working directory when the workspace is
+// only the wildcard. It returns "" when no base is available (all calls will be
+// denied). Gate's fast path uses this so that its forbidden/workspace checks
+// see exactly the same path that the localfs server will touch.
+func RelativeBase(dirs []string) string {
+	resolved, wildcard, err := resolveSandboxDirs(dirs)
+	if err != nil {
+		return ""
+	}
+	if len(resolved) > 0 {
+		return resolved[0]
+	}
+	if wildcard {
+		if wd, err := os.Getwd(); err == nil {
+			return wd
+		}
+	}
+	return ""
 }
 
 // NewServer creates an MCP server that exposes filesystem tools for any path
@@ -78,20 +117,13 @@ func (s *Server) UpdatePolicy(sandboxDirs []string) error {
 func NewServer(sandboxDirs []string) (*mcp.Server, *Server, error) {
 	s := &fsServer{}
 	if len(sandboxDirs) > 0 {
-		resolved := make([]string, 0, len(sandboxDirs))
-		for _, d := range sandboxDirs {
-			r, err := filepath.EvalSymlinks(filepath.Clean(d))
-			if err != nil {
-				if os.IsNotExist(err) {
-					continue
-				}
-				return nil, nil, fmt.Errorf("localfs: resolve sandbox dir %q: %w", d, err)
-			}
-			resolved = append(resolved, r)
+		resolved, wildcard, err := resolveSandboxDirs(sandboxDirs)
+		if err != nil {
+			return nil, nil, err
 		}
 		// Transition from degraded state if sandboxDirs was provided,
 		// even if none of them currently exist on disk on this machine.
-		s.setPolicy(resolved)
+		s.setPolicy(resolved, wildcard)
 	}
 
 	srv := mcp.NewServer(&mcp.Implementation{
@@ -216,10 +248,11 @@ type fsServer struct {
 	policyReady bool
 	sandbox     string   // primary sandbox dir; used for relative-path resolution
 	sandboxDirs []string // all configured sandbox dirs; resolve checks against each
+	wildcard    bool     // workspace contains "*": no containment restriction
 }
 
 // setPolicy atomically replaces the sandbox configuration and marks the server ready.
-func (s *fsServer) setPolicy(resolved []string) {
+func (s *fsServer) setPolicy(resolved []string, wildcard bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(resolved) > 0 {
@@ -228,15 +261,32 @@ func (s *fsServer) setPolicy(resolved []string) {
 		s.sandbox = ""
 	}
 	s.sandboxDirs = resolved
+	s.wildcard = wildcard
 	s.policyReady = true
 }
 
 // snapshotPolicy returns a consistent snapshot of the policy under RLock.
 // ready is false when no policy has been applied yet (degraded/startup state).
-func (s *fsServer) snapshotPolicy() (sandbox string, sandboxDirs []string, ready bool) {
+func (s *fsServer) snapshotPolicy() (sandbox string, sandboxDirs []string, wildcard, ready bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.sandbox, s.sandboxDirs, s.policyReady
+	return s.sandbox, s.sandboxDirs, s.wildcard, s.policyReady
+}
+
+// withinDirs reports whether full (absolute, symlink-resolved) lies inside one
+// of dirs. Names such as "..cache" are not treated as parent traversal.
+func withinDirs(full string, dirs []string) bool {
+	for _, d := range dirs {
+		rel, err := filepath.Rel(d, full)
+		if err != nil {
+			continue
+		}
+		if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // resolve returns an absolute, symlink-free path for the given input,
@@ -249,7 +299,7 @@ func (s *fsServer) snapshotPolicy() (sandbox string, sandboxDirs []string, ready
 // deeply nested new paths like /some/dir/a/b/c where none of the intermediates
 // exist yet.
 func (s *fsServer) resolve(path string) (string, error) {
-	sandbox, sandboxDirs, ready := s.snapshotPolicy()
+	sandbox, sandboxDirs, wildcard, ready := s.snapshotPolicy()
 	if !ready {
 		return "", fmt.Errorf("localfs: policy not yet available — waiting for Keep")
 	}
@@ -257,7 +307,15 @@ func (s *fsServer) resolve(path string) (string, error) {
 		return "", fmt.Errorf("path is required")
 	}
 	if !filepath.IsAbs(path) {
-		path = filepath.Join(sandbox, path)
+		base := sandbox
+		if base == "" && wildcard {
+			wd, err := os.Getwd()
+			if err != nil {
+				return "", fmt.Errorf("resolve path: %w", err)
+			}
+			base = wd
+		}
+		path = filepath.Join(base, path)
 	}
 	clean := filepath.Clean(path)
 
@@ -267,11 +325,8 @@ func (s *fsServer) resolve(path string) (string, error) {
 		resolved, err := filepath.EvalSymlinks(current)
 		if err == nil {
 			full := filepath.Join(append([]string{resolved}, missing...)...)
-			for _, sandboxDir := range sandboxDirs {
-				rel, relErr := filepath.Rel(sandboxDir, full)
-				if relErr == nil && !strings.HasPrefix(rel, "..") {
-					return full, nil
-				}
+			if wildcard || withinDirs(full, sandboxDirs) {
+				return full, nil
 			}
 			return "", fmt.Errorf("path is outside the sandbox directory")
 		}
@@ -831,7 +886,7 @@ func (s *fsServer) getFileInfo(_ context.Context, _ *mcp.CallToolRequest, in pat
 }
 
 func (s *fsServer) listAllowedDirectories(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
-	_, sandboxDirs, ready := s.snapshotPolicy()
+	_, sandboxDirs, _, ready := s.snapshotPolicy()
 	if !ready {
 		return errResult(fmt.Errorf("localfs: policy not yet available — waiting for Keep")), nil, nil
 	}
@@ -963,6 +1018,7 @@ func (s *fsServer) searchWithinFiles(_ context.Context, _ *mcp.CallToolRequest, 
 		text string
 	}
 	var matches []match
+	_, sandboxDirs, wildcard, _ := s.snapshotPolicy()
 
 	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -984,8 +1040,19 @@ func (s *fsServer) searchWithinFiles(_ context.Context, _ *mcp.CallToolRequest, 
 			return nil
 		}
 
+		// os.ReadFile follows file symlinks, which WalkDir does not report
+		// as such. Resolve and re-check containment so a link inside the
+		// sandbox cannot expose a file outside it.
+		realPath, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			return nil
+		}
+		if !wildcard && !withinDirs(realPath, sandboxDirs) {
+			return nil
+		}
+
 		// Read and search the file
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(realPath)
 		if err != nil {
 			return nil // skip unreadable files
 		}

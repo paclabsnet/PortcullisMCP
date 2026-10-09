@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/paclabsnet/PortcullisMCP/internal/gate/localfs"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 )
 
@@ -152,8 +153,19 @@ func (g *Gate) FastPath(_ context.Context, toolName string, args map[string]any)
 		return FastPathDeny, nil
 	}
 
+	// Relative paths are resolved exactly as the localfs server does (against
+	// the first workspace directory), not against the gate's cwd.
+	base := localfs.RelativeBase(policy.Workspace.EffectiveDirs())
+
 	var resolved []string
 	for _, p := range paths {
+		if !filepath.IsAbs(p) {
+			if base == "" {
+				// localfs has no base for relative paths; deny to be safe.
+				return FastPathDeny, nil
+			}
+			p = filepath.Join(base, p)
+		}
 		r, err := resolvePath(p)
 		if err != nil {
 			// Cannot resolve a path — deny to be safe.
