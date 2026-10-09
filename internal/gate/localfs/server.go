@@ -64,6 +64,50 @@ func (s *Server) UpdatePolicy(sandboxDirs []string) error {
 	return nil
 }
 
+// SetForbiddenDirs replaces the list of forbidden directories. Forbidden
+// subtrees are never listed, searched, or returned by any tool, and resolve()
+// rejects paths inside them, even when they lie within a sandbox directory.
+// Entries are symlink-resolved; nonexistent entries are tolerated (the deepest
+// existing ancestor is resolved and the remainder re-appended) so they stay
+// forbidden if created later.
+func (s *Server) SetForbiddenDirs(dirs []string) {
+	s.fs.setForbidden(resolveForbiddenDirs(dirs))
+}
+
+// resolveForbiddenDirs resolves each forbidden directory as far as the
+// filesystem allows. Both the symlink-resolved and the cleaned absolute form
+// are kept so the entry matches however a path is reached.
+func resolveForbiddenDirs(dirs []string) []string {
+	out := make([]string, 0, len(dirs)*2)
+	for _, d := range dirs {
+		if d == "" {
+			continue
+		}
+		abs, err := filepath.Abs(filepath.Clean(d))
+		if err != nil {
+			continue
+		}
+		out = append(out, abs)
+		current, missing := abs, []string(nil)
+		for {
+			r, err := filepath.EvalSymlinks(current)
+			if err == nil {
+				if full := filepath.Join(append([]string{r}, missing...)...); full != abs {
+					out = append(out, full)
+				}
+				break
+			}
+			parent := filepath.Dir(current)
+			if parent == current {
+				break
+			}
+			missing = append([]string{filepath.Base(current)}, missing...)
+			current = parent
+		}
+	}
+	return out
+}
+
 // WildcardDir is the workspace entry that means "every path on the machine".
 const WildcardDir = "*"
 
@@ -257,6 +301,32 @@ type fsServer struct {
 	sandbox     string   // primary sandbox dir; used for relative-path resolution
 	sandboxDirs []string // all configured sandbox dirs; resolve checks against each
 	wildcard    bool     // workspace contains "*": no containment restriction
+	forbidden   []string // resolved forbidden dirs; never listed, searched or resolved
+}
+
+func (s *fsServer) setForbidden(dirs []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.forbidden = dirs
+}
+
+// isForbidden reports whether p (absolute) lies in a forbidden directory,
+// either as given or after resolving symlinks. Unresolvable paths are checked
+// as given.
+func (s *fsServer) isForbidden(p string) bool {
+	s.mu.RLock()
+	forbidden := s.forbidden
+	s.mu.RUnlock()
+	if len(forbidden) == 0 {
+		return false
+	}
+	if withinDirs(p, forbidden) {
+		return true
+	}
+	if r, err := filepath.EvalSymlinks(p); err == nil && withinDirs(r, forbidden) {
+		return true
+	}
+	return false
 }
 
 // setPolicy atomically replaces the sandbox configuration and marks the server ready.
@@ -329,10 +399,13 @@ func (s *fsServer) resolve(path string) (string, error) {
 		resolved, err := filepath.EvalSymlinks(current)
 		if err == nil {
 			full := filepath.Join(append([]string{resolved}, missing...)...)
-			if wildcard || withinDirs(full, sandboxDirs) {
-				return full, nil
+			if !wildcard && !withinDirs(full, sandboxDirs) {
+				return "", fmt.Errorf("path is outside the sandbox directory")
 			}
-			return "", fmt.Errorf("path is outside the sandbox directory")
+			if s.isForbidden(full) {
+				return "", fmt.Errorf("path is within a forbidden directory")
+			}
+			return full, nil
 		}
 		if !os.IsNotExist(err) {
 			return "", fmt.Errorf("resolve path: %w", err)
@@ -653,12 +726,15 @@ func (s *fsServer) listDirectory(_ context.Context, _ *mcp.CallToolRequest, in p
 	if err != nil {
 		return errResult(err), nil, nil
 	}
-	lines := make([]string, len(entries))
-	for i, e := range entries {
+	lines := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if s.isForbidden(filepath.Join(resolved, e.Name())) {
+			continue
+		}
 		if e.IsDir() {
-			lines[i] = "[DIR] " + e.Name() + "/"
+			lines = append(lines, "[DIR] "+e.Name()+"/")
 		} else {
-			lines[i] = "[FILE] " + e.Name()
+			lines = append(lines, "[FILE] "+e.Name())
 		}
 	}
 	return textResult(strings.Join(lines, "\n")), nil, nil
@@ -690,6 +766,9 @@ func (s *fsServer) listDirectoryWithSizes(_ context.Context, _ *mcp.CallToolRequ
 	fileCount, dirCount := 0, 0
 
 	for _, e := range entries {
+		if s.isForbidden(filepath.Join(resolved, e.Name())) {
+			continue
+		}
 		info, err := e.Info()
 		if err != nil {
 			continue
@@ -775,6 +854,9 @@ func (s *fsServer) buildTree(dir string, excludePatterns []string) ([]*treeEntry
 		if isExcluded(e.Name(), excludePatterns) {
 			continue
 		}
+		if s.isForbidden(filepath.Join(dir, e.Name())) {
+			continue
+		}
 		if e.IsDir() {
 			children, err := s.buildTree(filepath.Join(dir, e.Name()), excludePatterns)
 			if err != nil {
@@ -838,6 +920,12 @@ func (s *fsServer) searchFiles(_ context.Context, _ *mcp.CallToolRequest, in map
 			return nil
 		}
 		if path == root {
+			return nil
+		}
+		if s.isForbidden(path) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		rel, _ := filepath.Rel(root, path)
@@ -1038,6 +1126,12 @@ func (s *fsServer) searchWithinFiles(_ context.Context, _ *mcp.CallToolRequest, 
 			}
 			return nil
 		}
+		if s.isForbidden(path) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		if d.IsDir() {
 			return nil
 		}
@@ -1059,6 +1153,10 @@ func (s *fsServer) searchWithinFiles(_ context.Context, _ *mcp.CallToolRequest, 
 		}
 		if !wildcard && !withinDirs(realPath, sandboxDirs) {
 			slog.Debug("localfs: search_within_files skipping link outside sandbox", "path", path)
+			return nil
+		}
+		if s.isForbidden(realPath) {
+			slog.Debug("localfs: search_within_files skipping link into forbidden dir", "path", path)
 			return nil
 		}
 		if realPath != path && isBinaryExt(strings.ToLower(filepath.Ext(realPath))) {

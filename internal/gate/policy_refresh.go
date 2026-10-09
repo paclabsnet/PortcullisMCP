@@ -140,6 +140,7 @@ func (g *Gate) fetchAndApplyLocalFSPolicy(ctx context.Context) error {
 		if err := g.localFSServer.UpdatePolicy(expanded); err != nil {
 			return fmt.Errorf("apply localfs sandbox policy: %w", err)
 		}
+		g.localFSServer.SetForbiddenDirs(expandedForbidden)
 	}
 
 	// Apply to Gate fast-path (forbidden + strategy + workspace checks).
