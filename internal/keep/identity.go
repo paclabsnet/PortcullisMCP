@@ -111,14 +111,11 @@ type hmacVerifyingNormalizer struct {
 
 func (n *hmacVerifyingNormalizer) Normalize(ctx context.Context, id shared.UserIdentity) (shared.Principal, error) {
 	if id.SourceType != "oidc" && id.SourceType != "hmac" {
-		slog.Warn("keep: unexpected identity source in hmac-verify mode — directory claims stripped",
+		slog.Warn("keep: rejecting unverifiable identity source in hmac-verify mode",
 			"user_id", id.UserID,
 			"source", id.SourceType,
 		)
-		return shared.Principal{
-			UserID:     id.UserID,
-			SourceType: id.SourceType,
-		}, nil
+		return shared.Principal{}, &shared.IdentityVerificationError{Reason: fmt.Sprintf("unverifiable identity source %q in hmac-verify mode", id.SourceType)}
 	}
 
 	if id.RawToken == "" {
@@ -368,14 +365,11 @@ type jwk struct {
 
 func (n *oidcVerifyingNormalizer) Normalize(ctx context.Context, id shared.UserIdentity) (shared.Principal, error) {
 	if id.SourceType != "oidc" {
-		slog.Warn("keep: non-oidc identity received in oidc-verify mode — directory claims stripped",
+		slog.Warn("keep: rejecting unverifiable identity source in oidc-verify mode",
 			"user_id", id.UserID,
 			"source", id.SourceType,
 		)
-		return shared.Principal{
-			UserID:     id.UserID,
-			SourceType: id.SourceType,
-		}, nil
+		return shared.Principal{}, &shared.IdentityVerificationError{Reason: fmt.Sprintf("unverifiable identity source %q in oidc-verify mode", id.SourceType)}
 	}
 
 	if id.RawToken == "" {
