@@ -562,13 +562,22 @@ func TestHMACVerifyingNormalizer(t *testing.T) {
 			wantErr: "exceeds max allowed age",
 		},
 		{
-			name:       "unexpected source type strips claims",
+			name:       "os source rejected",
 			normalizer: newHMACNormalizer(jwt.SigningMethodHS256, secret),
-			identity: shared.UserIdentity{
-				SourceType: "os",
-				UserID:     "alice",
-			},
-			wantUserID: "alice",
+			identity:   shared.UserIdentity{SourceType: "os", UserID: "alice"},
+			wantErr:    "unverifiable identity source",
+		},
+		{
+			name:       "unknown source rejected",
+			normalizer: newHMACNormalizer(jwt.SigningMethodHS256, secret),
+			identity:   shared.UserIdentity{SourceType: "bogus", UserID: "alice"},
+			wantErr:    "unverifiable identity source",
+		},
+		{
+			name:       "empty source rejected",
+			normalizer: newHMACNormalizer(jwt.SigningMethodHS256, secret),
+			identity:   shared.UserIdentity{SourceType: "", UserID: "alice"},
+			wantErr:    "unverifiable identity source",
 		},
 		{
 			name:       "missing raw token",
@@ -875,5 +884,32 @@ func TestRegisterNormalizer(t *testing.T) {
 	}
 	if _, ok := n.(*passthroughNormalizer); !ok {
 		t.Errorf("expected *passthroughNormalizer, got %T", n)
+	}
+}
+
+func TestOIDCVerifyingNormalizer_RejectsUnverifiableSources(t *testing.T) {
+	tests := []struct {
+		name   string
+		source string
+	}{
+		{"os", "os"},
+		{"hmac in oidc mode", "hmac"},
+		{"unknown", "bogus"},
+		{"empty", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			n := &oidcVerifyingNormalizer{}
+			got, err := n.Normalize(context.Background(), shared.UserIdentity{SourceType: tc.source, UserID: "mallory"})
+			if err == nil {
+				t.Fatalf("expected error, got principal %+v", got)
+			}
+			if !errors.Is(err, shared.ErrIdentityVerificationFailed) {
+				t.Errorf("error %v does not wrap ErrIdentityVerificationFailed", err)
+			}
+			if got.UserID != "" {
+				t.Errorf("UserID leaked: %q", got.UserID)
+			}
+		})
 	}
 }
