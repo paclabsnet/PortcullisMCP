@@ -113,8 +113,8 @@ type Gate struct {
 	escalations     EscalationTokenStore // handles escalation JWTs
 	identity        IdentitySource       // handles user info resolution
 	forwarder       KeepForwarder
-	escalationMgr   EscalationManager  // abstracts Guard interactions and pending escalation state
-	logger          DecisionLogger     // async decision log shipping
+	escalationMgr   EscalationManager // abstracts Guard interactions and pending escalation state
+	logger          DecisionLogger    // async decision log shipping
 	server          *mcp.Server
 	localFS         *mcp.ClientSession // in-process filesystem backend
 	localFSServer   *localfs.Server    // nil when localFS is disabled
@@ -218,6 +218,9 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 				return nil, fmt.Errorf("expand forbidden dir %q: %w", d, err)
 			}
 			expandedForbidden = append(expandedForbidden, exp)
+		}
+		if localFSServer != nil {
+			localFSServer.SetForbiddenDirs(expandedForbidden)
 		}
 		initialLocalFSPolicy = &localFSPolicy{
 			Workspace: SandboxConfig{Directories: initDirs},
@@ -492,7 +495,6 @@ func (g *Gate) handleLoginTool(ctx context.Context, force bool) string {
 	}
 	return "Login is not necessary."
 }
-
 
 func (g *Gate) Run(ctx context.Context) error {
 	// Start the decision log worker. It flushes remaining entries on ctx cancellation.

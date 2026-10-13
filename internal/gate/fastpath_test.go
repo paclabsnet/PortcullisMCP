@@ -630,3 +630,75 @@ func TestSandboxConfig_EffectiveDirs(t *testing.T) {
 		})
 	}
 }
+
+// TestFastPath_RelativePathUsesWorkspaceBase verifies that relative paths are
+// resolved the way localfs does (against the first workspace dir), not against
+// the gate process cwd.
+func TestFastPath_RelativePathUsesWorkspaceBase(t *testing.T) {
+	ws := t.TempDir()
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(ws, ".secrets"), 0750); err != nil {
+		t.Fatal(err)
+	}
+	forbidden := filepath.Join(ws, ".secrets")
+
+	old, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(home); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(old) })
+
+	tests := []struct {
+		name string
+		dirs []string
+		path string
+		want FastPathResult
+	}{
+		{"relative into forbidden dir under first workspace is denied", []string{ws, home}, ".secrets/key", FastPathDeny},
+		{"relative normal file in first workspace is allowed", []string{ws, home}, "notes.txt", FastPathAllow},
+		{"relative traversal out of workspace base forwards", []string{ws}, "../elsewhere/x", FastPathForward},
+		{"no existing workspace dir: relative path forwards to Keep", []string{filepath.Join(ws, "missing")}, "notes.txt", FastPathForward},
+		{"wildcard workspace relative path uses cwd base and is allowed", []string{"*"}, "notes.txt", FastPathAllow},
+		{"wildcard workspace absolute forbidden is denied", []string{"*"}, filepath.Join(ws, ".secrets", "key"), FastPathDeny},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := newTestGateWithStrategy(tt.dirs, []string{forbidden}, LocalFSStrategyConfig{})
+			got, _ := g.FastPath(context.Background(), "read_text_file", map[string]any{"path": tt.path})
+			if got != tt.want {
+				t.Errorf("FastPath(%q) = %s, want %s", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestFastPath_UnresolvableRelativeBase verifies that when no base exists for
+// relative paths, Keep decides, except that forbidden absolute paths and a
+// global deny strategy are still enforced by the Gate.
+func TestFastPath_UnresolvableRelativeBase(t *testing.T) {
+	ws := t.TempDir()
+	missing := filepath.Join(ws, "missing")
+	forbidden := filepath.Join(ws, ".secrets")
+	tests := []struct {
+		name  string
+		args  map[string]any
+		strat LocalFSStrategyConfig
+		want  FastPathResult
+	}{
+		{"relative only forwards", map[string]any{"path": "a.txt"}, LocalFSStrategyConfig{}, FastPathForward},
+		{"relative plus absolute forbidden denies", map[string]any{"source": "a.txt", "destination": filepath.Join(forbidden, "x")}, LocalFSStrategyConfig{}, FastPathDeny},
+		{"relative plus absolute in missing workspace still forwards", map[string]any{"source": "a.txt", "destination": filepath.Join(missing, "x")}, LocalFSStrategyConfig{}, FastPathForward},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := newTestGateWithStrategy([]string{missing}, []string{forbidden}, tt.strat)
+			got, _ := g.FastPath(context.Background(), "copy_file", tt.args)
+			if got != tt.want {
+				t.Errorf("got %s, want %s", got, tt.want)
+			}
+		})
+	}
+}

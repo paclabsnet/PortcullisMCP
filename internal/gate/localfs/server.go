@@ -31,6 +31,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -55,19 +56,109 @@ type Server struct {
 // from the local filesystem the server marks itself ready but will deny all
 // paths in resolve().
 func (s *Server) UpdatePolicy(sandboxDirs []string) error {
-	resolved := make([]string, 0, len(sandboxDirs))
-	for _, d := range sandboxDirs {
-		r, err := filepath.EvalSymlinks(filepath.Clean(d))
+	resolved, wildcard, err := resolveSandboxDirs(sandboxDirs)
+	if err != nil {
+		return err
+	}
+	s.fs.setPolicy(resolved, wildcard)
+	return nil
+}
+
+// SetForbiddenDirs replaces the list of forbidden directories. Forbidden
+// subtrees are never listed, searched, or returned by any tool, and resolve()
+// rejects paths inside them, even when they lie within a sandbox directory.
+// Entries are symlink-resolved; nonexistent entries are tolerated (the deepest
+// existing ancestor is resolved and the remainder re-appended) so they stay
+// forbidden if created later.
+func (s *Server) SetForbiddenDirs(dirs []string) {
+	s.fs.setForbidden(resolveForbiddenDirs(dirs))
+}
+
+// resolveForbiddenDirs resolves each forbidden directory as far as the
+// filesystem allows. Both the symlink-resolved and the cleaned absolute form
+// are kept so the entry matches however a path is reached.
+func resolveForbiddenDirs(dirs []string) []string {
+	out := make([]string, 0, len(dirs)*2)
+	for _, d := range dirs {
+		if d == "" {
+			continue
+		}
+		abs, err := filepath.Abs(filepath.Clean(d))
 		if err != nil {
-			if os.IsNotExist(err) {
+			continue
+		}
+		out = append(out, abs)
+		current, missing := abs, []string(nil)
+		for {
+			r, err := filepath.EvalSymlinks(current)
+			if err == nil {
+				if full := filepath.Join(append([]string{r}, missing...)...); full != abs {
+					out = append(out, full)
+				}
+				break
+			}
+			parent := filepath.Dir(current)
+			if parent == current {
+				break
+			}
+			missing = append([]string{filepath.Base(current)}, missing...)
+			current = parent
+		}
+	}
+	return out
+}
+
+// WildcardDir is the workspace entry that means "every path on the machine".
+const WildcardDir = "*"
+
+// resolveSandboxDirs symlink-resolves each directory, skipping missing ones.
+// A WildcardDir entry is not resolved; it is reported via the wildcard result.
+func resolveSandboxDirs(sandboxDirs []string) (resolved []string, wildcard bool, err error) {
+	resolved = make([]string, 0, len(sandboxDirs))
+	for _, d := range sandboxDirs {
+		if d == WildcardDir {
+			wildcard = true
+			continue
+		}
+		r, evalErr := filepath.EvalSymlinks(filepath.Clean(d))
+		if evalErr != nil {
+			if os.IsNotExist(evalErr) {
 				continue
 			}
-			return fmt.Errorf("localfs: resolve sandbox dir %q: %w", d, err)
+			return nil, false, fmt.Errorf("localfs: resolve sandbox dir %q: %w", d, evalErr)
 		}
 		resolved = append(resolved, r)
 	}
-	s.fs.setPolicy(resolved)
-	return nil
+	return resolved, wildcard, nil
+}
+
+// RelativeBase returns the directory against which relative tool paths are
+// resolved for the given workspace directories: the first one that exists
+// (symlink-resolved), or the process working directory when the workspace is
+// only the wildcard. It returns "" when no base is available (all calls will be
+// denied). Gate's fast path uses this so that its forbidden/workspace checks
+// see exactly the same path that the localfs server will touch.
+func RelativeBase(dirs []string) string {
+	resolved, wildcard, err := resolveSandboxDirs(dirs)
+	if err != nil {
+		return ""
+	}
+	return relativeBase(resolved, wildcard)
+}
+
+// relativeBase is the single implementation of the relative-path base rule:
+// the first resolved sandbox dir, else the cwd for a wildcard-only policy,
+// else "".
+func relativeBase(resolved []string, wildcard bool) string {
+	if len(resolved) > 0 {
+		return resolved[0]
+	}
+	if wildcard {
+		if wd, err := os.Getwd(); err == nil {
+			return wd
+		}
+	}
+	return ""
 }
 
 // NewServer creates an MCP server that exposes filesystem tools for any path
@@ -78,20 +169,13 @@ func (s *Server) UpdatePolicy(sandboxDirs []string) error {
 func NewServer(sandboxDirs []string) (*mcp.Server, *Server, error) {
 	s := &fsServer{}
 	if len(sandboxDirs) > 0 {
-		resolved := make([]string, 0, len(sandboxDirs))
-		for _, d := range sandboxDirs {
-			r, err := filepath.EvalSymlinks(filepath.Clean(d))
-			if err != nil {
-				if os.IsNotExist(err) {
-					continue
-				}
-				return nil, nil, fmt.Errorf("localfs: resolve sandbox dir %q: %w", d, err)
-			}
-			resolved = append(resolved, r)
+		resolved, wildcard, err := resolveSandboxDirs(sandboxDirs)
+		if err != nil {
+			return nil, nil, err
 		}
 		// Transition from degraded state if sandboxDirs was provided,
 		// even if none of them currently exist on disk on this machine.
-		s.setPolicy(resolved)
+		s.setPolicy(resolved, wildcard)
 	}
 
 	srv := mcp.NewServer(&mcp.Implementation{
@@ -216,10 +300,37 @@ type fsServer struct {
 	policyReady bool
 	sandbox     string   // primary sandbox dir; used for relative-path resolution
 	sandboxDirs []string // all configured sandbox dirs; resolve checks against each
+	wildcard    bool     // workspace contains "*": no containment restriction
+	forbidden   []string // resolved forbidden dirs; never listed, searched or resolved
+}
+
+func (s *fsServer) setForbidden(dirs []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.forbidden = dirs
+}
+
+// isForbidden reports whether p (absolute) lies in a forbidden directory,
+// either as given or after resolving symlinks. Unresolvable paths are checked
+// as given.
+func (s *fsServer) isForbidden(p string) bool {
+	s.mu.RLock()
+	forbidden := s.forbidden
+	s.mu.RUnlock()
+	if len(forbidden) == 0 {
+		return false
+	}
+	if withinDirs(p, forbidden) {
+		return true
+	}
+	if r, err := filepath.EvalSymlinks(p); err == nil && withinDirs(r, forbidden) {
+		return true
+	}
+	return false
 }
 
 // setPolicy atomically replaces the sandbox configuration and marks the server ready.
-func (s *fsServer) setPolicy(resolved []string) {
+func (s *fsServer) setPolicy(resolved []string, wildcard bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(resolved) > 0 {
@@ -228,15 +339,32 @@ func (s *fsServer) setPolicy(resolved []string) {
 		s.sandbox = ""
 	}
 	s.sandboxDirs = resolved
+	s.wildcard = wildcard
 	s.policyReady = true
 }
 
 // snapshotPolicy returns a consistent snapshot of the policy under RLock.
 // ready is false when no policy has been applied yet (degraded/startup state).
-func (s *fsServer) snapshotPolicy() (sandbox string, sandboxDirs []string, ready bool) {
+func (s *fsServer) snapshotPolicy() (sandbox string, sandboxDirs []string, wildcard, ready bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.sandbox, s.sandboxDirs, s.policyReady
+	return s.sandbox, s.sandboxDirs, s.wildcard, s.policyReady
+}
+
+// withinDirs reports whether full (absolute, symlink-resolved) lies inside one
+// of dirs. Names such as "..cache" are not treated as parent traversal.
+func withinDirs(full string, dirs []string) bool {
+	for _, d := range dirs {
+		rel, err := filepath.Rel(d, full)
+		if err != nil {
+			continue
+		}
+		if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // resolve returns an absolute, symlink-free path for the given input,
@@ -249,7 +377,7 @@ func (s *fsServer) snapshotPolicy() (sandbox string, sandboxDirs []string, ready
 // deeply nested new paths like /some/dir/a/b/c where none of the intermediates
 // exist yet.
 func (s *fsServer) resolve(path string) (string, error) {
-	sandbox, sandboxDirs, ready := s.snapshotPolicy()
+	_, sandboxDirs, wildcard, ready := s.snapshotPolicy()
 	if !ready {
 		return "", fmt.Errorf("localfs: policy not yet available — waiting for Keep")
 	}
@@ -257,7 +385,11 @@ func (s *fsServer) resolve(path string) (string, error) {
 		return "", fmt.Errorf("path is required")
 	}
 	if !filepath.IsAbs(path) {
-		path = filepath.Join(sandbox, path)
+		if base := relativeBase(sandboxDirs, wildcard); base != "" || !wildcard {
+			path = filepath.Join(base, path)
+		} else {
+			return "", fmt.Errorf("resolve path: cannot determine working directory")
+		}
 	}
 	clean := filepath.Clean(path)
 
@@ -267,13 +399,13 @@ func (s *fsServer) resolve(path string) (string, error) {
 		resolved, err := filepath.EvalSymlinks(current)
 		if err == nil {
 			full := filepath.Join(append([]string{resolved}, missing...)...)
-			for _, sandboxDir := range sandboxDirs {
-				rel, relErr := filepath.Rel(sandboxDir, full)
-				if relErr == nil && !strings.HasPrefix(rel, "..") {
-					return full, nil
-				}
+			if !wildcard && !withinDirs(full, sandboxDirs) {
+				return "", fmt.Errorf("path is outside the sandbox directory")
 			}
-			return "", fmt.Errorf("path is outside the sandbox directory")
+			if s.isForbidden(full) {
+				return "", fmt.Errorf("path is within a forbidden directory")
+			}
+			return full, nil
 		}
 		if !os.IsNotExist(err) {
 			return "", fmt.Errorf("resolve path: %w", err)
@@ -594,12 +726,15 @@ func (s *fsServer) listDirectory(_ context.Context, _ *mcp.CallToolRequest, in p
 	if err != nil {
 		return errResult(err), nil, nil
 	}
-	lines := make([]string, len(entries))
-	for i, e := range entries {
+	lines := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if s.isForbidden(filepath.Join(resolved, e.Name())) {
+			continue
+		}
 		if e.IsDir() {
-			lines[i] = "[DIR] " + e.Name() + "/"
+			lines = append(lines, "[DIR] "+e.Name()+"/")
 		} else {
-			lines[i] = "[FILE] " + e.Name()
+			lines = append(lines, "[FILE] "+e.Name())
 		}
 	}
 	return textResult(strings.Join(lines, "\n")), nil, nil
@@ -631,6 +766,9 @@ func (s *fsServer) listDirectoryWithSizes(_ context.Context, _ *mcp.CallToolRequ
 	fileCount, dirCount := 0, 0
 
 	for _, e := range entries {
+		if s.isForbidden(filepath.Join(resolved, e.Name())) {
+			continue
+		}
 		info, err := e.Info()
 		if err != nil {
 			continue
@@ -716,6 +854,9 @@ func (s *fsServer) buildTree(dir string, excludePatterns []string) ([]*treeEntry
 		if isExcluded(e.Name(), excludePatterns) {
 			continue
 		}
+		if s.isForbidden(filepath.Join(dir, e.Name())) {
+			continue
+		}
 		if e.IsDir() {
 			children, err := s.buildTree(filepath.Join(dir, e.Name()), excludePatterns)
 			if err != nil {
@@ -781,6 +922,12 @@ func (s *fsServer) searchFiles(_ context.Context, _ *mcp.CallToolRequest, in map
 		if path == root {
 			return nil
 		}
+		if s.isForbidden(path) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		rel, _ := filepath.Rel(root, path)
 		var matched bool
 		if recursive {
@@ -831,11 +978,15 @@ func (s *fsServer) getFileInfo(_ context.Context, _ *mcp.CallToolRequest, in pat
 }
 
 func (s *fsServer) listAllowedDirectories(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
-	_, sandboxDirs, ready := s.snapshotPolicy()
+	_, sandboxDirs, wildcard, ready := s.snapshotPolicy()
 	if !ready {
 		return errResult(fmt.Errorf("localfs: policy not yet available — waiting for Keep")), nil, nil
 	}
-	dirList := strings.Join(sandboxDirs, "\n  ")
+	dirs := append([]string(nil), sandboxDirs...)
+	if wildcard {
+		dirs = append(dirs, WildcardDir+" (any directory)")
+	}
+	dirList := strings.Join(dirs, "\n  ")
 	text := "All directories on this computer are accessible, subject to Portcullis policy enforcement.\n\n" +
 		"Fast-path directories (no policy check required):\n  " + dirList + "\n\n" +
 		"Operations outside the fast-path directories are sent to portcullis-keep for policy evaluation. " +
@@ -963,12 +1114,19 @@ func (s *fsServer) searchWithinFiles(_ context.Context, _ *mcp.CallToolRequest, 
 		text string
 	}
 	var matches []match
+	_, sandboxDirs, wildcard, _ := s.snapshotPolicy()
 
 	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
 		if isExcluded(d.Name(), excludePatterns) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if s.isForbidden(path) {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}
@@ -984,8 +1142,29 @@ func (s *fsServer) searchWithinFiles(_ context.Context, _ *mcp.CallToolRequest, 
 			return nil
 		}
 
+		// os.ReadFile follows file symlinks, which WalkDir does not report
+		// as such. Resolve and re-check containment so a link inside the
+		// sandbox cannot expose a file outside it.
+		realPath, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			// Typically a broken link; skip it but leave a trace.
+			slog.Debug("localfs: search_within_files skipping unresolvable path", "path", path, "error", err)
+			return nil
+		}
+		if !wildcard && !withinDirs(realPath, sandboxDirs) {
+			slog.Debug("localfs: search_within_files skipping link outside sandbox", "path", path)
+			return nil
+		}
+		if s.isForbidden(realPath) {
+			slog.Debug("localfs: search_within_files skipping link into forbidden dir", "path", path)
+			return nil
+		}
+		if realPath != path && isBinaryExt(strings.ToLower(filepath.Ext(realPath))) {
+			return nil
+		}
+
 		// Read and search the file
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(realPath)
 		if err != nil {
 			return nil // skip unreadable files
 		}
@@ -995,6 +1174,8 @@ func (s *fsServer) searchWithinFiles(_ context.Context, _ *mcp.CallToolRequest, 
 			return nil
 		}
 
+		// Report the path as walked (the name the user asked about, including
+		// any link name), not the symlink target the content was read from.
 		rel, _ := filepath.Rel(root, path)
 		lines := strings.Split(string(data), "\n")
 		for lineNum, line := range lines {

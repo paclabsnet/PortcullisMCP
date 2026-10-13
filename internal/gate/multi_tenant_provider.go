@@ -57,23 +57,43 @@ func (p *MultiTenantProvider) Authenticate(r *http.Request) (string, string, err
 	ctx := r.Context()
 
 	if p.sessions != nil {
+		fp := credentialFingerprint(rawToken)
 		if sessionID != "" {
 			storedState, _, err := p.sessions.GetSession(ctx, sessionID)
 			switch {
 			case errors.Is(err, ErrSessionNotFound):
-				sessionID = "" // treat as no session; allocate a new one below
+				// The SDK assigns Mcp-Session-Id itself (returned to the client on
+				// initialize) and we never see it before the first follow-up request.
+				// Bind the client-supplied ID to this credential fingerprint
+				// (trust on first use) so the ID stays stable across requests and
+				// later mismatches are rejected. Do NOT mint a replacement ID: the
+				// client would never learn it.
+				// SaveSessionIfAbsent makes the bind atomic: if a concurrent request
+				// bound the ID first, validate against its fingerprint instead of
+				// overwriting it.
+				stored, err := p.sessions.SaveSessionIfAbsent(ctx, sessionID, "", fp)
+				if err != nil {
+					return "", "", err
+				}
+				if !stored {
+					existing, _, err := p.sessions.GetSession(ctx, sessionID)
+					if err != nil {
+						return "", "", err
+					}
+					if !bytes.Equal(existing, fp) {
+						return "", "", errors.New("forbidden: session fingerprint mismatch")
+					}
+				}
 			case err != nil:
 				return "", "", err
 			default:
-				if !bytes.Equal(storedState, credentialFingerprint(rawToken)) {
+				if !bytes.Equal(storedState, fp) {
 					return "", "", errors.New("forbidden: session fingerprint mismatch")
 				}
 			}
-		}
-
-		if sessionID == "" {
+		} else {
+			// No client session yet (e.g. initialize): allocate an internal ID.
 			sessionID = uuid.NewString()
-			fp := credentialFingerprint(rawToken)
 			if err := p.sessions.SaveSession(ctx, sessionID, "", fp); err != nil {
 				return "", "", err
 			}

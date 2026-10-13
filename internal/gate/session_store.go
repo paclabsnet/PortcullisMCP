@@ -25,6 +25,9 @@ var ErrSessionNotFound = errors.New("session not found")
 // SessionStore manages stateful session storage for Gate.
 type SessionStore interface {
 	SaveSession(ctx context.Context, sessionID, userID string, state []byte) error
+	// SaveSessionIfAbsent atomically stores the session only if no session
+	// exists under sessionID, reporting whether it was stored.
+	SaveSessionIfAbsent(ctx context.Context, sessionID, userID string, state []byte) (bool, error)
 	GetSession(ctx context.Context, sessionID string) (state []byte, userID string, err error)
 	DeleteSession(ctx context.Context, sessionID string) error
 }

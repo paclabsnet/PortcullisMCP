@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/paclabsnet/PortcullisMCP/internal/gate/localfs"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 )
 
@@ -152,8 +153,30 @@ func (g *Gate) FastPath(_ context.Context, toolName string, args map[string]any)
 		return FastPathDeny, nil
 	}
 
+	// Relative paths are resolved exactly as the localfs server does (against
+	// the first workspace directory), not against the gate's cwd. The base is
+	// computed lazily so all-absolute calls pay nothing.
+	var (
+		base           string
+		baseComputed   bool
+		unresolvedRels bool
+	)
+
 	var resolved []string
 	for _, p := range paths {
+		if !filepath.IsAbs(p) {
+			if !baseComputed {
+				base = localfs.RelativeBase(policy.Workspace.EffectiveDirs())
+				baseComputed = true
+			}
+			if base == "" {
+				// No base can be determined here; Keep decides. Remaining
+				// (absolute) paths are still checked against forbidden dirs.
+				unresolvedRels = true
+				continue
+			}
+			p = filepath.Join(base, p)
+		}
 		r, err := resolvePath(p)
 		if err != nil {
 			// Cannot resolve a path — deny to be safe.
@@ -185,6 +208,11 @@ func (g *Gate) FastPath(_ context.Context, toolName string, args map[string]any)
 	case "verify":
 		return FastPathForward, nil
 	default: // "allow"
+		if unresolvedRels {
+			// A relative path had no resolvable base; it cannot be proven
+			// to lie in the workspace, so forward to Keep.
+			return FastPathForward, nil
+		}
 		// All paths must be within a single workspace directory (or workspace
 		// contains the "*" wildcard, which matches every path on the machine).
 		for _, dir := range policy.Workspace.EffectiveDirs() {

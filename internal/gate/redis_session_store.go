@@ -102,6 +102,20 @@ func (s *RedisSessionStore) SaveSession(ctx context.Context, sessionID, userID s
 	return nil
 }
 
+// SaveSessionIfAbsent atomically stores the session using SET NX. It reports
+// whether the session was stored (false when one already exists).
+func (s *RedisSessionStore) SaveSessionIfAbsent(ctx context.Context, sessionID, userID string, state []byte) (bool, error) {
+	data, err := json.Marshal(redisSessionValue{UserID: userID, State: state})
+	if err != nil {
+		return false, fmt.Errorf("marshal session: %w", err)
+	}
+	ok, err := s.client.SetNX(ctx, s.key(sessionID), data, s.ttl).Result()
+	if err != nil {
+		return false, fmt.Errorf("redis setnx session: %w", err)
+	}
+	return ok, nil
+}
+
 // GetSession retrieves the session from Redis.
 // Returns ErrSessionNotFound if the key does not exist or has expired.
 func (s *RedisSessionStore) GetSession(ctx context.Context, sessionID string) ([]byte, string, error) {

@@ -322,3 +322,28 @@ func TestRedisSessionStore_KeyPrefix(t *testing.T) {
 		}
 	})
 }
+
+func TestRedisSessionStore_SaveSessionIfAbsent(t *testing.T) {
+	ctx := context.Background()
+	store, _ := newTestRedisStore(t, 60)
+	tests := []struct {
+		name  string
+		state string
+		want  bool
+	}{
+		{"first save stores", "one", true},
+		{"second save does not overwrite", "two", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := store.SaveSessionIfAbsent(ctx, "nx", "", []byte(tt.state))
+			if err != nil || got != tt.want {
+				t.Fatalf("got=%v err=%v want=%v", got, err, tt.want)
+			}
+		})
+	}
+	st, _, _ := store.GetSession(ctx, "nx")
+	if string(st) != "one" {
+		t.Errorf("state = %q, want one", st)
+	}
+}

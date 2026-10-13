@@ -110,6 +110,9 @@ type MCPRouter interface {
 	CallTool(ctx context.Context, serverName, toolName string, args map[string]any) (*mcp.CallToolResult, error)
 	ListAllTools(ctx context.Context) ([]shared.AnnotatedTool, error)
 	Reload(ctx context.Context, backends []BackendConfig) error
+	// IsHiddenToolName reports real (pre-alias) tool names that must be
+	// rejected as unknown. Required so the guard cannot be silently skipped.
+	IsHiddenToolName(serverName, toolName string) bool
 }
 
 // Server is the portcullis-keep HTTP server.
@@ -351,6 +354,15 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 	}
 	if principal.UserID != "" {
 		ctx = withUserID(ctx, principal.UserID)
+	}
+
+	// Reject the real name of an aliased tool before the PDP sees it: policy is
+	// written against the alias, so the real name must look like an unknown tool.
+	if s.router.IsHiddenToolName(rawReq.ServerName, rawReq.ToolName) {
+		span.SetStatus(codes.Error, "unknown tool")
+		slog.WarnContext(ctx, "call rejected: real name of aliased tool", "server", rawReq.ServerName, "tool", rawReq.ToolName, "trace_id", traceID)
+		writeDeny(w, "unknown tool", traceID)
+		return
 	}
 
 	req := NewAuthorizedRequest(rawReq, principal)

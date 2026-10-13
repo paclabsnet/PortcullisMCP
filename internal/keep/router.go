@@ -68,7 +68,8 @@ type backendConn struct {
 	cfg         BackendConfig
 	client      *mcp.Client
 	session     *mcp.ClientSession
-	aliasToReal map[string]string // alias → real backend tool name; nil if no aliases
+	aliasToReal map[string]string   // alias → real backend tool name; nil if no aliases
+	hiddenNames map[string]struct{} // real names exposed only under an alias; nil if none
 }
 
 // NewRouter creates a Router from the backend configs but does not yet connect.
@@ -125,6 +126,9 @@ func (r *Router) CallTool(ctx context.Context, serverName, toolName string, args
 		attribute.String("tool.name", toolName),
 	)
 
+	if r.IsHiddenToolName(serverName, toolName) {
+		return nil, fmt.Errorf("%w: %q", errUnknownTool, toolName)
+	}
 	backendToolName := r.resolveToolName(serverName, toolName)
 	identityType := r.backendType(serverName)
 
@@ -787,6 +791,46 @@ func (r *Router) applyIdentityExchange(ctx context.Context, serverName string) c
 	return withExchangedIdentity(ctx, identity)
 }
 
+// errUnknownTool is returned when a caller uses the real (pre-alias) name of a
+// tool that the backend config exposes only under an alias.
+var errUnknownTool = errors.New("unknown tool")
+
+// IsHiddenToolName reports whether toolName is the real (pre-alias) name of a
+// tool that the named backend exposes only under an alias. Such names must be
+// treated as unknown so the PDP never evaluates, and the backend never
+// receives, a call made under a name the policy was not written for.
+// A name that is itself a configured alias is never hidden.
+func (r *Router) IsHiddenToolName(serverName, toolName string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	conn, ok := r.backends[serverName]
+	if !ok {
+		return false
+	}
+	_, hidden := conn.hiddenNames[toolName]
+	return hidden
+}
+
+// buildAliasIndex derives the alias→real map and the set of hidden real names
+// from a ToolMap (real → alias). A real name that is itself an alias of
+// another tool is never hidden. Both results are nil when toolMap is empty.
+func buildAliasIndex(toolMap map[string]string) (map[string]string, map[string]struct{}) {
+	if len(toolMap) == 0 {
+		return nil, nil
+	}
+	aliasToReal := make(map[string]string, len(toolMap))
+	for realName, alias := range toolMap {
+		aliasToReal[alias] = realName
+	}
+	hidden := make(map[string]struct{}, len(toolMap))
+	for realName := range toolMap {
+		if _, isAlias := aliasToReal[realName]; !isAlias {
+			hidden[realName] = struct{}{}
+		}
+	}
+	return aliasToReal, hidden
+}
+
 // resolveToolName returns the real backend tool name for the given alias, or
 // the original name unchanged if no alias mapping exists for it.
 func (r *Router) resolveToolName(serverName, toolName string) string {
@@ -900,15 +944,7 @@ func (r *Router) Reload(ctx context.Context, backends []BackendConfig) error {
 		}
 	}
 	for _, conn := range r.backends {
-		if len(conn.cfg.ToolMap) == 0 {
-			conn.aliasToReal = nil
-		} else {
-			m := make(map[string]string, len(conn.cfg.ToolMap))
-			for realName, alias := range conn.cfg.ToolMap {
-				m[alias] = realName
-			}
-			conn.aliasToReal = m
-		}
+		conn.aliasToReal, conn.hiddenNames = buildAliasIndex(conn.cfg.ToolMap)
 	}
 
 	// Snapshot names and configs before releasing the lock so the survey and
