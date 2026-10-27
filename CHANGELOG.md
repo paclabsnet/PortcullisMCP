@@ -1,3 +1,25 @@
+## [0.5.2]
+
+### Added
+
+- Multi-tenant escalation support: Gate can operate in single-tenant (individual user) or multi-tenant (AI-enabled console) mode, with escalation scoped per-session or per-fingerprint
+- Redis-backed pending and token stores for multi-tenant deployments, with context-partitioned keys
+- Lazy Claim pattern: escalation tokens are claimed synchronously on agent retry rather than via background polling
+- Parallel escalation rulesets: the `escalate` field in policy data is now an array, allowing multiple independent escalation paths per tool (e.g., clerk path and developer path)
+- Atlassian Rovo MCP integration tested and documented
+- Demo stack updated to support multiple concurrent users with per-user escalation flows
+- `disable_customer` tool added to mock enterprise API with custom policy (admin=allow, non-admin=workflow)
+
+### Fixed
+
+- Gate: consistent relative path resolution and symlink containment for local filesystem tools
+- Gate: recursive localfs tools are now kept out of forbidden directories
+- Gate: multi-tenant session IDs are persisted and fingerprint is enforced across reconnects
+- Gate: on Windows, prevent double-launch of Gate instances by the MCP client
+- Keep: alias guard now rejects requests using the real name of an aliased tool
+- Keep: identity sources that cannot be verified are rejected in strict verify modes
+- Keep: hardened error handling for identity and alias edge cases
+
 ## [ 0.4.2]
 
 ### Added
