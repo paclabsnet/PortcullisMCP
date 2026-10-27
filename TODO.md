@@ -1,6 +1,6 @@
 # Feature Set
 
-I wnat to change the way we manage the policy used by portcullis-localfs.  Currently, it is held in the YAML controlled by
+I want to change the way we manage the policy used by portcullis-localfs.  Currently, it is held in the YAML controlled by
 Portcullis-Gate
 
 I want to change the structure of the YAML to allow for a 'keep-driven' fileystem policy, where portcullis-localfs pulls the

@@ -145,3 +145,5 @@ untracked_notes.md
 logs
 claude_mcp_logs
 
+policies/rego/build
+

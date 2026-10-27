@@ -4,6 +4,48 @@ Some of these tasks were deferred from Phase 2 because they are complicated and 
 cloud resources
 
 
+### Task: MCP Activity Log: Keep should be able to log the MCP requests and responses for troubleshooting and monitoring
+
+#### Problem
+
+An organization that wants to keep track of what the agents are doing will naturally want to know the MCP tool requests and responses associated with each agent.  This allows us to better reverse engineer how an agent came to a particular decision, and also to detect
+how an agent might be trying to exploit a weakness to perform unauthorized activities
+
+#### Proposed Solution
+We will modify Keep in the following ways:
+1. We will get rid of the decision_log facility, it is not needed
+2. We will add an mcp_activity_log facility
+3. We will modify Gate to always include the agent information (type and version) as part of the EnrichedMCPRequest
+4. We will only log the MCP tool activity that goes through Keep - in other words, if the agent is using the localfs tool, we won't capture that (for now)
+
+#### Implementation
+MCP tool requests and responses are logged to a user-specified log file.  One line for each request and response, and we will enrich this with additional metadata about the user, the time and date and any other useful information.  The goal here is that it will be relatively easy to isolate the actions of a specific agent instance, so we can rebuild its entire "flight history"
+
+We will optionally include the PDP decision associated with the request as part of the tool request log entry (this will be a configuration setting)
+
+We will build this logging facility to be modular, so we can add 3rd party integrations in the future
+
+The logging facility should rotate automatically according to standard rotation rules
+
+We anticipate that the log records will be captured by an SIEM for later analysis, so the location of the log files and/or directory might be substantially different from the location used for logging the behavior of Keep itself.
+
+All of this should be configurable, with sensible defaults
+
+
+
+#### Open Questions
+
+1) if an agent spaws sub-agents, should we attribute all of this activity to the parent agent, or ensure that we can separate the sub-agent tool activity from the parent?
+
+2) including the localfs activity might be required for a high-security environment, we may need to capture this information in the future.  
+
+3) Alternatively, in a high-security environment, do we even want to let the tool use the local filesystem?
+
+
+
+
+
+
 ### Task: Allow Gate to act as a Proxy for third-party MCPs that shouldn't be unified within the Portcullis MCP
 
 #### Problem
