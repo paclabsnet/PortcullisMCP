@@ -38,7 +38,7 @@ func TestSingleTenantProvider_Capabilities(t *testing.T) {
 // TestMultiTenantProvider_Capabilities verifies that MultiTenantProvider
 // disables all Gate features.
 func TestMultiTenantProvider_Capabilities(t *testing.T) {
-	p := NewMultiTenantProvider("", nil, nil)
+	p := NewMultiTenantProvider("", nil)
 	caps := p.Capabilities()
 
 	for name, got := range map[string]bool{

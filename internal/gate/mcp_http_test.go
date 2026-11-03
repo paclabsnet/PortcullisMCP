@@ -61,7 +61,7 @@ func newTestHandler(
 	}
 	var provider TenancyProvider
 	if tenancy == "multi" {
-		provider = NewMultiTenantProvider(tokenHeader, sessions, nil)
+		provider = NewMultiTenantProvider(tokenHeader, sessions)
 	} else {
 		provider = NewSingleTenantProvider(identity, tokenHeader)
 	}
@@ -235,7 +235,7 @@ func TestMCPHTTPMiddleware(t *testing.T) {
 				},
 			},
 		}
-		h := NewMCPHTTPHandler(srv, nil, cfg, NewMultiTenantProvider("X-User-Token", store, nil))
+		h := NewMCPHTTPHandler(srv, nil, cfg, NewMultiTenantProvider("X-User-Token", store))
 		h.sdkHandler = http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 			capturedCtx = r.Context()
 		})
@@ -284,7 +284,7 @@ func TestMCPHTTPMiddleware(t *testing.T) {
 				},
 			},
 		}
-		h := NewMCPHTTPHandler(srv, nil, cfg, NewMultiTenantProvider("X-User-Token", store, nil))
+		h := NewMCPHTTPHandler(srv, nil, cfg, NewMultiTenantProvider("X-User-Token", store))
 		// Replace the sdk handler with a capturing stub.
 		h.sdkHandler = http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 			capturedCtx = r.Context()

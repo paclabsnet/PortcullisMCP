@@ -78,9 +78,6 @@ responsibility:
 
   escalation:
     token_store: "~/.portcullis/tokens.json"
-  # decision_logs:
-  #   flush_interval: 30
-  #   max_batch_size: 100
   # agent_interaction:
   #   instructions:
   #     require_approval: |

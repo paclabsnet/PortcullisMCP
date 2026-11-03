@@ -112,6 +112,14 @@ type EscalationToken struct {
 	GrantedBy string `json:"granted_by"` // display name of approver
 }
 
+// AgentInfo carries the MCP client identity captured during the initialize handshake.
+// Gate extracts clientInfo from the MCP protocol initialize request and propagates
+// it to Keep via EnrichedMCPRequest so that activity log records include the agent name.
+type AgentInfo struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
 // EnrichedMCPRequest is the payload portcullis-gate sends to portcullis-keep
 // for every tool call that is not handled by the local fast-path.
 type EnrichedMCPRequest struct {
@@ -124,6 +132,9 @@ type EnrichedMCPRequest struct {
 	ToolName         string            `json:"tool_name"`
 	Arguments        map[string]any    `json:"arguments"`
 	UserIdentity     UserIdentity      `json:"user_identity"`
+	// Agent carries the MCP client identity from the initialize handshake.
+	// Populated by Gate when clientInfo is available; zero value when not captured.
+	Agent            AgentInfo         `json:"agent,omitempty"`
 	EscalationTokens []EscalationToken `json:"escalation_tokens"`
 	SessionID        string            `json:"session_id"`
 	// TraceID is the single correlation identifier for this request.

@@ -356,7 +356,6 @@ type ResponsibilityConfig struct {
 	Tools            ToolsConfig            `yaml:"tools"`
 	AgentInteraction AgentInteractionConfig `yaml:"agent_interaction"`
 	Escalation       EscalationConfig       `yaml:"escalation"`
-	DecisionLogs     DecisionLogBatchConfig `yaml:"decision_logs"`
 }
 
 // ToolsConfig groups all tool-provider configurations.
@@ -505,11 +504,6 @@ func (c SandboxConfig) EffectiveDirs() []string {
 		add(d)
 	}
 	return out
-}
-
-type DecisionLogBatchConfig struct {
-	FlushInterval int `yaml:"flush_interval"` // seconds between flushes (default: 30)
-	MaxBatchSize  int `yaml:"max_batch_size"` // max entries per batch (default: 100)
 }
 
 // DefaultManagementAPIPort is the port used for the Gate management API when

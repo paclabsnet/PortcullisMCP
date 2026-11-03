@@ -235,13 +235,54 @@ func setupLogging(cfg LoggingConfig, mode, levelOverride string, w io.Writer) er
 	return nil
 }
 
-// DecisionLogConfig defines how policy decisions are recorded and dispatched.
-type DecisionLogConfig struct {
-	Enabled       bool              `yaml:"enabled"`
-	BufferSize    int               `yaml:"buffer_size"`
-	FlushInterval int               `yaml:"flush_interval"`
-	MaxBatchSize  int               `yaml:"max_batch_size"`
-	URL           string            `yaml:"url"`
-	Headers       map[string]string `yaml:"headers"`
-	Console       bool              `yaml:"console"`
+// Activity log defaults. All are used by MCPActivityLogConfig.ApplyDefaults and
+// referenced directly by any code that needs a safe zero-guard fallback.
+const (
+	DefaultMaxPayloadBytes = 4096  // preview/truncation cap per record field
+	DefaultMaxSizeMB       = 100   // rotate log file after this many MB
+	DefaultMaxBackups      = 10    // number of rotated files to retain
+	DefaultMaxAgeDays      = 30    // delete rotated files older than this
+	DefaultBufferSize      = 10000 // async channel entries
+)
+
+// MCPActivityLogConfig defines the Keep MCP activity log settings.
+// Set enabled: true to activate. All other fields have defaults applied by ApplyDefaults.
+type MCPActivityLogConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	// File is the path to the rotating log file. Set to "stdout" to stream to stdout.
+	// Default: "/var/log/portcullis/mcp-activity.log"
+	File              string `yaml:"file"`
+	MaxSizeMB         int    `yaml:"max_size_mb"`
+	MaxBackups        int    `yaml:"max_backups"`
+	MaxAgeDays        int    `yaml:"max_age_days"`
+	// Compress controls gzip compression of rotated files. Default: false (set true in production).
+	Compress          bool   `yaml:"compress"`
+	// IncludePDPDecision controls whether pdp_decision and pdp_reason appear in request records.
+	// Default: false (set true to include PDP verdicts in activity records).
+	IncludePDPDecision bool   `yaml:"include_pdp_decision"`
+	TruncatePayloads   bool   `yaml:"truncate_payloads"`
+	MaxPayloadBytes    int    `yaml:"max_payload_bytes"`
+	BufferSize         int    `yaml:"buffer_size"`
+}
+
+// ApplyDefaults fills zero-value fields with their service defaults.
+func (c *MCPActivityLogConfig) ApplyDefaults() {
+	if c.File == "" {
+		c.File = "/var/log/portcullis/mcp-activity.log"
+	}
+	if c.MaxSizeMB == 0 {
+		c.MaxSizeMB = DefaultMaxSizeMB
+	}
+	if c.MaxBackups == 0 {
+		c.MaxBackups = DefaultMaxBackups
+	}
+	if c.MaxAgeDays == 0 {
+		c.MaxAgeDays = DefaultMaxAgeDays
+	}
+	if c.MaxPayloadBytes == 0 {
+		c.MaxPayloadBytes = DefaultMaxPayloadBytes
+	}
+	if c.BufferSize == 0 {
+		c.BufferSize = DefaultBufferSize
+	}
 }

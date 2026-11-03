@@ -86,23 +86,6 @@ func (f *Forwarder) ListTools(ctx context.Context, identity shared.UserIdentity,
 	return tools, nil
 }
 
-// SendLogs sends a batch of decision log entries to Keep.
-// This is best-effort — errors are logged but not returned.
-func (f *Forwarder) SendLogs(ctx context.Context, entries []DecisionLogEntry) error {
-	if len(entries) == 0 {
-		return nil
-	}
-	batch := struct {
-		APIVersion string             `json:"api_version,omitempty"`
-		Entries    []DecisionLogEntry `json:"entries"`
-	}{
-		APIVersion: shared.APIVersion,
-		Entries:    entries,
-	}
-	var result map[string]interface{}
-	return f.post(ctx, "/log", batch, &result)
-}
-
 // GetStaticPolicy fetches a static tool configuration from Keep's /config/{resource} endpoint.
 func (f *Forwarder) GetStaticPolicy(ctx context.Context, resource string) (json.RawMessage, error) {
 	var raw json.RawMessage

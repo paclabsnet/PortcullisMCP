@@ -45,7 +45,6 @@ func TestAuthMiddleware_ValidToken(t *testing.T) {
 		pdp:         &mockPDP{decision: "allow", reason: "test"},
 		router:      &mockRouter{},
 		workflow:    &mockWorkflow{},
-		decisionLog: NewDecisionLogger(cfgloader.DecisionLogConfig{Enabled: false}),
 		normalizer:  &passthroughNormalizer{silenced: true},
 	}
 
@@ -91,7 +90,6 @@ func TestAuthMiddleware_InvalidToken(t *testing.T) {
 		pdp:         &mockPDP{decision: "allow", reason: "test"},
 		router:      &mockRouter{},
 		workflow:    &mockWorkflow{},
-		decisionLog: NewDecisionLogger(cfgloader.DecisionLogConfig{Enabled: false}),
 		normalizer:  &passthroughNormalizer{silenced: true},
 	}
 
@@ -170,7 +168,6 @@ func TestAuthMiddleware_Disabled(t *testing.T) {
 		pdp:         &mockPDP{decision: "allow", reason: "test"},
 		router:      &mockRouter{},
 		workflow:    &mockWorkflow{},
-		decisionLog: NewDecisionLogger(cfgloader.DecisionLogConfig{Enabled: false}),
 		normalizer:  &passthroughNormalizer{silenced: true},
 	}
 

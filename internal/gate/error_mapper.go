@@ -21,7 +21,6 @@ import (
 	"log/slog"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
@@ -118,21 +117,9 @@ func (g *Gate) policyErrToResult(ctx context.Context, err error, toolName, trace
 	var identityErr *shared.IdentityVerificationError
 	var guardUnavailableErr *GuardUnavailableError
 
-	// When escalation is disabled, intercept EscalationPendingError: emit a SIEM
-	// log and return the configured marker instead of the Guard approval URL.
+	// When escalation is disabled, intercept EscalationPendingError and return
+	// the configured marker instead of the Guard approval URL.
 	if g.cfg.Escalation == "disabled" && errors.As(err, &escalationErr) {
-		if g.logger != nil {
-			sid, _ := SessionIDFromContext(ctx)
-			g.logger.Log(DecisionLogEntry{
-				Timestamp: time.Now().UTC(),
-				SessionID: sid,
-				TraceID:   traceID,
-				ToolName:  toolName,
-				Decision:  "deny",
-				Reason:    "escalation disabled: escalation intercepted",
-				Source:    "gate-policy",
-			})
-		}
 		marker := g.cfg.Responsibility.Escalation.NoEscalationMarker
 		if marker == "" {
 			marker = "Access denied."
@@ -164,18 +151,6 @@ func (g *Gate) policyErrToResult(ctx context.Context, err error, toolName, trace
 		effectiveTraceID := denyErr.TraceID
 		if effectiveTraceID == "" {
 			effectiveTraceID = traceID
-		}
-		if g.logger != nil {
-			sid, _ := SessionIDFromContext(ctx)
-			g.logger.Log(DecisionLogEntry{
-				Timestamp: time.Now().UTC(),
-				SessionID: sid,
-				TraceID:   effectiveTraceID,
-				ToolName:  toolName,
-				Decision:  "deny",
-				Reason:    denyErr.Reason,
-				Source:    "gate-policy",
-			})
 		}
 		return &mcp.CallToolResult{
 			IsError: true,

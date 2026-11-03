@@ -127,7 +127,6 @@ func TestServer_HandleCall_Allow(t *testing.T) {
 		pdp:         pdp,
 		router:      router,
 		workflow:    &mockWorkflow{},
-		decisionLog: NewDecisionLogger(cfgloader.DecisionLogConfig{Enabled: false}),
 		normalizer:  &passthroughNormalizer{silenced: true},
 	}
 
@@ -176,7 +175,6 @@ func TestServer_HandleCall_Deny(t *testing.T) {
 		pdp:         pdp,
 		router:      &mockRouter{},
 		workflow:    &mockWorkflow{},
-		decisionLog: NewDecisionLogger(cfgloader.DecisionLogConfig{Enabled: false}),
 		normalizer:  &passthroughNormalizer{silenced: true},
 	}
 
@@ -229,7 +227,6 @@ func TestServer_HandleCall_Escalate(t *testing.T) {
 		pdp:         pdp,
 		router:      &mockRouter{},
 		workflow:    workflow,
-		decisionLog: NewDecisionLogger(cfgloader.DecisionLogConfig{Enabled: false}),
 		normalizer:  &passthroughNormalizer{silenced: true},
 	}
 
@@ -272,7 +269,6 @@ func newServerWithNormalizer(normalizer IdentityNormalizer) *Server {
 		pdp:         &mockPDP{decision: "allow"},
 		router:      &mockRouter{callToolResult: &mcp.CallToolResult{}},
 		workflow:    &mockWorkflow{},
-		decisionLog: NewDecisionLogger(cfgloader.DecisionLogConfig{Enabled: false}),
 		normalizer:  normalizer,
 	}
 }
