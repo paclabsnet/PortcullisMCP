@@ -98,7 +98,6 @@ func TestAuthMiddleware_ExemptHealth(t *testing.T) {
 	}
 	srv := &Server{
 		cfg:         cfg,
-		decisionLog: NewDecisionLogger(cfgloader.DecisionLogConfig{Enabled: false}),
 	}
 
 	mux := http.NewServeMux()

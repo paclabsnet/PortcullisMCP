@@ -12,7 +12,6 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
-	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
 )
 
 // aliasTestRouter returns a Router whose "backend" has the given alias map
@@ -103,10 +102,9 @@ func TestHandleCall_AliasedToolNames(t *testing.T) {
 			pdp := &countingPDP{}
 			rr := &recordingRouter{Router: aliasTestRouter(tc.aliases)}
 			srv := &Server{
-				normalizer:  &passthroughNormalizer{silenced: true},
-				pdp:         pdp,
-				router:      rr,
-				decisionLog: NewDecisionLogger(cfgloader.DecisionLogConfig{Enabled: false}),
+				normalizer: &passthroughNormalizer{silenced: true},
+				pdp:        pdp,
+				router:     rr,
 			}
 			body, _ := json.Marshal(shared.EnrichedMCPRequest{
 				ServerName:   tc.server,

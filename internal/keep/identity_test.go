@@ -134,7 +134,6 @@ func TestNormalizeIdentity_HandleCallIntegration(t *testing.T) {
 		pdp:         pdp,
 		router:      &mockRouter{callToolResult: &mcp.CallToolResult{}},
 		workflow:    &mockWorkflow{requestID: "wf-1"},
-		decisionLog: NewDecisionLogger(cfgloader.DecisionLogConfig{Enabled: false}),
 	}
 
 	req := shared.EnrichedMCPRequest{

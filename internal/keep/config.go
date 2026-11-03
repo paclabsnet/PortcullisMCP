@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -58,16 +59,16 @@ func LoadConfig(ctx context.Context, path string) (Config, cfgloader.PostureRepo
 
 // Config holds the full portcullis-keep configuration loaded from keep.yaml.
 type Config struct {
-	Mode           string                     `yaml:"mode"`
-	Server         cfgloader.ServerConfig     `yaml:"server"`
-	Identity       IdentityConfig             `yaml:"identity"`
-	Peers          PeersConfig                `yaml:"peers"`
-	Responsibility ResponsibilityConfig       `yaml:"responsibility"`
-	Operations     cfgloader.OperationsConfig `yaml:"operations"`
+	Mode           string                         `yaml:"mode"`
+	Server         cfgloader.ServerConfig         `yaml:"server"`
+	Identity       IdentityConfig                 `yaml:"identity"`
+	Peers          PeersConfig                    `yaml:"peers"`
+	Responsibility ResponsibilityConfig           `yaml:"responsibility"`
+	Operations     cfgloader.OperationsConfig     `yaml:"operations"`
+	MCPActivityLog cfgloader.MCPActivityLogConfig `yaml:"mcp_activity_log"`
 
 	// Derived / internal use only
-	DecisionLog cfgloader.DecisionLogConfig `yaml:"-"`
-	Limits      LimitsConfig                `yaml:"-"`
+	Limits LimitsConfig `yaml:"-"`
 }
 
 // ResponsibilityConfig defines the specialized duty of Portcullis-Keep.
@@ -162,11 +163,10 @@ func (c *Config) Validate(sources cfgloader.SourceMap) (cfgloader.PostureReport,
 	}
 	c.Limits.ApplyDefaults()
 
-	if logCfg, ok := c.Operations.Storage.Config["decision_log"]; ok {
-		if err := mapstructure.Decode(logCfg, &c.DecisionLog); err != nil {
-			return cfgloader.PostureReport{}, fmt.Errorf("decode operations.storage.config.decision_log: %w", err)
-		}
+	if _, ok := c.Operations.Storage.Config["decision_log"]; ok {
+		slog.Warn("keep: 'decision_log' in operations.storage.config is deprecated and ignored; use 'mcp_activity_log' at the top level instead")
 	}
+	c.MCPActivityLog.ApplyDefaults()
 
 	for i := range c.Responsibility.Backends {
 		if err := validateBackendConfig(&c.Responsibility.Backends[i]); err != nil {
@@ -459,6 +459,19 @@ type BackendOAuth struct {
 // when the user has opted in to storing refresh tokens.
 const defaultRefreshWindowSecs = 30
 
+// Default limits for LimitsConfig. Each mirrors the value applied by
+// LimitsConfig.applyDefaults and is named so callers can reference the
+// canonical value without duplicating the literal.
+const (
+	defaultMaxNameBytes              = 256
+	defaultMaxUserIDBytes            = 512
+	defaultMaxIDBytes                = 128  // trace-ID, session-ID, header-name
+	defaultMaxTextBytes              = 4096 // reason, header-value
+	defaultMaxLogBatchSize           = 1000
+	defaultMaxForwardedHeaders       = 20
+	defaultMaxForwardedHeadersTotal  = 16384 // 16 KB
+)
+
 // RefreshWindow returns the proactive token refresh window.
 // When RefreshWindowSecs is 0 and StoreRefreshTokens is true, it defaults
 // to defaultRefreshWindowSecs so that callers do not need to know the
@@ -586,37 +599,37 @@ func (l *LimitsConfig) ApplyDefaults() {
 		l.MaxRequestBodyBytes = 1 << 20 // 1 MB
 	}
 	if l.MaxServerNameBytes == 0 {
-		l.MaxServerNameBytes = 256
+		l.MaxServerNameBytes = defaultMaxNameBytes
 	}
 	if l.MaxToolNameBytes == 0 {
-		l.MaxToolNameBytes = 256
+		l.MaxToolNameBytes = defaultMaxNameBytes
 	}
 	if l.MaxUserIDBytes == 0 {
-		l.MaxUserIDBytes = 512
+		l.MaxUserIDBytes = defaultMaxUserIDBytes
 	}
 	if l.MaxTraceIDBytes == 0 {
-		l.MaxTraceIDBytes = 128
+		l.MaxTraceIDBytes = defaultMaxIDBytes
 	}
 	if l.MaxSessionIDBytes == 0 {
-		l.MaxSessionIDBytes = 128
+		l.MaxSessionIDBytes = defaultMaxIDBytes
 	}
 	if l.MaxReasonBytes == 0 {
-		l.MaxReasonBytes = 4096
+		l.MaxReasonBytes = defaultMaxTextBytes
 	}
 	if l.MaxLogBatchSize == 0 {
-		l.MaxLogBatchSize = 1000
+		l.MaxLogBatchSize = defaultMaxLogBatchSize
 	}
 	if l.MaxForwardedHeaders == 0 {
-		l.MaxForwardedHeaders = 20
+		l.MaxForwardedHeaders = defaultMaxForwardedHeaders
 	}
 	if l.MaxHeaderNameBytes == 0 {
-		l.MaxHeaderNameBytes = 128
+		l.MaxHeaderNameBytes = defaultMaxIDBytes
 	}
 	if l.MaxHeaderValueBytes == 0 {
-		l.MaxHeaderValueBytes = 4096
+		l.MaxHeaderValueBytes = defaultMaxTextBytes
 	}
 	if l.MaxForwardedHeadersTotalBytes == 0 {
-		l.MaxForwardedHeadersTotalBytes = 16384 // 16 KB
+		l.MaxForwardedHeadersTotalBytes = defaultMaxForwardedHeadersTotal
 	}
 }
 

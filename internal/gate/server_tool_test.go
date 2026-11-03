@@ -69,23 +69,8 @@ func (m *mockForwarder) ListTools(ctx context.Context, id shared.UserIdentity, t
 	}
 	return nil, nil
 }
-func (m *mockForwarder) SendLogs(_ context.Context, _ []DecisionLogEntry) error {
-	return nil
-}
 func (m *mockForwarder) GetStaticPolicy(_ context.Context, _ string) (json.RawMessage, error) {
 	return json.RawMessage("{}"), nil
-}
-
-type mockForwarderWithSendLogs struct {
-	mockForwarder
-	sendLogsFunc func(ctx context.Context, entries []DecisionLogEntry) error
-}
-
-func (m *mockForwarderWithSendLogs) SendLogs(ctx context.Context, entries []DecisionLogEntry) error {
-	if m.sendLogsFunc != nil {
-		return m.sendLogsFunc(ctx, entries)
-	}
-	return nil
 }
 
 func TestHandleToolCall_OIDC_Enforcement(t *testing.T) {
@@ -171,7 +156,6 @@ func TestHandleToolCall_Success(t *testing.T) {
 		sessionID:     "test-session",
 		escalations:   &mockTokenStore{},
 		escalationMgr: NewEscalationManager(nil, NewInMemoryPendingStore(), &mockTokenStore{}, EscalationConfig{}, NewSingleTenantProvider(nil, ""), idSource, ""),
-		logger:        &captureLogger{},
 	}
 
 	res, err := g.handleToolCall(context.Background(), "test_tool", map[string]any{"arg1": "val1"})
@@ -197,7 +181,6 @@ func TestHandleToolCall_FastPath_Allow(t *testing.T) {
 		t.Fatalf("Connect failed: %v", err)
 	}
 
-	captured := &captureLogger{}
 	g := &Gate{
 		cfg: Config{
 			Responsibility: ResponsibilityConfig{
@@ -212,7 +195,6 @@ func TestHandleToolCall_FastPath_Allow(t *testing.T) {
 		localFS:   localSession,
 		identity:  &mockIdentitySource{},
 		sessionID: "test-session",
-		logger:    captured,
 	}
 
 	res, err := g.handleToolCall(context.Background(), "read_text_file", map[string]any{"path": testFile})
@@ -221,14 +203,6 @@ func TestHandleToolCall_FastPath_Allow(t *testing.T) {
 	}
 	if res.IsError {
 		t.Fatalf("expected no error in result, got: %v", res.Content)
-	}
-
-	entries := captured.all()
-	if len(entries) == 0 {
-		t.Fatal("expected a log entry")
-	}
-	if entries[0].Decision != "allow" || entries[0].Reason != "sandbox" {
-		t.Errorf("unexpected log entry: %+v", entries[0])
 	}
 }
 
@@ -333,65 +307,6 @@ func TestMaybeStorePendingEscalation_Proactive(t *testing.T) {
 	p, ok := pending.Get(context.Background(), "srv/tool")
 	if !ok || p.JTI != "jti-proactive" {
 		t.Errorf("pending escalation not stored correctly: %+v", p)
-	}
-}
-
-
-// ---- BatchDecisionLogger tests ----------------------------------------------
-
-func TestBatchDecisionLogger_Worker(t *testing.T) {
-	received := make(chan []DecisionLogEntry, 1)
-	fwd := &mockForwarderWithSendLogs{
-		sendLogsFunc: func(ctx context.Context, entries []DecisionLogEntry) error {
-			received <- entries
-			return nil
-		},
-	}
-
-	logger := NewBatchDecisionLogger(DecisionLogBatchConfig{
-		FlushInterval: 1,
-		MaxBatchSize:  2,
-	}, fwd)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	logger.Start(ctx)
-
-	// 1. Batch size trigger
-	logger.Log(DecisionLogEntry{ToolName: "t1"})
-	logger.Log(DecisionLogEntry{ToolName: "t2"})
-
-	select {
-	case batch := <-received:
-		if len(batch) != 2 {
-			t.Errorf("expected batch of 2, got %d", len(batch))
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for batch flush")
-	}
-
-	// 2. Interval trigger
-	logger.Log(DecisionLogEntry{ToolName: "t3"})
-	select {
-	case batch := <-received:
-		if len(batch) != 1 {
-			t.Errorf("expected batch of 1, got %d", len(batch))
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for interval flush")
-	}
-
-	// 3. Shutdown flush
-	logger.Log(DecisionLogEntry{ToolName: "t4"})
-	cancel()
-	logger.Wait()
-
-	select {
-	case batch := <-received:
-		if len(batch) != 1 || batch[0].ToolName != "t4" {
-			t.Errorf("expected shutdown flush of 't4', got %v", batch)
-		}
-	default:
-		t.Error("expected shutdown flush")
 	}
 }
 
@@ -559,7 +474,6 @@ func TestGate_RegisterTool_Logic(t *testing.T) {
 		toolServerMap: map[string]string{"t1": "s1"},
 		escalations:   &mockTokenStore{},
 		escalationMgr: NewEscalationManager(nil, NewInMemoryPendingStore(), &mockTokenStore{}, EscalationConfig{}, NewSingleTenantProvider(nil, ""), idSource, ""),
-		logger:        &captureLogger{},
 	}
 
 	res, err := g.handleToolCall(context.Background(), "t1", map[string]any{"foo": "bar"})
@@ -626,6 +540,96 @@ func TestGate_RefreshKeepTools(t *testing.T) {
 		assert.Nil(t, names)
 		assert.Equal(t, StateSystemError, sm.State())
 	})
+}
+
+// TestHandleToolCall_PropagatesAgentInfo verifies that AgentInfo stored in the
+// context by registerTool is forwarded on the EnrichedMCPRequest sent to Keep.
+func TestHandleToolCall_PropagatesAgentInfo(t *testing.T) {
+	want := shared.AgentInfo{Name: "TestClient", Version: "2.0"}
+
+	var captured shared.EnrichedMCPRequest
+	fwd := &mockForwarder{
+		callToolFunc: func(_ context.Context, req shared.EnrichedMCPRequest) (*mcp.CallToolResult, error) {
+			captured = req
+			return &mcp.CallToolResult{}, nil
+		},
+	}
+	idSource := &mockIdentitySource{identity: shared.UserIdentity{UserID: "u1"}}
+	g := &Gate{
+		cfg:           Config{Identity: IdentityConfig{Strategy: "os"}},
+		identity:      idSource,
+		forwarder:     fwd,
+		toolServerMap: map[string]string{"t1": "s1"},
+		escalations:   &mockTokenStore{},
+		escalationMgr: NewEscalationManager(nil, NewInMemoryPendingStore(), &mockTokenStore{}, EscalationConfig{}, NewSingleTenantProvider(nil, ""), idSource, ""),
+	}
+
+	ctx := withAgentInfo(context.Background(), want)
+	_, err := g.handleToolCall(ctx, "t1", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if captured.Agent != want {
+		t.Errorf("Agent = %+v, want %+v", captured.Agent, want)
+	}
+}
+
+// TestRegisterTool_CapturesClientInfo verifies that registerTool extracts
+// clientInfo from the MCP initialize handshake and stores it in context so
+// that handleToolCall can populate EnrichedMCPRequest.Agent.
+func TestRegisterTool_CapturesClientInfo(t *testing.T) {
+	want := shared.AgentInfo{Name: "Claude", Version: "3.0"}
+
+	var captured shared.EnrichedMCPRequest
+	fwd := &mockForwarder{
+		callToolFunc: func(_ context.Context, req shared.EnrichedMCPRequest) (*mcp.CallToolResult, error) {
+			captured = req
+			return &mcp.CallToolResult{}, nil
+		},
+	}
+	idSource := &mockIdentitySource{identity: shared.UserIdentity{UserID: "u1"}}
+	g := &Gate{
+		cfg:           Config{Identity: IdentityConfig{Strategy: "os"}},
+		identity:      idSource,
+		forwarder:     fwd,
+		toolServerMap: map[string]string{"probe": "s1"},
+		escalations:   &mockTokenStore{},
+		escalationMgr: NewEscalationManager(nil, NewInMemoryPendingStore(), &mockTokenStore{}, EscalationConfig{}, NewSingleTenantProvider(nil, ""), idSource, ""),
+		server:        mcp.NewServer(&mcp.Implementation{Name: "gate", Version: "test"}, nil),
+	}
+	g.registerTool(&mcp.Tool{
+		Name: "probe",
+		InputSchema: struct {
+			Type       string   `json:"type"`
+			Properties any      `json:"properties,omitempty"`
+			Required   []string `json:"required,omitempty"`
+		}{Type: "object"},
+	})
+
+	// Build a client that sends clientInfo in the initialize handshake.
+	client := mcp.NewClient(&mcp.Implementation{Name: want.Name, Version: want.Version}, nil)
+	serverT, clientT := mcp.NewInMemoryTransports()
+
+	ctx := context.Background()
+	// Connect the server side in a goroutine (blocks until client disconnects).
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- g.server.Run(ctx, serverT)
+	}()
+
+	cs, err := client.Connect(ctx, clientT, nil)
+	if err != nil {
+		t.Fatalf("client.Connect: %v", err)
+	}
+	defer cs.Close()
+
+	if _, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "probe"}); err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+
+	if captured.Agent != want {
+		t.Errorf("Agent = %+v, want %+v", captured.Agent, want)
+	}
 }
 
 func TestGate_Run(t *testing.T) {

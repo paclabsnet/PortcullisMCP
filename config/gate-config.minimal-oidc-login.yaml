@@ -98,10 +98,6 @@ responsibility:
 
 # token_store: "~/.portcullis/tokens.json"   # where escalation tokens are persisted
 
-# decision_logs:
-#   flush_interval: 30          # seconds between batched sends to Keep (default: 30)
-#   max_batch_size: 100         # max entries per batch (default: 100)
-
 operations:
   telemetry:
     exporter: "noop"

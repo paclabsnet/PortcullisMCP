@@ -37,10 +37,33 @@ All of this should be configurable, with sensible defaults
 
 1) if an agent spaws sub-agents, should we attribute all of this activity to the parent agent, or ensure that we can separate the sub-agent tool activity from the parent?
 
-2) including the localfs activity might be required for a high-security environment, we may need to capture this information in the future.  
+2) including the localfs activity might be required for a high-security environment, we may need to capture this information in the future.  One way to do this would be for the gate instances to send json log records to Keep, which can accept them and output them to the logging system. These could be accumulated and compressed for bandwidth efficiency
 
 3) Alternatively, in a high-security environment, do we even want to let the tool use the local filesystem?
 
+4) Are there other "local" MCPs that should be managed, like MCPs for launching containers? In a high-security environment, you probably don't want the agent to be able to launch containers, because it would be a security nightmare
+
+
+
+### Task: Send the MCP response to the PDP for approval before passing it back to the agent
+
+#### Problem
+
+In some scenarios, it would be useful to analyze the response from the destination MCP, before wrapping it and sending it back 
+to the agent. I don't think that escalate makes sense here, for logistical reasons (having to cache the results). So when this 
+is enabled, the PDP should only return 'allow' or 'deny' .  
+
+#### Proposed Solution
+
+When the response JSON comes back to Keep from the destination MCP, package it up into a PDP request, send it to the PDP and await
+the answer.  If the PDP authorizes the MCP Response, send it to Gate as normal.  Otherwise, send a message back to the agent indicating
+that the request was approved, but the MCP response was not authorized.
+
+#### Implementation
+
+1. Configuration options in Keep, to indicate that MCP responses should be checked for approval, as well as the PDP request path (such as an OPA /path/to/a/policy )
+2. The PDP policy will need to be written carefully - generally speaking, since the MCP request was authorized, the response policy should default to allow, and only deny for specific reasons.  But this is a per-implementation decision, not something that Portcullis has to 
+manage
 
 
 
@@ -50,8 +73,7 @@ All of this should be configurable, with sensible defaults
 
 #### Problem
 
-But many MCPs require OAuth before they will return the tool list.  Keep cannot get the OAuth credentials necessary to fetch this tool list at startup, so we
-can't dynamically offer the tool as part of the portcullis "family"
+But many MCPs require OAuth before they will return the tool list.  Keep cannot get the OAuth credentials necessary to fetch this tool list at startup, so we can't dynamically offer the tool as part of the portcullis "family"
 
 #### Proposed Solution
 

@@ -15,12 +15,15 @@
 package keep
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/mitchellh/mapstructure"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -28,9 +31,12 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/oauth2"
 
+	"github.com/paclabsnet/PortcullisMCP/internal/keep/activitylog"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
+	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared/middleware"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared/tlsutil"
 	"github.com/paclabsnet/PortcullisMCP/internal/telemetry"
@@ -124,7 +130,7 @@ type Server struct {
 	credStore     CredentialsStore
 	workflow      WorkflowHandler
 	signer        *EscalationSigner
-	decisionLog   *DecisionLogger
+	activityLog   *activitylog.ActivityLogger
 	normalizer    IdentityNormalizer
 }
 
@@ -176,6 +182,8 @@ func NewServer(ctx context.Context, cfg Config) (*Server, error) {
 		return nil, fmt.Errorf("init normalization webhook: %w", err)
 	}
 
+	al := initActivityLogger(cfg)
+
 	return &Server{
 		cfg:           cfg,
 		pdp:           pdp,
@@ -184,9 +192,188 @@ func NewServer(ctx context.Context, cfg Config) (*Server, error) {
 		credStore:     credStore,
 		workflow:      wf,
 		signer:        signer,
-		decisionLog:   NewDecisionLogger(cfg.DecisionLog),
+		activityLog:   al,
 		normalizer:    normalizer,
 	}, nil
+}
+
+// initActivityLogger creates an ActivityLogger from Keep config, or returns nil
+// if activity logging is disabled or initialization fails.
+func initActivityLogger(cfg Config) *activitylog.ActivityLogger {
+	if !cfg.MCPActivityLog.Enabled {
+		return nil
+	}
+	al, err := activitylog.New(cfg.MCPActivityLog)
+	if err != nil {
+		slog.Warn("keep: failed to initialize activity log; audit logging disabled", "error", err)
+		return nil
+	}
+	return al
+}
+
+// normalizedCall holds the result of the shared request entry pipeline:
+// body decode, field validation, header validation, and identity normalization.
+type normalizedCall struct {
+	rawReq      shared.EnrichedMCPRequest
+	principal   shared.Principal
+	traceID     string
+	remoteAddr  string
+	bodyPreview string // non-empty only when capturePreview was true
+	start       time.Time
+}
+
+// parseAndNormalize runs the shared entry pipeline for /call and /authorize:
+//  1. Apply MaxBytesReader
+//  2. Extract OTel trace context and start a child span (spanName)
+//  3. Optionally tee the body into a capped preview buffer (capturePreview)
+//  4. Decode into EnrichedMCPRequest; emit LogMalformed on parse error
+//  5. Validate api_version and field lengths; emit LogMalformed on error
+//  6. Validate forwarded client headers; emit LogMalformed on error
+//  7. Resolve traceID and set span attributes
+//  8. Normalize identity; log and respond on failure
+//
+// On success it returns (ctx, span, nc, true). The caller MUST call span.End().
+// On failure it has already written an error response to w and returns false;
+// the caller MUST still call span.End() (use defer span.End() unconditionally).
+func (s *Server) parseAndNormalize(
+	w http.ResponseWriter, r *http.Request,
+	spanName string, capturePreview bool,
+) (context.Context, trace.Span, normalizedCall, bool) {
+	start := time.Now()
+
+	if s.cfg.Limits.MaxRequestBodyBytes > 0 {
+		r.Body = http.MaxBytesReader(w, r.Body, int64(s.cfg.Limits.MaxRequestBodyBytes))
+	}
+
+	ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+	ctx, span := otel.Tracer(shared.ServiceKeep).Start(ctx, spanName)
+
+	var bodyBuf bytes.Buffer
+	var bodyReader io.Reader = r.Body
+	if capturePreview {
+		previewCap := s.cfg.MCPActivityLog.MaxPayloadBytes
+		if previewCap <= 0 {
+			previewCap = cfgloader.DefaultMaxPayloadBytes
+		}
+		bodyReader = io.TeeReader(r.Body, &capWriter{buf: &bodyBuf, max: previewCap})
+	}
+
+	var rawReq shared.EnrichedMCPRequest
+	if err := json.NewDecoder(bodyReader).Decode(&rawReq); err != nil {
+		if s.activityLog != nil {
+			s.activityLog.LogMalformed(activitylog.MalformedEntry{
+				RemoteAddr: r.RemoteAddr,
+				Error:      err.Error(),
+				RawPreview: bodyBuf.String(),
+			})
+		}
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return ctx, span, normalizedCall{}, false
+	}
+
+	if err := checkAPIVersion(rawReq.APIVersion); err != nil {
+		if s.activityLog != nil {
+			s.activityLog.LogMalformed(activitylog.MalformedEntry{
+				RemoteAddr: r.RemoteAddr,
+				TraceID:    rawReq.TraceID,
+				Error:      err.Error(),
+				RawPreview: bodyBuf.String(),
+			})
+		}
+		writeError(w, http.StatusBadRequest, err.Error())
+		return ctx, span, normalizedCall{}, false
+	}
+
+	if err := shared.CheckFields(enrichedRequestChecks(rawReq, s.cfg.Limits)); err != nil {
+		if s.activityLog != nil {
+			s.activityLog.LogMalformed(activitylog.MalformedEntry{
+				RemoteAddr: r.RemoteAddr,
+				TraceID:    rawReq.TraceID,
+				Error:      err.Error(),
+				RawPreview: bodyBuf.String(),
+			})
+		}
+		writeError(w, http.StatusBadRequest, err.Error())
+		return ctx, span, normalizedCall{}, false
+	}
+
+	if err := validateClientHeaders(rawReq.ClientHeaders, s.cfg.Limits); err != nil {
+		if s.activityLog != nil {
+			s.activityLog.LogMalformed(activitylog.MalformedEntry{
+				RemoteAddr: r.RemoteAddr,
+				TraceID:    rawReq.TraceID,
+				Error:      err.Error(),
+				RawPreview: bodyBuf.String(),
+			})
+		}
+		writeError(w, http.StatusBadRequest, err.Error())
+		return ctx, span, normalizedCall{}, false
+	}
+
+	traceID := telemetry.TraceIDFromContext(ctx)
+	if traceID == "" {
+		traceID = rawReq.TraceID
+	}
+	span.SetAttributes(
+		attribute.String("tool.name", rawReq.ToolName),
+		attribute.String("server.name", rawReq.ServerName),
+		attribute.String("trace.id", traceID),
+	)
+
+	principal, normErr := s.normalizer.Normalize(ctx, rawReq.UserIdentity)
+	if normErr != nil {
+		span.SetStatus(codes.Error, normErr.Error())
+		slog.ErrorContext(ctx, "identity normalization failed", "error", normErr, "trace_id", traceID)
+
+		var httpStatus int
+		var clientMsg, respStatus string
+		if verifyErr := (*shared.IdentityVerificationError)(nil); errors.As(normErr, &verifyErr) {
+			httpStatus, clientMsg, respStatus = http.StatusUnauthorized, normErr.Error(), "denied"
+		} else if validErr := (*NormalizationValidationError)(nil); errors.As(normErr, &validErr) {
+			httpStatus, clientMsg, respStatus = http.StatusForbidden, normErr.Error(), "denied"
+		} else {
+			httpStatus, clientMsg, respStatus = http.StatusServiceUnavailable, "identity normalization failed", "backend_error"
+		}
+
+		if s.activityLog != nil {
+			s.activityLog.LogRequest(activitylog.RequestEntry{
+				SessionID:   rawReq.SessionID,
+				TraceID:     traceID,
+				RemoteAddr:  r.RemoteAddr,
+				UserID:      rawReq.UserIdentity.UserID,
+				Agent:       rawReq.Agent,
+				ServerName:  rawReq.ServerName,
+				ToolName:    rawReq.ToolName,
+				Arguments:   rawReq.Arguments,
+				PDPDecision: "error",
+				PDPReason:   normErr.Error(),
+			})
+			s.activityLog.LogResponse(activitylog.ResponseEntry{
+				SessionID:  rawReq.SessionID,
+				TraceID:    traceID,
+				RemoteAddr: r.RemoteAddr,
+				UserID:     rawReq.UserIdentity.UserID,
+				Agent:      rawReq.Agent,
+				ServerName: rawReq.ServerName,
+				ToolName:   rawReq.ToolName,
+				DurationMS: time.Since(start).Milliseconds(),
+				Status:     respStatus,
+				Error:      normErr.Error(),
+			})
+		}
+		writeError(w, httpStatus, clientMsg)
+		return ctx, span, normalizedCall{}, false
+	}
+	span.SetAttributes(attribute.String("user.id", principal.UserID))
+
+	return ctx, span, normalizedCall{
+		rawReq:      rawReq,
+		principal:   principal,
+		traceID:     traceID,
+		remoteAddr:  r.RemoteAddr,
+		bodyPreview: bodyBuf.String(),
+		start:       start,
+	}, true
 }
 
 // buildCredentialsStore constructs the appropriate CredentialsStore for cfg.
@@ -243,7 +430,6 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("POST /call", s.handleCall)
 	mux.HandleFunc("POST /authorize", s.handleAuthorize)
 	mux.HandleFunc("POST /tools", s.handleListTools)
-	mux.HandleFunc("POST /log", s.handleLog)
 	mux.HandleFunc("GET /config/{resource}", s.handleGetConfig)
 	// OAuth callback is intentionally unauthenticated: it is reached by the
 	// user's browser after the authorization server redirects them back.
@@ -261,8 +447,10 @@ func (s *Server) Run(ctx context.Context) error {
 
 	go func() {
 		<-ctx.Done()
-		if s.decisionLog != nil {
-			_ = s.decisionLog.Shutdown()
+		if s.activityLog != nil {
+			shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = s.activityLog.Shutdown(shutCtx)
 		}
 		_ = srv.Shutdown(context.Background())
 	}()
@@ -286,69 +474,17 @@ func (s *Server) Run(ctx context.Context) error {
 
 // handleCall processes an enriched MCP tool call request from gate.
 func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.Limits.MaxRequestBodyBytes > 0 {
-		r.Body = http.MaxBytesReader(w, r.Body, int64(s.cfg.Limits.MaxRequestBodyBytes))
-	}
-
-	// Extract trace context propagated by Gate and create a child span.
-	ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
-	ctx, span := otel.Tracer(shared.ServiceKeep).Start(ctx, "keep.evaluate")
+	ctx, span, nc, ok := s.parseAndNormalize(w, r, "keep.evaluate", s.activityLog != nil)
 	defer span.End()
-
-	var rawReq shared.EnrichedMCPRequest
-	if err := json.NewDecoder(r.Body).Decode(&rawReq); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+	if !ok {
 		return
 	}
 
-	if err := checkAPIVersion(rawReq.APIVersion); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	if err := shared.CheckFields(enrichedRequestChecks(rawReq, s.cfg.Limits)); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	if err := validateClientHeaders(rawReq.ClientHeaders, s.cfg.Limits); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
+	rawReq, principal, traceID, remoteAddr, start := nc.rawReq, nc.principal, nc.traceID, nc.remoteAddr, nc.start
 
 	if len(rawReq.ClientHeaders) > 0 {
 		ctx = withClientHeaders(ctx, rawReq.ClientHeaders)
 	}
-
-	traceID := telemetry.TraceIDFromContext(ctx)
-	if traceID == "" {
-		traceID = rawReq.TraceID
-	}
-	span.SetAttributes(
-		attribute.String("tool.name", rawReq.ToolName),
-		attribute.String("server.name", rawReq.ServerName),
-		attribute.String("trace.id", traceID),
-	)
-
-	principal, normErr := s.normalizer.Normalize(ctx, rawReq.UserIdentity)
-	if normErr != nil {
-		span.SetStatus(codes.Error, normErr.Error())
-		slog.ErrorContext(ctx, "identity normalization failed", "error", normErr, "trace_id", traceID)
-
-		if verifyErr := (*shared.IdentityVerificationError)(nil); errors.As(normErr, &verifyErr) {
-			writeError(w, http.StatusUnauthorized, normErr.Error())
-			return
-		}
-		if validErr := (*NormalizationValidationError)(nil); errors.As(normErr, &validErr) {
-			writeError(w, http.StatusForbidden, normErr.Error())
-			return
-		}
-
-		writeError(w, http.StatusServiceUnavailable, "identity normalization failed")
-		return
-	}
-	span.SetAttributes(attribute.String("user.id", principal.UserID))
-
 	if rawReq.UserIdentity.RawToken != "" {
 		ctx = withRawToken(ctx, rawReq.UserIdentity.RawToken)
 	}
@@ -361,6 +497,32 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 	if s.router.IsHiddenToolName(rawReq.ServerName, rawReq.ToolName) {
 		span.SetStatus(codes.Error, "unknown tool")
 		slog.WarnContext(ctx, "call rejected: real name of aliased tool", "server", rawReq.ServerName, "tool", rawReq.ToolName, "trace_id", traceID)
+		if s.activityLog != nil {
+			s.activityLog.LogRequest(activitylog.RequestEntry{
+				SessionID:   rawReq.SessionID,
+				TraceID:     traceID,
+				RemoteAddr:  remoteAddr,
+				UserID:      principal.UserID,
+				Agent:       rawReq.Agent,
+				ServerName:  rawReq.ServerName,
+				ToolName:    rawReq.ToolName,
+				Arguments:   rawReq.Arguments,
+				PDPDecision: "deny",
+				PDPReason:   "unknown tool",
+			})
+			s.activityLog.LogResponse(activitylog.ResponseEntry{
+				SessionID:  rawReq.SessionID,
+				TraceID:    traceID,
+				RemoteAddr: remoteAddr,
+				UserID:     principal.UserID,
+				Agent:      rawReq.Agent,
+				ServerName: rawReq.ServerName,
+				ToolName:   rawReq.ToolName,
+				DurationMS: time.Since(start).Milliseconds(),
+				Status:     "denied",
+				Error:      "unknown tool",
+			})
+		}
 		writeDeny(w, "unknown tool", traceID)
 		return
 	}
@@ -371,6 +533,32 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
 		slog.ErrorContext(ctx, "pdp evaluate failed", "error", err, "trace_id", traceID)
+		if s.activityLog != nil {
+			s.activityLog.LogRequest(activitylog.RequestEntry{
+				SessionID:   req.SessionID,
+				TraceID:     traceID,
+				RemoteAddr:  remoteAddr,
+				UserID:      req.Principal.UserID,
+				Agent:       rawReq.Agent,
+				ServerName:  req.ServerName,
+				ToolName:    req.ToolName,
+				Arguments:   req.Arguments,
+				PDPDecision: "error",
+				PDPReason:   err.Error(),
+			})
+			s.activityLog.LogResponse(activitylog.ResponseEntry{
+				SessionID:  req.SessionID,
+				TraceID:    traceID,
+				RemoteAddr: remoteAddr,
+				UserID:     req.Principal.UserID,
+				Agent:      rawReq.Agent,
+				ServerName: req.ServerName,
+				ToolName:   req.ToolName,
+				DurationMS: time.Since(start).Milliseconds(),
+				Status:     "backend_error",
+				Error:      shared.ErrPDPUnavailable.Error(),
+			})
+		}
 		writeError(w, http.StatusServiceUnavailable, shared.ErrPDPUnavailable.Error())
 		return
 	}
@@ -383,18 +571,19 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		"trace_id", traceID,
 	)
 
-	// Log the decision
-	if s.decisionLog != nil {
-		s.decisionLog.Log(&DecisionLogEntry{
-			SessionID:  req.SessionID,
-			TraceID:    req.TraceID,
-			UserID:     req.Principal.UserID,
-			ServerName: req.ServerName,
-			ToolName:   req.ToolName,
-			Decision:   pdpResp.Decision,
-			Reason:     pdpResp.Reason,
-			Source:     "pdp",
-			Arguments:  req.Arguments,
+	if s.activityLog != nil {
+		s.activityLog.LogRequest(activitylog.RequestEntry{
+			SessionID:     req.SessionID,
+			TraceID:       traceID,
+			RemoteAddr:    remoteAddr,
+			UserID:        req.Principal.UserID,
+			Agent:         rawReq.Agent,
+			ServerName:    req.ServerName,
+			ToolName:      req.ToolName,
+			Arguments:     req.Arguments,
+			PDPDecision:   pdpResp.Decision,
+			PDPReason:     pdpResp.Reason,
+			EscalationJTIs: escalationJTIs(req.EscalationTokens),
 		})
 	}
 
@@ -404,13 +593,61 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			span.SetStatus(codes.Error, err.Error())
 			slog.ErrorContext(ctx, "backend call failed", "error", err, "server", req.ServerName, "tool", req.ToolName, "trace_id", traceID)
+			if s.activityLog != nil {
+				s.activityLog.LogResponse(activitylog.ResponseEntry{
+					SessionID:  req.SessionID,
+					TraceID:    traceID,
+					RemoteAddr: remoteAddr,
+					UserID:     req.Principal.UserID,
+					Agent:      rawReq.Agent,
+					ServerName: req.ServerName,
+					ToolName:   req.ToolName,
+					DurationMS: time.Since(start).Milliseconds(),
+					Status:     "backend_error",
+					Error:      err.Error(),
+				})
+			}
 			writeError(w, http.StatusInternalServerError, "backend tool call failed")
 			return
+		}
+		if s.activityLog != nil {
+			entry := activitylog.ResponseEntry{
+				SessionID:  req.SessionID,
+				TraceID:    traceID,
+				RemoteAddr: remoteAddr,
+				UserID:     req.Principal.UserID,
+				Agent:      rawReq.Agent,
+				ServerName: req.ServerName,
+				ToolName:   req.ToolName,
+				DurationMS: time.Since(start).Milliseconds(),
+				Result:     result,
+			}
+			if result != nil && result.IsError {
+				entry.Status = "tool_error"
+				entry.Error = "tool returned an error result"
+			} else {
+				entry.Status = "success"
+			}
+			s.activityLog.LogResponse(entry)
 		}
 		writeJSON(w, http.StatusOK, result)
 
 	case "deny":
 		span.SetStatus(codes.Error, "denied by policy")
+		if s.activityLog != nil {
+			s.activityLog.LogResponse(activitylog.ResponseEntry{
+				SessionID:  req.SessionID,
+				TraceID:    traceID,
+				RemoteAddr: remoteAddr,
+				UserID:     req.Principal.UserID,
+				Agent:      rawReq.Agent,
+				ServerName: req.ServerName,
+				ToolName:   req.ToolName,
+				DurationMS: time.Since(start).Milliseconds(),
+				Status:     "denied",
+				Error:      pdpResp.Reason,
+			})
+		}
 		writeDeny(w, pdpResp.Reason, traceID)
 
 	case "escalate":
@@ -429,6 +666,20 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			span.SetStatus(codes.Error, err.Error())
 			slog.ErrorContext(ctx, "workflow submit failed", "error", err, "trace_id", traceID)
+			if s.activityLog != nil {
+				s.activityLog.LogResponse(activitylog.ResponseEntry{
+					SessionID:  req.SessionID,
+					TraceID:    traceID,
+					RemoteAddr: remoteAddr,
+					UserID:     req.Principal.UserID,
+					Agent:      rawReq.Agent,
+					ServerName: req.ServerName,
+					ToolName:   req.ToolName,
+					DurationMS: time.Since(start).Milliseconds(),
+					Status:     "backend_error",
+					Error:      "workflow submit failed: " + err.Error(),
+				})
+			}
 			writeError(w, http.StatusInternalServerError, "failed to submit escalation")
 			return
 		}
@@ -436,8 +687,37 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 			span.SetStatus(codes.Error, "escalation misconfigured")
 			slog.ErrorContext(ctx, "escalation required but no approval mechanism available",
 				"tool", req.ToolName, "user", req.Principal.UserID, "trace_id", traceID)
+			if s.activityLog != nil {
+				s.activityLog.LogResponse(activitylog.ResponseEntry{
+					SessionID:  req.SessionID,
+					TraceID:    traceID,
+					RemoteAddr: remoteAddr,
+					UserID:     req.Principal.UserID,
+					Agent:      rawReq.Agent,
+					ServerName: req.ServerName,
+					ToolName:   req.ToolName,
+					DurationMS: time.Since(start).Milliseconds(),
+					Status:     "backend_error",
+					Error:      "escalation required but no approval mechanism is available",
+				})
+			}
 			writeError(w, http.StatusInternalServerError, "escalation required but no approval mechanism is available")
 			return
+		}
+		if s.activityLog != nil {
+			s.activityLog.LogResponse(activitylog.ResponseEntry{
+				SessionID:     req.SessionID,
+				TraceID:       traceID,
+				RemoteAddr:    remoteAddr,
+				UserID:        req.Principal.UserID,
+				Agent:         rawReq.Agent,
+				ServerName:    req.ServerName,
+				ToolName:      req.ToolName,
+				DurationMS:        time.Since(start).Milliseconds(),
+				Status:            "escalation_pending",
+				EscalationJTI:     escalationJTI,
+				WorkflowReference: wfRef,
+			})
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
@@ -453,6 +733,20 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 	case "workflow":
 		if !s.hasWorkflow() {
 			span.SetStatus(codes.Error, "workflow required but not configured")
+			if s.activityLog != nil {
+				s.activityLog.LogResponse(activitylog.ResponseEntry{
+					SessionID:  req.SessionID,
+					TraceID:    traceID,
+					RemoteAddr: remoteAddr,
+					UserID:     req.Principal.UserID,
+					Agent:      rawReq.Agent,
+					ServerName: req.ServerName,
+					ToolName:   req.ToolName,
+					DurationMS: time.Since(start).Milliseconds(),
+					Status:     "denied",
+					Error:      "workflow required but not configured",
+				})
+			}
 			writeDeny(w, "this action requires external workflow approval but no workflow system is configured", traceID)
 			return
 		}
@@ -471,13 +765,56 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			span.SetStatus(codes.Error, err.Error())
 			slog.ErrorContext(ctx, "workflow submit failed", "error", err, "trace_id", traceID)
+			if s.activityLog != nil {
+				s.activityLog.LogResponse(activitylog.ResponseEntry{
+					SessionID:  req.SessionID,
+					TraceID:    traceID,
+					RemoteAddr: remoteAddr,
+					UserID:     req.Principal.UserID,
+					Agent:      rawReq.Agent,
+					ServerName: req.ServerName,
+					ToolName:   req.ToolName,
+					DurationMS: time.Since(start).Milliseconds(),
+					Status:     "backend_error",
+					Error:      "workflow submit failed: " + err.Error(),
+				})
+			}
 			writeError(w, http.StatusInternalServerError, "failed to submit workflow request")
 			return
 		}
 		if pendingJWT == "" && wfRef == "" {
 			span.SetStatus(codes.Error, "workflow misconfigured")
+			if s.activityLog != nil {
+				s.activityLog.LogResponse(activitylog.ResponseEntry{
+					SessionID:  req.SessionID,
+					TraceID:    traceID,
+					RemoteAddr: remoteAddr,
+					UserID:     req.Principal.UserID,
+					Agent:      rawReq.Agent,
+					ServerName: req.ServerName,
+					ToolName:   req.ToolName,
+					DurationMS: time.Since(start).Milliseconds(),
+					Status:     "backend_error",
+					Error:      "workflow required but no approval mechanism is available",
+				})
+			}
 			writeError(w, http.StatusInternalServerError, "workflow required but no approval mechanism is available")
 			return
+		}
+		if s.activityLog != nil {
+			s.activityLog.LogResponse(activitylog.ResponseEntry{
+				SessionID:     req.SessionID,
+				TraceID:       traceID,
+				RemoteAddr:    remoteAddr,
+				UserID:        req.Principal.UserID,
+				Agent:         rawReq.Agent,
+				ServerName:    req.ServerName,
+				ToolName:      req.ToolName,
+				DurationMS:        time.Since(start).Milliseconds(),
+				Status:            "workflow_pending",
+				EscalationJTI:     escalationJTI,
+				WorkflowReference: wfRef,
+			})
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
@@ -492,88 +829,172 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 
 	default:
 		span.SetStatus(codes.Error, "unknown decision")
+		if s.activityLog != nil {
+			s.activityLog.LogResponse(activitylog.ResponseEntry{
+				SessionID:  req.SessionID,
+				TraceID:    traceID,
+				RemoteAddr: remoteAddr,
+				UserID:     req.Principal.UserID,
+				Agent:      rawReq.Agent,
+				ServerName: req.ServerName,
+				ToolName:   req.ToolName,
+				DurationMS: time.Since(start).Milliseconds(),
+				Status:     "denied",
+				Error:      "unknown pdp decision",
+			})
+		}
 		writeDeny(w, "unknown pdp decision — denied by default", traceID)
 	}
 }
 
 // handleAuthorize evaluates the PDP for a gate-local tool call.
 func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.Limits.MaxRequestBodyBytes > 0 {
-		r.Body = http.MaxBytesReader(w, r.Body, int64(s.cfg.Limits.MaxRequestBodyBytes))
-	}
-
-	ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
-	ctx, span := otel.Tracer(shared.ServiceKeep).Start(ctx, "keep.authorize")
+	ctx, span, nc, ok := s.parseAndNormalize(w, r, "keep.authorize", false)
 	defer span.End()
-
-	var rawReq shared.EnrichedMCPRequest
-	if err := json.NewDecoder(r.Body).Decode(&rawReq); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+	if !ok {
 		return
 	}
 
-	if err := checkAPIVersion(rawReq.APIVersion); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	if err := shared.CheckFields(enrichedRequestChecks(rawReq, s.cfg.Limits)); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	traceID := telemetry.TraceIDFromContext(ctx)
-	if traceID == "" {
-		traceID = rawReq.TraceID
-	}
-
-	principal, normErr := s.normalizer.Normalize(ctx, rawReq.UserIdentity)
-	if normErr != nil {
-		if verifyErr := (*shared.IdentityVerificationError)(nil); errors.As(normErr, &verifyErr) {
-			writeError(w, http.StatusUnauthorized, normErr.Error())
-			return
-		}
-		if validErr := (*NormalizationValidationError)(nil); errors.As(normErr, &validErr) {
-			writeError(w, http.StatusForbidden, normErr.Error())
-			return
-		}
-		writeError(w, http.StatusServiceUnavailable, "identity normalization failed")
-		return
-	}
-
+	rawReq, principal, traceID, remoteAddr, start := nc.rawReq, nc.principal, nc.traceID, nc.remoteAddr, nc.start
 	req := NewAuthorizedRequest(rawReq, principal)
+
 	pdpResp, err := s.pdp.Evaluate(ctx, req)
 	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		slog.ErrorContext(ctx, "pdp evaluate failed", "error", err, "trace_id", traceID)
+		if s.activityLog != nil {
+			s.activityLog.LogRequest(activitylog.RequestEntry{
+				SessionID:   req.SessionID,
+				TraceID:     traceID,
+				RemoteAddr:  remoteAddr,
+				UserID:      req.Principal.UserID,
+				Agent:       rawReq.Agent,
+				ServerName:  req.ServerName,
+				ToolName:    req.ToolName,
+				Arguments:   req.Arguments,
+				PDPDecision: "error",
+				PDPReason:   err.Error(),
+			})
+			s.activityLog.LogResponse(activitylog.ResponseEntry{
+				SessionID:  req.SessionID,
+				TraceID:    traceID,
+				RemoteAddr: remoteAddr,
+				UserID:     req.Principal.UserID,
+				Agent:      rawReq.Agent,
+				ServerName: req.ServerName,
+				ToolName:   req.ToolName,
+				DurationMS: time.Since(start).Milliseconds(),
+				Status:     "backend_error",
+				Error:      shared.ErrPDPUnavailable.Error(),
+			})
+		}
 		writeError(w, http.StatusServiceUnavailable, shared.ErrPDPUnavailable.Error())
 		return
 	}
 
-	if s.decisionLog != nil {
-		s.decisionLog.Log(&DecisionLogEntry{
-			SessionID:  req.SessionID,
-			TraceID:    req.TraceID,
-			UserID:     req.Principal.UserID,
-			ServerName: req.ServerName,
-			ToolName:   req.ToolName,
-			Decision:   pdpResp.Decision,
-			Reason:     pdpResp.Reason,
-			Source:     "pdp",
-			Arguments:  req.Arguments,
+	span.SetAttributes(attribute.String("pdp.decision", pdpResp.Decision))
+	slog.InfoContext(ctx, "pdp decision",
+		"decision", pdpResp.Decision,
+		"tool", req.ToolName,
+		"user", req.Principal.UserID,
+		"trace_id", traceID,
+	)
+
+	if s.activityLog != nil {
+		s.activityLog.LogRequest(activitylog.RequestEntry{
+			SessionID:     req.SessionID,
+			TraceID:       traceID,
+			RemoteAddr:    remoteAddr,
+			UserID:        req.Principal.UserID,
+			Agent:         rawReq.Agent,
+			ServerName:    req.ServerName,
+			ToolName:      req.ToolName,
+			Arguments:     req.Arguments,
+			PDPDecision:   pdpResp.Decision,
+			PDPReason:     pdpResp.Reason,
+			EscalationJTIs: escalationJTIs(req.EscalationTokens),
 		})
 	}
 
 	switch pdpResp.Decision {
 	case "allow":
+		if s.activityLog != nil {
+			s.activityLog.LogResponse(activitylog.ResponseEntry{
+				SessionID:  req.SessionID,
+				TraceID:    traceID,
+				RemoteAddr: remoteAddr,
+				UserID:     req.Principal.UserID,
+				Agent:      rawReq.Agent,
+				ServerName: req.ServerName,
+				ToolName:   req.ToolName,
+				DurationMS: time.Since(start).Milliseconds(),
+				Status:     "success",
+			})
+		}
 		writeJSON(w, http.StatusOK, pdpResp)
 	case "deny":
+		span.SetStatus(codes.Error, "denied by policy")
+		if s.activityLog != nil {
+			s.activityLog.LogResponse(activitylog.ResponseEntry{
+				SessionID:  req.SessionID,
+				TraceID:    traceID,
+				RemoteAddr: remoteAddr,
+				UserID:     req.Principal.UserID,
+				Agent:      rawReq.Agent,
+				ServerName: req.ServerName,
+				ToolName:   req.ToolName,
+				DurationMS: time.Since(start).Milliseconds(),
+				Status:     "denied",
+				Error:      pdpResp.Reason,
+			})
+		}
 		writeDeny(w, pdpResp.Reason, traceID)
 	case "escalate":
 		pendingJWT := ""
 		escalationJTI := ""
 		if s.signer != nil {
-			pendingJWT, escalationJTI, _ = s.signer.Sign(req, pdpResp.Reason, pdpResp.EscalationScope)
+			var signErr error
+			pendingJWT, escalationJTI, signErr = s.signer.Sign(req, pdpResp.Reason, pdpResp.EscalationScope)
+			if signErr != nil {
+				slog.ErrorContext(ctx, "escalation jwt sign failed", "error", signErr, "trace_id", traceID)
+			}
 		}
-		wfRef, _ := s.workflow.Submit(ctx, req, pendingJWT)
+		wfRef, wfErr := s.workflow.Submit(ctx, req, pendingJWT)
+		if wfErr != nil {
+			span.SetStatus(codes.Error, wfErr.Error())
+			slog.ErrorContext(ctx, "workflow submit failed", "error", wfErr, "trace_id", traceID)
+			if s.activityLog != nil {
+				s.activityLog.LogResponse(activitylog.ResponseEntry{
+					SessionID:  req.SessionID,
+					TraceID:    traceID,
+					RemoteAddr: remoteAddr,
+					UserID:     req.Principal.UserID,
+					Agent:      rawReq.Agent,
+					ServerName: req.ServerName,
+					ToolName:   req.ToolName,
+					DurationMS: time.Since(start).Milliseconds(),
+					Status:     "backend_error",
+					Error:      "workflow submit failed: " + wfErr.Error(),
+				})
+			}
+			writeError(w, http.StatusInternalServerError, "failed to submit escalation")
+			return
+		}
+		if s.activityLog != nil {
+			s.activityLog.LogResponse(activitylog.ResponseEntry{
+				SessionID:     req.SessionID,
+				TraceID:       traceID,
+				RemoteAddr:    remoteAddr,
+				UserID:        req.Principal.UserID,
+				Agent:         rawReq.Agent,
+				ServerName:    req.ServerName,
+				ToolName:      req.ToolName,
+				DurationMS:        time.Since(start).Milliseconds(),
+				Status:            "escalation_pending",
+				EscalationJTI:     escalationJTI,
+				WorkflowReference: wfRef,
+			})
+		}
 		writeJSON(w, http.StatusAccepted, map[string]string{
 			"status":             "escalation_pending",
 			"reason":             pdpResp.Reason,
@@ -583,6 +1004,21 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 			"trace_id":           traceID,
 		})
 	default:
+		span.SetStatus(codes.Error, "unknown decision")
+		if s.activityLog != nil {
+			s.activityLog.LogResponse(activitylog.ResponseEntry{
+				SessionID:  req.SessionID,
+				TraceID:    traceID,
+				RemoteAddr: remoteAddr,
+				UserID:     req.Principal.UserID,
+				Agent:      rawReq.Agent,
+				ServerName: req.ServerName,
+				ToolName:   req.ToolName,
+				DurationMS: time.Since(start).Milliseconds(),
+				Status:     "denied",
+				Error:      "unknown pdp decision",
+			})
+		}
 		writeDeny(w, "unsupported decision for authorize", traceID)
 	}
 }
@@ -595,50 +1031,6 @@ func (s *Server) handleListTools(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, tools)
-}
-
-// handleLog receives decision log entries from portcullis-gate instances.
-func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.Limits.MaxRequestBodyBytes > 0 {
-		r.Body = http.MaxBytesReader(w, r.Body, int64(s.cfg.Limits.MaxRequestBodyBytes))
-	}
-
-	var batch struct {
-		APIVersion string             `json:"api_version"`
-		Entries    []DecisionLogEntry `json:"entries"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	if s.cfg.Limits.MaxLogBatchSize > 0 && len(batch.Entries) > s.cfg.Limits.MaxLogBatchSize {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("batch size %d exceeds maximum of %d", len(batch.Entries), s.cfg.Limits.MaxLogBatchSize))
-		return
-	}
-
-	acceptedCount := 0
-	for i := range batch.Entries {
-		entry := &batch.Entries[i]
-		if !isValidDecision(entry.Decision) {
-			slog.Warn("skipping log entry with invalid decision", "decision", entry.Decision, "trace_id", entry.TraceID)
-			continue
-		}
-		if s.cfg.Limits.MaxReasonBytes > 0 && len(entry.Reason) > s.cfg.Limits.MaxReasonBytes {
-			slog.Warn("skipping log entry with oversized reason", "len", len(entry.Reason), "trace_id", entry.TraceID)
-			continue
-		}
-
-		if s.decisionLog != nil {
-			s.decisionLog.Log(entry)
-		}
-		acceptedCount++
-	}
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status": "accepted",
-		"count":  acceptedCount,
-	})
 }
 
 // handleGetConfig fetches a static tool configuration from the gate_static_policy PDP.
@@ -669,15 +1061,6 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(cfg)
-}
-
-func isValidDecision(d string) bool {
-	switch d {
-	case "allow", "deny", "escalate", "workflow":
-		return true
-	default:
-		return false
-	}
 }
 
 func (s *Server) hasWorkflow() bool {
@@ -940,6 +1323,39 @@ func (s *Server) backendOAuthConfig(name string) *BackendOAuth {
 // decodeRedisConfig decodes the StorageConfig.Config map into a RedisConfig.
 func decodeRedisConfig(raw map[string]interface{}, out *RedisConfig) error {
 	return mapstructure.Decode(raw, out)
+}
+
+// escalationJTIs returns the TokenID of every escalation token in the slice.
+// Logging all JTIs rather than just the first allows an analyst to join a retry
+// mcp_request with any of the escalation_pending mcp_responses that issued
+// them, and to reconstruct multi-step approval chains. Returns nil when empty.
+func escalationJTIs(tokens []shared.EscalationToken) []string {
+	if len(tokens) == 0 {
+		return nil
+	}
+	jtis := make([]string, len(tokens))
+	for i, t := range tokens {
+		jtis[i] = t.TokenID
+	}
+	return jtis
+}
+
+// capWriter is an io.Writer that accepts at most max bytes into buf, silently
+// discarding the rest. It always reports success so it never interrupts the
+// io.TeeReader wrapping it. Used to bound the preview buffer in handleCall.
+type capWriter struct {
+	buf *bytes.Buffer
+	max int
+}
+
+func (c *capWriter) Write(p []byte) (int, error) {
+	if rem := c.max - c.buf.Len(); rem > 0 {
+		if len(p) > rem {
+			p = p[:rem]
+		}
+		c.buf.Write(p) //nolint:errcheck // bytes.Buffer.Write never returns an error
+	}
+	return len(p), nil
 }
 
 func (s *Server) authMiddleware(next http.Handler) http.Handler {

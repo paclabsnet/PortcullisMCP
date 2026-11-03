@@ -58,7 +58,7 @@ func TestMultiTenantProvider_SessionIDPersistence(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			p := NewMultiTenantProvider("X-User-Token", store, nil)
+			p := NewMultiTenantProvider("X-User-Token", store)
 			_, sid, err := p.Authenticate(mtAuthReq(tc.reqSID, tc.reqToken))
 			if tc.wantForbidden {
 				if err == nil || !strings.Contains(err.Error(), "forbidden") {
@@ -82,7 +82,7 @@ func TestMultiTenantProvider_SessionIDPersistence(t *testing.T) {
 	}
 
 	t.Run("ID stable across two calls and enforced afterwards", func(t *testing.T) {
-		p := NewMultiTenantProvider("X-User-Token", NewMemorySessionStore(), nil)
+		p := NewMultiTenantProvider("X-User-Token", NewMemorySessionStore())
 		_, s1, err := p.Authenticate(mtAuthReq("sdk-9", "tok-a"))
 		if err != nil {
 			t.Fatal(err)
@@ -118,7 +118,7 @@ func TestMultiTenantProvider_BindRace(t *testing.T) {
 			store := &racingStore{MemorySessionStore: mem, onMiss: func() {
 				_ = mem.SaveSession(context.Background(), "sdk-r", "", credentialFingerprint(tt.racerToken))
 			}}
-			p := NewMultiTenantProvider("X-User-Token", store, nil)
+			p := NewMultiTenantProvider("X-User-Token", store)
 			_, _, err := p.Authenticate(mtAuthReq("sdk-r", "tok-a"))
 			if tt.wantForbidden != (err != nil && strings.Contains(err.Error(), "forbidden")) {
 				t.Errorf("err = %v, wantForbidden = %v", err, tt.wantForbidden)

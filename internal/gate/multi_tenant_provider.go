@@ -23,21 +23,18 @@ import (
 )
 
 // MultiTenantProvider implements TenancyProvider for multi-tenant deployments.
-// It enforces per-request credential fingerprinting, disables all single-tenant
-// capabilities, and converts escalation/deny errors into opaque SIEM log entries.
+// It enforces per-request credential fingerprinting and disables all
+// single-tenant capabilities.
 type MultiTenantProvider struct {
 	tokenHeader string
 	sessions    SessionStore
-	logger      DecisionLogger
 }
 
-// NewMultiTenantProvider creates a MultiTenantProvider. logger may be nil at
-// construction time and set later (e.g. once the Gate's logger is allocated).
-func NewMultiTenantProvider(tokenHeader string, sessions SessionStore, logger DecisionLogger) *MultiTenantProvider {
+// NewMultiTenantProvider creates a MultiTenantProvider.
+func NewMultiTenantProvider(tokenHeader string, sessions SessionStore) *MultiTenantProvider {
 	return &MultiTenantProvider{
 		tokenHeader: tokenHeader,
 		sessions:    sessions,
-		logger:      logger,
 	}
 }
 

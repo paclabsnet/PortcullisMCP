@@ -48,6 +48,7 @@ const (
 	identityKey              gateCtxKey = "identity"
 	clientHeadersKey         gateCtxKey = "clientHeaders"
 	credentialFingerprintKey gateCtxKey = "credentialFingerprint"
+	agentInfoKey             gateCtxKey = "agentInfo"
 )
 
 // SessionIDFromContext returns the session ID stored in ctx, or ("", false) if absent.
@@ -91,12 +92,22 @@ func CredentialFingerprintFromContext(ctx context.Context) (string, bool) {
 	return v, ok
 }
 
+// withAgentInfo returns a new context carrying the MCP client agent info.
+func withAgentInfo(ctx context.Context, agent shared.AgentInfo) context.Context {
+	return context.WithValue(ctx, agentInfoKey, agent)
+}
+
+// agentInfoFromContext returns the AgentInfo stored in ctx, or the zero value if absent.
+func agentInfoFromContext(ctx context.Context) shared.AgentInfo {
+	v, _ := ctx.Value(agentInfoKey).(shared.AgentInfo)
+	return v
+}
+
 // KeepForwarder defines the interface for communicating with Portcullis Keep.
 type KeepForwarder interface {
 	CallTool(ctx context.Context, req shared.EnrichedMCPRequest) (*mcp.CallToolResult, error)
 	Authorize(ctx context.Context, req shared.EnrichedMCPRequest) error
 	ListTools(ctx context.Context, identity shared.UserIdentity, escalationTokens []shared.EscalationToken) ([]shared.AnnotatedTool, error)
-	SendLogs(ctx context.Context, entries []DecisionLogEntry) error
 	GetStaticPolicy(ctx context.Context, resource string) (json.RawMessage, error)
 }
 
@@ -114,7 +125,6 @@ type Gate struct {
 	identity        IdentitySource       // handles user info resolution
 	forwarder       KeepForwarder
 	escalationMgr   EscalationManager // abstracts Guard interactions and pending escalation state
-	logger          DecisionLogger    // async decision log shipping
 	server          *mcp.Server
 	localFS         *mcp.ClientSession // in-process filesystem backend
 	localFSServer   *localfs.Server    // nil when localFS is disabled
@@ -167,7 +177,7 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 	mcpEpCfg := cfg.Server.Endpoints[MCPEndpoint]
 	var provider TenancyProvider
 	if cfg.Tenancy == "multi" {
-		provider = NewMultiTenantProvider(mcpEpCfg.Auth.Credentials.Header, nil, nil)
+		provider = NewMultiTenantProvider(mcpEpCfg.Auth.Credentials.Header, nil)
 	} else {
 		provider = NewSingleTenantProvider(identityCache, mcpEpCfg.Auth.Credentials.Header)
 	}
@@ -278,13 +288,6 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 		return nil, err
 	}
 
-	// Build the decision logger before the Gate struct so it can be wired to the
-	// MultiTenantProvider (which also emits decision log entries).
-	logger := NewBatchDecisionLogger(cfg.Responsibility.DecisionLogs, fwd)
-	if mtp, ok := provider.(*MultiTenantProvider); ok {
-		mtp.logger = logger
-	}
-
 	// For multi-tenant with disabled escalation (no Redis required), fall back
 	// to an in-memory token store — tokens are never persisted in this mode.
 	if tokenStore == nil {
@@ -312,7 +315,6 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 		escalations:   tokenStore,
 		forwarder:     fwd,
 		escalationMgr: escalationMgr,
-		logger:        logger,
 		localFS:       localFSSession,
 		localFSServer: localFSServer,
 		localFSPolicy: initialLocalFSPolicy,
@@ -497,9 +499,6 @@ func (g *Gate) handleLoginTool(ctx context.Context, force bool) string {
 }
 
 func (g *Gate) Run(ctx context.Context) error {
-	// Start the decision log worker. It flushes remaining entries on ctx cancellation.
-	g.logger.Start(ctx)
-
 	// Management server and guard polling are single-tenant concerns.
 	// Multi-tenant mode forbids both by config validation.
 	if g.provider.Capabilities().AllowManagementUI {
@@ -611,6 +610,16 @@ func (g *Gate) registerTool(tool *mcp.Tool) {
 				return nil, fmt.Errorf("decode tool arguments: %w", err)
 			}
 		}
+		// Capture clientInfo from the MCP initialize handshake and propagate it
+		// so that activity log records include the agent name and version.
+		if req.Session != nil {
+			if p := req.Session.InitializeParams(); p != nil && p.ClientInfo != nil {
+				ctx = withAgentInfo(ctx, shared.AgentInfo{
+					Name:    p.ClientInfo.Name,
+					Version: p.ClientInfo.Version,
+				})
+			}
+		}
 		return g.handleToolCall(ctx, req.Params.Name, args)
 	})
 }
@@ -686,18 +695,6 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 		span.SetAttributes(attribute.String("pdp.decision", "allow"), attribute.String("pdp.source", "fastpath"))
 		slog.InfoContext(ctx, "fast-path allow", "tool", toolName, "path", path, "trace_id", traceID)
 
-		g.logger.Log(DecisionLogEntry{
-			Timestamp: time.Now().UTC(),
-			SessionID: sessionID,
-			TraceID:   traceID,
-			UserID:    g.identity.Get(ctx).UserID,
-			ToolName:  toolName,
-			Decision:  "allow",
-			Reason:    "sandbox",
-			Source:    "gate-fastpath",
-			Arguments: args,
-		})
-
 		if g.localFS == nil {
 			return nil, fmt.Errorf("local filesystem server not configured")
 		}
@@ -711,22 +708,11 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 		span.SetStatus(codes.Error, "fast-path deny")
 		slog.InfoContext(ctx, "fast-path deny", "tool", toolName, "path", path, "trace_id", traceID)
 
-		g.logger.Log(DecisionLogEntry{
-			Timestamp: time.Now().UTC(),
-			SessionID: sessionID,
-			TraceID:   traceID,
-			UserID:    g.identity.Get(ctx).UserID,
-			ToolName:  toolName,
-			Decision:  "deny",
-			Reason:    "protected path",
-			Source:    "gate-fastpath",
-			Arguments: args,
-		})
-
 		return nil, shared.ErrDenied
 	}
 
 	currentIdentity := g.identity.Get(ctx)
+	agentInfo := agentInfoFromContext(ctx)
 
 	if g.localFSTools[toolName] {
 		enriched := shared.EnrichedMCPRequest{
@@ -735,6 +721,7 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 			ToolName:         toolName,
 			Arguments:        args,
 			UserIdentity:     currentIdentity,
+			Agent:            agentInfo,
 			EscalationTokens: g.escalationMgr.CollectTokens(ctx, shared.LocalFSServerName, toolName),
 			SessionID:        sessionID,
 			TraceID:          traceID,
@@ -765,6 +752,7 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 		ToolName:         toolName,
 		Arguments:        args,
 		UserIdentity:     currentIdentity,
+		Agent:            agentInfo,
 		EscalationTokens: g.escalationMgr.CollectTokens(ctx, serverName, toolName),
 		SessionID:        sessionID,
 		TraceID:          traceID,

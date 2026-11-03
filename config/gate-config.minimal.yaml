@@ -67,10 +67,6 @@ responsibility:
   escalation:
     token_store: "~/.portcullis/tokens.json"
 
-# decision_logs:
-#   flush_interval: 30          # seconds between batched sends to Keep (default: 30)
-#   max_batch_size: 100         # max entries per batch (default: 100)
-
 # agent_interaction:
 #   instructions:
 #     require_approval: |

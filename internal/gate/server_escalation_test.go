@@ -239,8 +239,7 @@ func TestBuildEscalationMessage_CustomInstructions_TraceIDOmitted(t *testing.T) 
 // ---- multi-tenant escalation interception -----------------------------------
 
 func newMultiTenantGate(marker string) *Gate {
-	captured := &captureLogger{}
-	provider := NewMultiTenantProvider("", nil, captured)
+	provider := NewMultiTenantProvider("", nil)
 	pending := NewInMemoryPendingStore()
 	escalationMgr := NewEscalationManager(nil, pending, nil, EscalationConfig{}, provider, nil, "")
 	return &Gate{
@@ -252,7 +251,6 @@ func newMultiTenantGate(marker string) *Gate {
 			},
 		},
 		escalationMgr: escalationMgr,
-		logger:        captured,
 		provider:      provider,
 	}
 }
@@ -282,37 +280,6 @@ func TestMultiTenantEscalation_EscalationIntercepted(t *testing.T) {
 	}
 	if tc.Text != "SIEM-DENY" {
 		t.Errorf("expected NoEscalationMarker %q, got %q", "SIEM-DENY", tc.Text)
-	}
-}
-
-func TestMultiTenantEscalation_SIEMLogQueued(t *testing.T) {
-	// policyErrToResult must queue a DecisionLogEntry with the session and trace IDs.
-	g := newMultiTenantGate("SIEM-DENY")
-	ctx := withSessionID(context.Background(), "session-mt-abc")
-
-	escalationErr := &shared.EscalationPendingError{Reason: "needs approval"}
-	_, _ = g.policyErrToResult(ctx, escalationErr, "my_tool", "trace-mt-2")
-
-	captured := g.logger.(*captureLogger)
-	entries := captured.all()
-	if len(entries) == 0 {
-		t.Fatal("expected a DecisionLogEntry to be queued")
-	}
-	entry := entries[0]
-	if entry.SessionID != "session-mt-abc" {
-		t.Errorf("expected session_id %q, got %q", "session-mt-abc", entry.SessionID)
-	}
-	if entry.TraceID != "trace-mt-2" {
-		t.Errorf("expected trace_id %q, got %q", "trace-mt-2", entry.TraceID)
-	}
-	if entry.UserID != "" {
-		t.Errorf("UserID must be empty in multi-tenant mode (Gate never parses tokens); got %q", entry.UserID)
-	}
-	if entry.Decision != "deny" {
-		t.Errorf("expected decision %q, got %q", "deny", entry.Decision)
-	}
-	if entry.ToolName != "my_tool" {
-		t.Errorf("expected tool_name %q, got %q", "my_tool", entry.ToolName)
 	}
 }
 

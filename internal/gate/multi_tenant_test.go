@@ -172,15 +172,13 @@ func TestMultiTenantBoundary_LocalFSBlockedByTenancy(t *testing.T) {
 	}
 }
 
-// newMultiTenantGateForAudit builds a minimal multi-tenant Gate for audit tests,
-// using a captureLogger shared between the Gate and its MultiTenantProvider.
-func newMultiTenantGateForAudit(t *testing.T, marker string) (*Gate, *captureLogger) {
+// newMultiTenantGateForAudit builds a minimal multi-tenant Gate for audit tests.
+func newMultiTenantGateForAudit(t *testing.T, marker string) *Gate {
 	t.Helper()
-	captured := &captureLogger{}
-	provider := NewMultiTenantProvider("", nil, captured)
+	provider := NewMultiTenantProvider("", nil)
 	pending := NewInMemoryPendingStore()
 	escalationMgr := NewEscalationManager(nil, pending, nil, EscalationConfig{NoEscalationMarker: marker}, provider, nil, "")
-	g := &Gate{
+	return &Gate{
 		cfg: Config{
 			Tenancy:    "multi",
 			Escalation: "disabled", // escalation interception handled in policyErrToResult
@@ -189,17 +187,15 @@ func newMultiTenantGateForAudit(t *testing.T, marker string) (*Gate, *captureLog
 			},
 		},
 		escalationMgr: escalationMgr,
-		logger:        captured,
 		provider:      provider,
 	}
-	return g, captured
 }
 
 // TestMultiTenantBoundary_StatelessnessAudit verifies that after a Deny response
 // in multi-tenant mode the PendingEscalationStore remains completely empty —
 // no "human-in-the-loop" state leaks across the tenant boundary.
 func TestMultiTenantBoundary_StatelessnessAudit(t *testing.T) {
-	g, _ := newMultiTenantGateForAudit(t, "")
+	g := newMultiTenantGateForAudit(t, "")
 
 	escalationErr := &shared.EscalationPendingError{
 		Reason:        "requires manager sign-off",
@@ -258,63 +254,12 @@ func TestMultiTenantBoundary_FingerprintEnforcement(t *testing.T) {
 	})
 }
 
-// TestMultiTenantBoundary_CorrelationAudit verifies that the trace_id is
-// consistently present in SIEM DecisionLogEntry records emitted for denied
-// requests in multi-tenant mode.
-func TestMultiTenantBoundary_CorrelationAudit(t *testing.T) {
-	g, captured := newMultiTenantGateForAudit(t, "DENIED")
-
-	testCases := []struct {
-		name    string
-		err     error
-		traceID string
-	}{
-		{
-			name:    "escalation error produces SIEM log with trace_id",
-			err:     &shared.EscalationPendingError{Reason: "needs approval", EscalationJTI: "jti-1"},
-			traceID: "trace-correlation-1",
-		},
-		{
-			name:    "deny error produces SIEM log with trace_id",
-			err:     &shared.DenyError{Reason: "not permitted"},
-			traceID: "trace-correlation-2",
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			// Reset captured entries for each sub-test.
-			captured.mu.Lock()
-			captured.entries = nil
-			captured.mu.Unlock()
-
-			ctx := withSessionID(context.Background(), "session-correlation")
-			_, _ = g.policyErrToResult(ctx, tc.err, "audited_tool", tc.traceID)
-
-			entries := captured.all()
-			if len(entries) == 0 {
-				t.Fatal("expected a SIEM DecisionLogEntry to be queued")
-			}
-			entry := entries[0]
-			if entry.TraceID == "" {
-				t.Error("trace_id must be present in SIEM log for correlation")
-			}
-			if entry.TraceID != tc.traceID {
-				t.Errorf("trace_id = %q, want %q", entry.TraceID, tc.traceID)
-			}
-			if entry.Decision != "deny" {
-				t.Errorf("decision = %q, want %q", entry.Decision, "deny")
-			}
-		})
-	}
-}
-
 // TestMultiTenantBoundary_InfraErrorsNotMasked verifies that infrastructure errors
 // (identity verification failures, transport errors, and other unknown errors) are
 // NOT converted to deny markers in multi-tenant mode. They must propagate as real
 // errors so callers can distinguish a PDP/transport outage from a policy denial.
 func TestMultiTenantBoundary_InfraErrorsNotMasked(t *testing.T) {
-	g, captured := newMultiTenantGateForAudit(t, "SIEM-DENY")
+	g := newMultiTenantGateForAudit(t, "SIEM-DENY")
 
 	infraErrors := []struct {
 		name string
@@ -332,11 +277,6 @@ func TestMultiTenantBoundary_InfraErrorsNotMasked(t *testing.T) {
 
 	for _, tc := range infraErrors {
 		t.Run(tc.name, func(t *testing.T) {
-			// Reset captured entries for each sub-test.
-			captured.mu.Lock()
-			captured.entries = nil
-			captured.mu.Unlock()
-
 			result, retErr := g.policyErrToResult(context.Background(), tc.err, "tool", "trace-infra")
 
 			// Infrastructure errors must surface as a returned error, not a denied result.
@@ -345,10 +285,6 @@ func TestMultiTenantBoundary_InfraErrorsNotMasked(t *testing.T) {
 			}
 			if result != nil {
 				t.Errorf("expected nil result for infrastructure error, got: %+v", result)
-			}
-			// No SIEM log should be queued for infrastructure errors.
-			if entries := captured.all(); len(entries) > 0 {
-				t.Errorf("infrastructure error must not emit a SIEM log entry; got: %+v", entries[0])
 			}
 		})
 	}
