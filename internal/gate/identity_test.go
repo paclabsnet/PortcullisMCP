@@ -22,6 +22,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/paclabsnet/PortcullisMCP/internal/shared/oidcutil"
 )
 
 // buildJWT creates a structurally valid but signature-less JWT for testing
@@ -41,7 +43,7 @@ func buildJWT(claims map[string]any) string {
 func TestUnsafeParseJWTClaims(t *testing.T) {
 	t.Run("valid JWT returns claims", func(t *testing.T) {
 		raw := buildJWT(map[string]any{"sub": "alice", "iss": "test"})
-		claims, err := unsafeParseJWTClaims(raw)
+		claims, err := oidcutil.UnsafeParseJWTClaims(raw)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -51,14 +53,14 @@ func TestUnsafeParseJWTClaims(t *testing.T) {
 	})
 
 	t.Run("not a JWT — too few parts", func(t *testing.T) {
-		_, err := unsafeParseJWTClaims("one.two")
+		_, err := oidcutil.UnsafeParseJWTClaims("one.two")
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
 	})
 
 	t.Run("invalid base64 payload", func(t *testing.T) {
-		_, err := unsafeParseJWTClaims("header.!!invalid!!.sig")
+		_, err := oidcutil.UnsafeParseJWTClaims("header.!!invalid!!.sig")
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
@@ -66,7 +68,7 @@ func TestUnsafeParseJWTClaims(t *testing.T) {
 
 	t.Run("payload is not JSON", func(t *testing.T) {
 		notJSON := base64.RawURLEncoding.EncodeToString([]byte("not-json"))
-		_, err := unsafeParseJWTClaims("h." + notJSON + ".s")
+		_, err := oidcutil.UnsafeParseJWTClaims("h." + notJSON + ".s")
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}

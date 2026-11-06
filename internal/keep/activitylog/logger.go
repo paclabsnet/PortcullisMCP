@@ -157,6 +157,12 @@ type malformedRecord struct {
 	RawPreview string    `json:"raw_preview,omitempty"`
 }
 
+// StatsSink is an optional interface implemented by sinks that maintain delivery
+// counters. ActivityLogger.Stats merges these counters when the sink supports it.
+type StatsSink interface {
+	Stats() map[string]any
+}
+
 // ActivityLogger is the core audit log engine. It accepts structured event entries,
 // queues them on a bounded in-memory channel, and drains them in a single background
 // goroutine, guaranteeing FIFO ordering in the output file.
@@ -271,6 +277,30 @@ func (al *ActivityLogger) Shutdown(ctx context.Context) error {
 // or post-shutdown arrival.
 func (al *ActivityLogger) DroppedCount() int64 {
 	return al.droppedCount.Load()
+}
+
+// Stats returns diagnostic counters for the logger and, if the underlying sink
+// implements StatsSink, its delivery counters as well. The returned map always
+// contains "buffer_dropped" (events dropped at the logger channel). Remote sinks
+// also contribute "exported_entries", "sink_dropped_batches", and
+// "sink_dropped_entries".
+func (al *ActivityLogger) Stats() map[string]any {
+	m := map[string]any{
+		"buffer_dropped": al.droppedCount.Load(),
+	}
+	if ss, ok := al.sink.(StatsSink); ok {
+		for k, v := range ss.Stats() {
+			switch k {
+			case "exported_entries":
+				m["exported_entries"] = v
+			case "dropped_batches":
+				m["sink_dropped_batches"] = v
+			case "dropped_entries":
+				m["sink_dropped_entries"] = v
+			}
+		}
+	}
+	return m
 }
 
 // worker is the single background goroutine that serialises and writes log entries.

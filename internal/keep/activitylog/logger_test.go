@@ -451,6 +451,66 @@ func TestTruncateUTF8_Boundary(t *testing.T) {
 	}
 }
 
+// statsSink implements both ActivitySink and StatsSink for testing Stats().
+type statsSink struct {
+	bufferSink
+	exported int64
+	dropped  int64
+}
+
+func (s *statsSink) Stats() map[string]any {
+	return map[string]any{
+		"exported_entries": s.exported,
+		"dropped_batches":  int64(0),
+		"dropped_entries":  s.dropped,
+	}
+}
+
+func TestActivityLogger_Stats_NoSinkStats(t *testing.T) {
+	// bufferSink does not implement StatsSink; Stats() should only contain buffer_dropped.
+	al, sink := newTestLogger(cfgloader.MCPActivityLogConfig{
+		BufferSize:      10,
+		MaxPayloadBytes: 256,
+	})
+	_ = sink // not used directly
+	stats := al.Stats()
+	if _, ok := stats["buffer_dropped"]; !ok {
+		t.Error("expected buffer_dropped key in Stats()")
+	}
+	if _, ok := stats["exported_entries"]; ok {
+		t.Error("unexpected exported_entries in Stats() for non-StatsSink")
+	}
+}
+
+func TestActivityLogger_Stats_WithSinkStats(t *testing.T) {
+	cfg := cfgloader.MCPActivityLogConfig{
+		BufferSize:      10,
+		MaxPayloadBytes: 256,
+	}
+	ss := &statsSink{}
+	ss.exported = 42
+	al := NewWithSink(cfg, ss)
+
+	al.LogRequest(RequestEntry{ToolName: "t"})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_ = al.Shutdown(ctx)
+
+	stats := al.Stats()
+	if v, ok := stats["exported_entries"]; !ok || v.(int64) != 42 {
+		t.Errorf("exported_entries: got %v, want 42", stats["exported_entries"])
+	}
+	if _, ok := stats["sink_dropped_batches"]; !ok {
+		t.Error("expected sink_dropped_batches key")
+	}
+	if _, ok := stats["sink_dropped_entries"]; !ok {
+		t.Error("expected sink_dropped_entries key")
+	}
+	if _, ok := stats["buffer_dropped"]; !ok {
+		t.Error("expected buffer_dropped key")
+	}
+}
+
 func isValidUTF8String(s string) bool {
 	for _, r := range s {
 		if r == '\uFFFD' {

@@ -17,6 +17,8 @@ package config
 import (
 	"log/slog"
 	"reflect"
+
+	"github.com/paclabsnet/PortcullisMCP/internal/shared/secrets"
 )
 
 // PostureFinding records a single security property observed at startup.
@@ -88,8 +90,11 @@ func (r PostureReport) Log(component string) {
 }
 
 // BuildPostureReport walks cfg using reflection and collects all string fields
-// as findings. Fields present in allowlist are redacted. Sources are populated
-// from the provided SourceMap; fields absent from the map default to "static".
+// as findings. Fields present in allowlist are redacted. Map child paths are
+// also redacted when their parent map path is in the allowlist (e.g. a header
+// value at "mcp_activity_log.http.headers.Authorization" is redacted because
+// "mcp_activity_log.http.headers" is allowlisted). Sources are populated from
+// the provided SourceMap; fields absent from the map default to "static".
 func BuildPostureReport(cfg any, sources SourceMap, allowlist []string) PostureReport {
 	redact := make(map[string]bool, len(allowlist))
 	for _, p := range allowlist {
@@ -104,7 +109,7 @@ func BuildPostureReport(cfg any, sources SourceMap, allowlist []string) PostureR
 			source = "static"
 		}
 		displayValue := value
-		if redact[path] && value != "" {
+		if secrets.IsFieldAllowlisted(path, redact) && value != "" {
 			displayValue = "[REDACTED]"
 		}
 		report.Findings = append(report.Findings, PostureFinding{
@@ -117,3 +122,4 @@ func BuildPostureReport(cfg any, sources SourceMap, allowlist []string) PostureR
 	})
 	return report
 }
+

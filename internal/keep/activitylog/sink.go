@@ -32,23 +32,37 @@ type ActivitySink interface {
 }
 
 // newSink constructs the appropriate ActivitySink for the given config.
-// Returns an error if a file sink cannot be initialised.
+// For remote sinks ("http", "otlp"), no local files are created and the
+// zero-disk mandate is strictly enforced — errors return a nil sink (noop),
+// never fall back to file logging.
 func newSink(cfg cfgloader.MCPActivityLogConfig) (ActivitySink, error) {
-	if cfg.File == "stdout" {
+	switch cfg.Sink {
+	case "http":
+		return NewHTTPBatchSink(cfg.HTTP)
+	case "otlp":
+		return NewOTLPSink(cfg.OTLP)
+	case "stdout":
 		return &stdoutSink{}, nil
+	case "file", "":
+		// Legacy back-compat: "file" was formerly signalled by File=="stdout".
+		if cfg.File == "stdout" {
+			return &stdoutSink{}, nil
+		}
+		if cfg.File == "" {
+			return nil, fmt.Errorf("activitylog: file path is empty")
+		}
+		return &fileSink{
+			lj: &lumberjack.Logger{
+				Filename:   cfg.File,
+				MaxSize:    cfg.MaxSizeMB,
+				MaxBackups: cfg.MaxBackups,
+				MaxAge:     cfg.MaxAgeDays,
+				Compress:   cfg.Compress,
+			},
+		}, nil
+	default:
+		return nil, fmt.Errorf("activitylog: unknown sink type %q", cfg.Sink)
 	}
-	if cfg.File == "" {
-		return nil, fmt.Errorf("activitylog: file path is empty")
-	}
-	return &fileSink{
-		lj: &lumberjack.Logger{
-			Filename:   cfg.File,
-			MaxSize:    cfg.MaxSizeMB,
-			MaxBackups: cfg.MaxBackups,
-			MaxAge:     cfg.MaxAgeDays,
-			Compress:   cfg.Compress,
-		},
-	}, nil
 }
 
 // fileSink writes JSON-lines records to a lumberjack rotating file.

@@ -16,9 +16,6 @@ package gate
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -30,6 +27,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/paclabsnet/PortcullisMCP/internal/shared/oidcutil"
 )
 
 const defaultPKCESessionExpiry = 10 * time.Minute
@@ -174,18 +173,18 @@ func (m *OIDCLoginManager) StartLogin(ctx context.Context) (string, error) {
 	}
 
 	// Generate PKCE code verifier and challenge
-	verifier, err := generateRandomString(64)
+	verifier, err := oidcutil.GenerateRandomString(64)
 	if err != nil {
 		return "", fmt.Errorf("generate code verifier: %w", err)
 	}
-	challenge := pkceChallenge(verifier)
+	challenge := oidcutil.PKCEChallenge(verifier)
 
 	// Generate state and nonce
-	state, err := generateRandomString(32)
+	state, err := oidcutil.GenerateRandomString(32)
 	if err != nil {
 		return "", fmt.Errorf("generate state: %w", err)
 	}
-	nonce, err := generateRandomString(32)
+	nonce, err := oidcutil.GenerateRandomString(32)
 	if err != nil {
 		return "", fmt.Errorf("generate nonce: %w", err)
 	}
@@ -434,7 +433,7 @@ func (m *OIDCLoginManager) exchangeCode(ctx context.Context, code, codeVerifier 
 
 // validateNonce verifies the nonce claim in the ID token without signature verification.
 func (m *OIDCLoginManager) validateNonce(idToken, expectedNonce string) error {
-	claims, err := unsafeParseJWTClaims(idToken)
+	claims, err := oidcutil.UnsafeParseJWTClaims(idToken)
 	if err != nil {
 		return fmt.Errorf("parse id_token claims: %w", err)
 	}
@@ -748,19 +747,4 @@ func (m *OIDCLoginManager) deleteTokenFile() {
 // which indicates natural refresh token expiry.
 func isInvalidGrant(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "invalid_grant")
-}
-
-// generateRandomString returns a URL-safe base64-encoded random string of n bytes.
-func generateRandomString(n int) (string, error) {
-	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(b), nil
-}
-
-// pkceChallenge computes the S256 PKCE code challenge from a verifier.
-func pkceChallenge(verifier string) string {
-	h := sha256.Sum256([]byte(verifier))
-	return base64.RawURLEncoding.EncodeToString(h[:])
 }

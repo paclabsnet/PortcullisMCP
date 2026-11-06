@@ -28,6 +28,7 @@ import (
 	"time"
 
 	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
+	"github.com/paclabsnet/PortcullisMCP/internal/shared/oidcutil"
 )
 
 //go:embed web/callback.html
@@ -179,7 +180,7 @@ func (ms *ManagementServer) handleList(w http.ResponseWriter, r *http.Request) {
 	out := make([]item, len(tokens))
 	for i, t := range tokens {
 		it := item{TokenID: t.TokenID, GrantedBy: t.GrantedBy}
-		if claims, err := unsafeParseJWTClaims(t.Raw); err == nil {
+		if claims, err := oidcutil.UnsafeParseJWTClaims(t.Raw); err == nil {
 			if exp, ok := claims["exp"].(float64); ok {
 				it.Expiry = time.Unix(int64(exp), 0).Local().Format("2006-01-02 15:04:05")
 			}

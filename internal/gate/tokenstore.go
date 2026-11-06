@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
+	"github.com/paclabsnet/PortcullisMCP/internal/shared/oidcutil"
 )
 
 // resolveStoragePrefix returns a context-derived storage key prefix for
@@ -296,7 +297,7 @@ func (ts *TokenStore) saveLocked() error {
 // It does NOT verify the signature — the PDP does that.
 func parseEscalationToken(raw string) (shared.EscalationToken, error) {
 	raw = strings.TrimSpace(raw)
-	claims, err := unsafeParseJWTClaims(raw)
+	claims, err := oidcutil.UnsafeParseJWTClaims(raw)
 	if err != nil {
 		return shared.EscalationToken{}, err
 	}

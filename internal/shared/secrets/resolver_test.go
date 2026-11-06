@@ -728,6 +728,68 @@ func TestYamlFieldName(t *testing.T) {
 	}
 }
 
+// ---- vault:// in map keys: prefix allowlisting ------------------------------
+
+func TestResolveConfig_AllowlistedMapPrefix(t *testing.T) {
+	const (
+		testMount  = "secret"
+		testPath   = "testpath"
+		testKey    = "mykey"
+		testSecret = "resolved-token"
+	)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"data": map[string]any{testKey: testSecret},
+			},
+		})
+	})
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	t.Setenv("VAULT_ADDR", ts.URL)
+	t.Setenv("VAULT_TOKEN", "test-token")
+
+	type ConfigWithMap struct {
+		Headers map[string]string `yaml:"headers"`
+		Other   map[string]string `yaml:"other"`
+	}
+
+	vaultURI := fmt.Sprintf("vault://%s/%s#%s", testMount, testPath, testKey)
+
+	// "headers" is allowlisted, "other" is NOT. Expect error on other.SECRET.
+	cfg := &ConfigWithMap{
+		Headers: map[string]string{
+			"DD-API-KEY": vaultURI,
+		},
+		Other: map[string]string{
+			"SECRET": vaultURI,
+		},
+	}
+	_, err := ResolveConfig(context.Background(), cfg, []string{"headers"})
+	if err == nil || !strings.Contains(err.Error(), "not permitted") {
+		t.Fatalf("expected 'not permitted' error on non-allowlisted map field 'other.SECRET', got: %v", err)
+	}
+
+	// Resolve with only the allowlisted map — no error expected.
+	cfg2 := &ConfigWithMap{
+		Headers: map[string]string{
+			"DD-API-KEY": vaultURI,
+		},
+	}
+	sources, err := ResolveConfig(context.Background(), cfg2, []string{"headers"})
+	if err != nil {
+		t.Fatalf("unexpected error on allowlisted map key: %v", err)
+	}
+	if cfg2.Headers["DD-API-KEY"] != testSecret {
+		t.Errorf("got %q, want %q", cfg2.Headers["DD-API-KEY"], testSecret)
+	}
+	if sources["headers.DD-API-KEY"] != "vault" {
+		t.Errorf("unexpected source for headers.DD-API-KEY: %v", sources)
+	}
+}
+
 // ---- slice elements ---------------------------------------------------------
 
 func TestResolveConfig_SliceElements(t *testing.T) {

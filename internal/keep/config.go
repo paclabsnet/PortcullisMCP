@@ -29,6 +29,7 @@ import (
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
 	identity "github.com/paclabsnet/PortcullisMCP/internal/shared/identity"
+	"github.com/paclabsnet/PortcullisMCP/internal/shared/redisutil"
 )
 
 // SecretAllowlist lists the config fields eligible for vault:// and other
@@ -45,6 +46,13 @@ var SecretAllowlist = []string{
 	"identity.config.secret",
 	"peers.normalization.auth.credentials.bearer_token",
 	"operations.storage.config.password",
+	// Remote activity log sink secrets
+	"mcp_activity_log.http.auth.token",
+	"mcp_activity_log.http.headers",
+	"mcp_activity_log.http.tls.ca_cert_pem",
+	"mcp_activity_log.otlp.auth.token",
+	"mcp_activity_log.otlp.headers",
+	"mcp_activity_log.otlp.tls.ca_cert_pem",
 }
 
 // LoadConfig reads, parses, resolves secrets in, and validates a keep config file.
@@ -92,90 +100,112 @@ type PeersConfig struct {
 	Normalization cfgloader.NormalizationPeerConfig `yaml:"normalization"`
 }
 
-// Validate returns a PostureReport and an error if the configuration contains invalid values.
+// Validate satisfies cfgloader.Loadable. It applies defaults first so that all
+// validators see the final effective configuration, then delegates to focused
+// helpers for structural validation, production security requirements, and
+// posture report annotation.
 func (c *Config) Validate(sources cfgloader.SourceMap) (cfgloader.PostureReport, error) {
+	c.applyDefaults()
+	if err := c.validateStructure(); err != nil {
+		return cfgloader.PostureReport{}, err
+	}
+	if err := c.validateProductionRequirements(); err != nil {
+		return cfgloader.PostureReport{}, err
+	}
+	report := cfgloader.BuildPostureReport(c, sources, SecretAllowlist)
+	c.annotatePostureReport(&report)
+	return report, nil
+}
+
+// applyDefaults sets any zero-value fields to their service defaults.
+// It is always called before any validation so that validators see the
+// effective configuration rather than raw YAML values.
+func (c *Config) applyDefaults() {
 	if c.Mode == "" {
 		c.Mode = cfgloader.ModeProduction
 	}
-
-	if c.Mode == cfgloader.ModeProduction {
-		if c.Identity.Strategy == "passthrough" {
-			return cfgloader.PostureReport{}, fmt.Errorf("identity.strategy \"passthrough\" is not allowed in production mode")
-		}
-		if c.Responsibility.Policy.Strategy == "noop" {
-			return cfgloader.PostureReport{}, fmt.Errorf("policy.strategy \"noop\" is not allowed in production mode")
-		}
-		normEP := c.Peers.Normalization.Endpoint
-		if normEP != "" && !strings.HasPrefix(normEP, "https://") {
-			return cfgloader.PostureReport{}, fmt.Errorf("peers.normalization.endpoint must use https:// in production mode (got %q)", normEP)
-		}
-		if val, ok := c.Identity.Config["allow_insecure_jwks_url"]; ok {
-			if b, ok := val.(bool); ok && b {
-				return cfgloader.PostureReport{}, fmt.Errorf("identity.config.allow_insecure_jwks_url is not allowed in production mode")
-			}
-		}
-		for name, ep := range c.Server.Endpoints {
-			if ep.Auth.Type == "none" {
-				return cfgloader.PostureReport{}, fmt.Errorf("auth.type \"none\" for endpoint %q is not allowed in production mode", name)
-			}
-			if !cfgloader.IsLoopback(ep.Listen) && !ep.IsSecure() {
-				return cfgloader.PostureReport{}, fmt.Errorf("TLS is required for non-loopback endpoint %q in production mode", name)
-			}
-		}
-	}
-
-	if normEP := c.Peers.Normalization.Endpoint; normEP != "" {
-		switch c.Peers.Normalization.Auth.Type {
-		case "", "none":
-			// valid; no credentials required
-		case "bearer":
-			if c.Peers.Normalization.Auth.Credentials.BearerToken == "" {
-				return cfgloader.PostureReport{}, fmt.Errorf("peers.normalization.auth.credentials.bearer_token is required when auth.type is \"bearer\"")
-			}
-		case "mtls":
-			return cfgloader.PostureReport{}, fmt.Errorf("peers.normalization.auth.type \"mtls\" is not supported for webhook peers; use \"none\" or \"bearer\"")
-		default:
-			return cfgloader.PostureReport{}, fmt.Errorf("peers.normalization.auth.type %q is not valid; must be \"none\" or \"bearer\"", c.Peers.Normalization.Auth.Type)
-		}
-	}
-
-	if _, ok := c.Server.Endpoints["main"]; !ok {
-		return cfgloader.PostureReport{}, fmt.Errorf("server.endpoints.main is required")
-	}
-
-	if err := c.Identity.Validate(); err != nil {
-		return cfgloader.PostureReport{}, err
-	}
-	if err := c.Responsibility.Policy.Validate(); err != nil {
-		return cfgloader.PostureReport{}, err
-	}
-	if err := c.Responsibility.GateStaticPolicy.Validate(); err != nil {
-		return cfgloader.PostureReport{}, fmt.Errorf("gate_static_policy: %w", err)
-	}
-	if err := c.Responsibility.Workflow.Validate(); err != nil {
-		return cfgloader.PostureReport{}, err
-	}
-
 	if c.Operations.Limits != nil {
-		if err := mapstructure.Decode(c.Operations.Limits, &c.Limits); err != nil {
-			return cfgloader.PostureReport{}, fmt.Errorf("decode operations.limits: %w", err)
-		}
+		// Best-effort decode; structural errors are reported by validateStructure.
+		_ = mapstructure.Decode(c.Operations.Limits, &c.Limits)
 	}
 	c.Limits.ApplyDefaults()
-
+	c.MCPActivityLog.ApplyDefaults()
 	if _, ok := c.Operations.Storage.Config["decision_log"]; ok {
 		slog.Warn("keep: 'decision_log' in operations.storage.config is deprecated and ignored; use 'mcp_activity_log' at the top level instead")
 	}
-	c.MCPActivityLog.ApplyDefaults()
+}
 
-	for i := range c.Responsibility.Backends {
-		if err := validateBackendConfig(&c.Responsibility.Backends[i]); err != nil {
-			return cfgloader.PostureReport{}, fmt.Errorf("mcp_backends[%d] (%q): %w", i, c.Responsibility.Backends[i].Name, err)
+// validateStructure checks that all required fields are present and that each
+// component's configuration is internally consistent, independent of deployment mode.
+func (c *Config) validateStructure() error {
+	if _, ok := c.Server.Endpoints["main"]; !ok {
+		return fmt.Errorf("server.endpoints.main is required")
+	}
+	if err := validateNormalizationPeer(&c.Peers.Normalization); err != nil {
+		return err
+	}
+	if err := c.Identity.Validate(); err != nil {
+		return err
+	}
+	if err := c.Responsibility.Policy.Validate(); err != nil {
+		return err
+	}
+	if err := c.Responsibility.GateStaticPolicy.Validate(); err != nil {
+		return fmt.Errorf("gate_static_policy: %w", err)
+	}
+	if err := c.Responsibility.Workflow.Validate(); err != nil {
+		return err
+	}
+	if err := c.MCPActivityLog.Validate(); err != nil {
+		return fmt.Errorf("mcp_activity_log: %w", err)
+	}
+	if c.Operations.Limits != nil {
+		if err := mapstructure.Decode(c.Operations.Limits, &c.Limits); err != nil {
+			return fmt.Errorf("decode operations.limits: %w", err)
 		}
 	}
+	for i := range c.Responsibility.Backends {
+		if err := validateBackendConfig(&c.Responsibility.Backends[i]); err != nil {
+			return fmt.Errorf("mcp_backends[%d] (%q): %w", i, c.Responsibility.Backends[i].Name, err)
+		}
+	}
+	return nil
+}
 
-	report := cfgloader.BuildPostureReport(c, sources, SecretAllowlist)
+// validateProductionRequirements enforces security rules that are only
+// applicable in production mode. It is a no-op when mode is not "production".
+func (c *Config) validateProductionRequirements() error {
+	if c.Mode != cfgloader.ModeProduction {
+		return nil
+	}
+	if c.Identity.Strategy == "passthrough" {
+		return fmt.Errorf("identity.strategy \"passthrough\" is not allowed in production mode")
+	}
+	if c.Responsibility.Policy.Strategy == "noop" {
+		return fmt.Errorf("policy.strategy \"noop\" is not allowed in production mode")
+	}
+	if val, ok := c.Identity.Config["allow_insecure_jwks_url"]; ok {
+		if b, ok := val.(bool); ok && b {
+			return fmt.Errorf("identity.config.allow_insecure_jwks_url is not allowed in production mode")
+		}
+	}
+	if normEP := c.Peers.Normalization.Endpoint; normEP != "" && !strings.HasPrefix(normEP, "https://") {
+		return fmt.Errorf("peers.normalization.endpoint must use https:// in production mode (got %q)", normEP)
+	}
+	if err := cfgloader.ValidateEndpointSecurity(c.Server.Endpoints); err != nil {
+		return err
+	}
+	if c.MCPActivityLog.Enabled {
+		if err := validateRemoteSinkProductionSecurity(&c.MCPActivityLog); err != nil {
+			return fmt.Errorf("mcp_activity_log: %w", err)
+		}
+	}
+	return nil
+}
 
+// annotatePostureReport adds WARN findings for configurations that are
+// functional but inadvisable for production deployments.
+func (c *Config) annotatePostureReport(report *cfgloader.PostureReport) {
 	if c.Mode != cfgloader.ModeProduction {
 		report.SetStatus("mode", "WARN", "Use production mode for deployments")
 	}
@@ -188,16 +218,27 @@ func (c *Config) Validate(sources cfgloader.SourceMap) (cfgloader.PostureReport,
 	if c.Responsibility.Policy.Strategy == "noop" {
 		report.SetStatus("responsibility.policy.strategy", "WARN", "Noop policy allows all requests; configure OPA for production")
 	}
-	for name, ep := range c.Server.Endpoints {
-		if ep.Auth.Type == "none" {
-			report.SetStatus("server.endpoints."+name+".auth.type", "WARN", "Configure authentication for this endpoint in production")
-		}
-		if !ep.IsSecure() {
-			report.SetStatus("server.endpoints."+name+".tls.cert", "WARN", "Enable TLS for this endpoint in production")
-		}
-	}
+	cfgloader.AnnotateEndpointPosture(report, c.Server.Endpoints)
+}
 
-	return report, nil
+// validateNormalizationPeer checks the normalization webhook peer auth configuration.
+func validateNormalizationPeer(peer *cfgloader.NormalizationPeerConfig) error {
+	if peer.Endpoint == "" {
+		return nil
+	}
+	switch peer.Auth.Type {
+	case "", "none":
+		// valid; no credentials required
+	case "bearer":
+		if peer.Auth.Credentials.BearerToken == "" {
+			return fmt.Errorf("peers.normalization.auth.credentials.bearer_token is required when auth.type is \"bearer\"")
+		}
+	case "mtls":
+		return fmt.Errorf("peers.normalization.auth.type \"mtls\" is not supported for webhook peers; use \"none\" or \"bearer\"")
+	default:
+		return fmt.Errorf("peers.normalization.auth.type %q is not valid; must be \"none\" or \"bearer\"", peer.Auth.Type)
+	}
+	return nil
 }
 
 type IdentityConfig struct {
@@ -633,6 +674,30 @@ func (l *LimitsConfig) ApplyDefaults() {
 	}
 }
 
+// validateRemoteSinkProductionSecurity enforces production TLS rules for the
+// http and otlp activity log sinks:
+//   - The endpoint URL must use https:// (plaintext HTTP is not permitted).
+//   - insecure_skip_verify must be false (unverified certificates are not permitted).
+func validateRemoteSinkProductionSecurity(cfg *cfgloader.MCPActivityLogConfig) error {
+	switch cfg.Sink {
+	case "http":
+		if !strings.HasPrefix(cfg.HTTP.URL, "https://") {
+			return fmt.Errorf("http sink url must use https:// in production mode (got %q)", cfg.HTTP.URL)
+		}
+		if cfg.HTTP.TLS.InsecureSkipVerify {
+			return fmt.Errorf("http sink tls.insecure_skip_verify must be false in production mode")
+		}
+	case "otlp":
+		if !strings.HasPrefix(cfg.OTLP.Endpoint, "https://") {
+			return fmt.Errorf("otlp sink endpoint must use https:// in production mode (got %q)", cfg.OTLP.Endpoint)
+		}
+		if cfg.OTLP.TLS.InsecureSkipVerify {
+			return fmt.Errorf("otlp sink tls.insecure_skip_verify must be false in production mode")
+		}
+	}
+	return nil
+}
+
 // validateBackendConfig checks that user_identity placement, exchange, OAuth,
 // api_key, and tool_list settings are well-formed and safe when set on a BackendConfig.
 func validateBackendConfig(cfg *BackendConfig) error {
@@ -771,12 +836,5 @@ func isValidPathSegmentChar(r rune) bool {
 
 // RedisConfig holds connection and security settings for a Redis-backed store.
 // Fields map directly to the keys in operations.storage.config in keep.yaml.
-type RedisConfig struct {
-	Addr          string `yaml:"addr"            mapstructure:"addr"`
-	Password      string `yaml:"password"        mapstructure:"password"`
-	DB            int    `yaml:"db"              mapstructure:"db"`
-	KeyPrefix     string `yaml:"key_prefix"      mapstructure:"key_prefix"`
-	TLSEnabled    bool   `yaml:"tls_enabled"     mapstructure:"tls_enabled"`
-	TLSSkipVerify bool   `yaml:"tls_skip_verify" mapstructure:"tls_skip_verify"`
-	TLSCACert     string `yaml:"tls_ca_cert"     mapstructure:"tls_ca_cert"`
-}
+// This is a type alias for redisutil.Config; construction is handled by redisutil.NewClient.
+type RedisConfig = redisutil.Config

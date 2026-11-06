@@ -497,68 +497,26 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 	if s.router.IsHiddenToolName(rawReq.ServerName, rawReq.ToolName) {
 		span.SetStatus(codes.Error, "unknown tool")
 		slog.WarnContext(ctx, "call rejected: real name of aliased tool", "server", rawReq.ServerName, "tool", rawReq.ToolName, "trace_id", traceID)
-		if s.activityLog != nil {
-			s.activityLog.LogRequest(activitylog.RequestEntry{
-				SessionID:   rawReq.SessionID,
-				TraceID:     traceID,
-				RemoteAddr:  remoteAddr,
-				UserID:      principal.UserID,
-				Agent:       rawReq.Agent,
-				ServerName:  rawReq.ServerName,
-				ToolName:    rawReq.ToolName,
-				Arguments:   rawReq.Arguments,
-				PDPDecision: "deny",
-				PDPReason:   "unknown tool",
-			})
-			s.activityLog.LogResponse(activitylog.ResponseEntry{
-				SessionID:  rawReq.SessionID,
-				TraceID:    traceID,
-				RemoteAddr: remoteAddr,
-				UserID:     principal.UserID,
-				Agent:      rawReq.Agent,
-				ServerName: rawReq.ServerName,
-				ToolName:   rawReq.ToolName,
-				DurationMS: time.Since(start).Milliseconds(),
-				Status:     "denied",
-				Error:      "unknown tool",
-			})
+		preMeta := activityMeta{
+			sessionID: rawReq.SessionID, traceID: traceID, remoteAddr: remoteAddr,
+			userID: principal.UserID, agent: rawReq.Agent,
+			serverName: rawReq.ServerName, toolName: rawReq.ToolName,
 		}
+		s.logRequest(preMeta, rawReq.Arguments, "deny", "unknown tool", nil)
+		s.logResponse(preMeta, start, "denied", "unknown tool", "", "", nil)
 		writeDeny(w, "unknown tool", traceID)
 		return
 	}
 
 	req := NewAuthorizedRequest(rawReq, principal)
+	meta := newActivityMeta(req, rawReq.Agent, traceID, remoteAddr)
 
 	pdpResp, err := s.pdp.Evaluate(ctx, req)
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
 		slog.ErrorContext(ctx, "pdp evaluate failed", "error", err, "trace_id", traceID)
-		if s.activityLog != nil {
-			s.activityLog.LogRequest(activitylog.RequestEntry{
-				SessionID:   req.SessionID,
-				TraceID:     traceID,
-				RemoteAddr:  remoteAddr,
-				UserID:      req.Principal.UserID,
-				Agent:       rawReq.Agent,
-				ServerName:  req.ServerName,
-				ToolName:    req.ToolName,
-				Arguments:   req.Arguments,
-				PDPDecision: "error",
-				PDPReason:   err.Error(),
-			})
-			s.activityLog.LogResponse(activitylog.ResponseEntry{
-				SessionID:  req.SessionID,
-				TraceID:    traceID,
-				RemoteAddr: remoteAddr,
-				UserID:     req.Principal.UserID,
-				Agent:      rawReq.Agent,
-				ServerName: req.ServerName,
-				ToolName:   req.ToolName,
-				DurationMS: time.Since(start).Milliseconds(),
-				Status:     "backend_error",
-				Error:      shared.ErrPDPUnavailable.Error(),
-			})
-		}
+		s.logRequest(meta, req.Arguments, "error", err.Error(), nil)
+		s.logResponse(meta, start, "backend_error", shared.ErrPDPUnavailable.Error(), "", "", nil)
 		writeError(w, http.StatusServiceUnavailable, shared.ErrPDPUnavailable.Error())
 		return
 	}
@@ -571,21 +529,7 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		"trace_id", traceID,
 	)
 
-	if s.activityLog != nil {
-		s.activityLog.LogRequest(activitylog.RequestEntry{
-			SessionID:     req.SessionID,
-			TraceID:       traceID,
-			RemoteAddr:    remoteAddr,
-			UserID:        req.Principal.UserID,
-			Agent:         rawReq.Agent,
-			ServerName:    req.ServerName,
-			ToolName:      req.ToolName,
-			Arguments:     req.Arguments,
-			PDPDecision:   pdpResp.Decision,
-			PDPReason:     pdpResp.Reason,
-			EscalationJTIs: escalationJTIs(req.EscalationTokens),
-		})
-	}
+	s.logRequest(meta, req.Arguments, pdpResp.Decision, pdpResp.Reason, escalationJTIs(req.EscalationTokens))
 
 	switch pdpResp.Decision {
 	case "allow":
@@ -593,61 +537,20 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			span.SetStatus(codes.Error, err.Error())
 			slog.ErrorContext(ctx, "backend call failed", "error", err, "server", req.ServerName, "tool", req.ToolName, "trace_id", traceID)
-			if s.activityLog != nil {
-				s.activityLog.LogResponse(activitylog.ResponseEntry{
-					SessionID:  req.SessionID,
-					TraceID:    traceID,
-					RemoteAddr: remoteAddr,
-					UserID:     req.Principal.UserID,
-					Agent:      rawReq.Agent,
-					ServerName: req.ServerName,
-					ToolName:   req.ToolName,
-					DurationMS: time.Since(start).Milliseconds(),
-					Status:     "backend_error",
-					Error:      err.Error(),
-				})
-			}
+			s.logResponse(meta, start, "backend_error", err.Error(), "", "", nil)
 			writeError(w, http.StatusInternalServerError, "backend tool call failed")
 			return
 		}
-		if s.activityLog != nil {
-			entry := activitylog.ResponseEntry{
-				SessionID:  req.SessionID,
-				TraceID:    traceID,
-				RemoteAddr: remoteAddr,
-				UserID:     req.Principal.UserID,
-				Agent:      rawReq.Agent,
-				ServerName: req.ServerName,
-				ToolName:   req.ToolName,
-				DurationMS: time.Since(start).Milliseconds(),
-				Result:     result,
-			}
-			if result != nil && result.IsError {
-				entry.Status = "tool_error"
-				entry.Error = "tool returned an error result"
-			} else {
-				entry.Status = "success"
-			}
-			s.activityLog.LogResponse(entry)
+		toolStatus, toolErr := "success", ""
+		if result != nil && result.IsError {
+			toolStatus, toolErr = "tool_error", "tool returned an error result"
 		}
+		s.logResponse(meta, start, toolStatus, toolErr, "", "", result)
 		writeJSON(w, http.StatusOK, result)
 
 	case "deny":
 		span.SetStatus(codes.Error, "denied by policy")
-		if s.activityLog != nil {
-			s.activityLog.LogResponse(activitylog.ResponseEntry{
-				SessionID:  req.SessionID,
-				TraceID:    traceID,
-				RemoteAddr: remoteAddr,
-				UserID:     req.Principal.UserID,
-				Agent:      rawReq.Agent,
-				ServerName: req.ServerName,
-				ToolName:   req.ToolName,
-				DurationMS: time.Since(start).Milliseconds(),
-				Status:     "denied",
-				Error:      pdpResp.Reason,
-			})
-		}
+		s.logResponse(meta, start, "denied", pdpResp.Reason, "", "", nil)
 		writeDeny(w, pdpResp.Reason, traceID)
 
 	case "escalate":
@@ -666,20 +569,7 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			span.SetStatus(codes.Error, err.Error())
 			slog.ErrorContext(ctx, "workflow submit failed", "error", err, "trace_id", traceID)
-			if s.activityLog != nil {
-				s.activityLog.LogResponse(activitylog.ResponseEntry{
-					SessionID:  req.SessionID,
-					TraceID:    traceID,
-					RemoteAddr: remoteAddr,
-					UserID:     req.Principal.UserID,
-					Agent:      rawReq.Agent,
-					ServerName: req.ServerName,
-					ToolName:   req.ToolName,
-					DurationMS: time.Since(start).Milliseconds(),
-					Status:     "backend_error",
-					Error:      "workflow submit failed: " + err.Error(),
-				})
-			}
+			s.logResponse(meta, start, "backend_error", "workflow submit failed: "+err.Error(), "", "", nil)
 			writeError(w, http.StatusInternalServerError, "failed to submit escalation")
 			return
 		}
@@ -687,38 +577,11 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 			span.SetStatus(codes.Error, "escalation misconfigured")
 			slog.ErrorContext(ctx, "escalation required but no approval mechanism available",
 				"tool", req.ToolName, "user", req.Principal.UserID, "trace_id", traceID)
-			if s.activityLog != nil {
-				s.activityLog.LogResponse(activitylog.ResponseEntry{
-					SessionID:  req.SessionID,
-					TraceID:    traceID,
-					RemoteAddr: remoteAddr,
-					UserID:     req.Principal.UserID,
-					Agent:      rawReq.Agent,
-					ServerName: req.ServerName,
-					ToolName:   req.ToolName,
-					DurationMS: time.Since(start).Milliseconds(),
-					Status:     "backend_error",
-					Error:      "escalation required but no approval mechanism is available",
-				})
-			}
+			s.logResponse(meta, start, "backend_error", "escalation required but no approval mechanism is available", "", "", nil)
 			writeError(w, http.StatusInternalServerError, "escalation required but no approval mechanism is available")
 			return
 		}
-		if s.activityLog != nil {
-			s.activityLog.LogResponse(activitylog.ResponseEntry{
-				SessionID:     req.SessionID,
-				TraceID:       traceID,
-				RemoteAddr:    remoteAddr,
-				UserID:        req.Principal.UserID,
-				Agent:         rawReq.Agent,
-				ServerName:    req.ServerName,
-				ToolName:      req.ToolName,
-				DurationMS:        time.Since(start).Milliseconds(),
-				Status:            "escalation_pending",
-				EscalationJTI:     escalationJTI,
-				WorkflowReference: wfRef,
-			})
-		}
+		s.logResponse(meta, start, "escalation_pending", "", escalationJTI, wfRef, nil)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(w).Encode(map[string]string{
@@ -733,20 +596,7 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 	case "workflow":
 		if !s.hasWorkflow() {
 			span.SetStatus(codes.Error, "workflow required but not configured")
-			if s.activityLog != nil {
-				s.activityLog.LogResponse(activitylog.ResponseEntry{
-					SessionID:  req.SessionID,
-					TraceID:    traceID,
-					RemoteAddr: remoteAddr,
-					UserID:     req.Principal.UserID,
-					Agent:      rawReq.Agent,
-					ServerName: req.ServerName,
-					ToolName:   req.ToolName,
-					DurationMS: time.Since(start).Milliseconds(),
-					Status:     "denied",
-					Error:      "workflow required but not configured",
-				})
-			}
+			s.logResponse(meta, start, "denied", "workflow required but not configured", "", "", nil)
 			writeDeny(w, "this action requires external workflow approval but no workflow system is configured", traceID)
 			return
 		}
@@ -765,57 +615,17 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			span.SetStatus(codes.Error, err.Error())
 			slog.ErrorContext(ctx, "workflow submit failed", "error", err, "trace_id", traceID)
-			if s.activityLog != nil {
-				s.activityLog.LogResponse(activitylog.ResponseEntry{
-					SessionID:  req.SessionID,
-					TraceID:    traceID,
-					RemoteAddr: remoteAddr,
-					UserID:     req.Principal.UserID,
-					Agent:      rawReq.Agent,
-					ServerName: req.ServerName,
-					ToolName:   req.ToolName,
-					DurationMS: time.Since(start).Milliseconds(),
-					Status:     "backend_error",
-					Error:      "workflow submit failed: " + err.Error(),
-				})
-			}
+			s.logResponse(meta, start, "backend_error", "workflow submit failed: "+err.Error(), "", "", nil)
 			writeError(w, http.StatusInternalServerError, "failed to submit workflow request")
 			return
 		}
 		if pendingJWT == "" && wfRef == "" {
 			span.SetStatus(codes.Error, "workflow misconfigured")
-			if s.activityLog != nil {
-				s.activityLog.LogResponse(activitylog.ResponseEntry{
-					SessionID:  req.SessionID,
-					TraceID:    traceID,
-					RemoteAddr: remoteAddr,
-					UserID:     req.Principal.UserID,
-					Agent:      rawReq.Agent,
-					ServerName: req.ServerName,
-					ToolName:   req.ToolName,
-					DurationMS: time.Since(start).Milliseconds(),
-					Status:     "backend_error",
-					Error:      "workflow required but no approval mechanism is available",
-				})
-			}
+			s.logResponse(meta, start, "backend_error", "workflow required but no approval mechanism is available", "", "", nil)
 			writeError(w, http.StatusInternalServerError, "workflow required but no approval mechanism is available")
 			return
 		}
-		if s.activityLog != nil {
-			s.activityLog.LogResponse(activitylog.ResponseEntry{
-				SessionID:     req.SessionID,
-				TraceID:       traceID,
-				RemoteAddr:    remoteAddr,
-				UserID:        req.Principal.UserID,
-				Agent:         rawReq.Agent,
-				ServerName:    req.ServerName,
-				ToolName:      req.ToolName,
-				DurationMS:        time.Since(start).Milliseconds(),
-				Status:            "workflow_pending",
-				EscalationJTI:     escalationJTI,
-				WorkflowReference: wfRef,
-			})
-		}
+		s.logResponse(meta, start, "workflow_pending", "", escalationJTI, wfRef, nil)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(w).Encode(map[string]string{
@@ -829,20 +639,7 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 
 	default:
 		span.SetStatus(codes.Error, "unknown decision")
-		if s.activityLog != nil {
-			s.activityLog.LogResponse(activitylog.ResponseEntry{
-				SessionID:  req.SessionID,
-				TraceID:    traceID,
-				RemoteAddr: remoteAddr,
-				UserID:     req.Principal.UserID,
-				Agent:      rawReq.Agent,
-				ServerName: req.ServerName,
-				ToolName:   req.ToolName,
-				DurationMS: time.Since(start).Milliseconds(),
-				Status:     "denied",
-				Error:      "unknown pdp decision",
-			})
-		}
+		s.logResponse(meta, start, "denied", "unknown pdp decision", "", "", nil)
 		writeDeny(w, "unknown pdp decision — denied by default", traceID)
 	}
 }
@@ -857,37 +654,14 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 
 	rawReq, principal, traceID, remoteAddr, start := nc.rawReq, nc.principal, nc.traceID, nc.remoteAddr, nc.start
 	req := NewAuthorizedRequest(rawReq, principal)
+	meta := newActivityMeta(req, rawReq.Agent, traceID, remoteAddr)
 
 	pdpResp, err := s.pdp.Evaluate(ctx, req)
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
 		slog.ErrorContext(ctx, "pdp evaluate failed", "error", err, "trace_id", traceID)
-		if s.activityLog != nil {
-			s.activityLog.LogRequest(activitylog.RequestEntry{
-				SessionID:   req.SessionID,
-				TraceID:     traceID,
-				RemoteAddr:  remoteAddr,
-				UserID:      req.Principal.UserID,
-				Agent:       rawReq.Agent,
-				ServerName:  req.ServerName,
-				ToolName:    req.ToolName,
-				Arguments:   req.Arguments,
-				PDPDecision: "error",
-				PDPReason:   err.Error(),
-			})
-			s.activityLog.LogResponse(activitylog.ResponseEntry{
-				SessionID:  req.SessionID,
-				TraceID:    traceID,
-				RemoteAddr: remoteAddr,
-				UserID:     req.Principal.UserID,
-				Agent:      rawReq.Agent,
-				ServerName: req.ServerName,
-				ToolName:   req.ToolName,
-				DurationMS: time.Since(start).Milliseconds(),
-				Status:     "backend_error",
-				Error:      shared.ErrPDPUnavailable.Error(),
-			})
-		}
+		s.logRequest(meta, req.Arguments, "error", err.Error(), nil)
+		s.logResponse(meta, start, "backend_error", shared.ErrPDPUnavailable.Error(), "", "", nil)
 		writeError(w, http.StatusServiceUnavailable, shared.ErrPDPUnavailable.Error())
 		return
 	}
@@ -900,54 +674,15 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		"trace_id", traceID,
 	)
 
-	if s.activityLog != nil {
-		s.activityLog.LogRequest(activitylog.RequestEntry{
-			SessionID:     req.SessionID,
-			TraceID:       traceID,
-			RemoteAddr:    remoteAddr,
-			UserID:        req.Principal.UserID,
-			Agent:         rawReq.Agent,
-			ServerName:    req.ServerName,
-			ToolName:      req.ToolName,
-			Arguments:     req.Arguments,
-			PDPDecision:   pdpResp.Decision,
-			PDPReason:     pdpResp.Reason,
-			EscalationJTIs: escalationJTIs(req.EscalationTokens),
-		})
-	}
+	s.logRequest(meta, req.Arguments, pdpResp.Decision, pdpResp.Reason, escalationJTIs(req.EscalationTokens))
 
 	switch pdpResp.Decision {
 	case "allow":
-		if s.activityLog != nil {
-			s.activityLog.LogResponse(activitylog.ResponseEntry{
-				SessionID:  req.SessionID,
-				TraceID:    traceID,
-				RemoteAddr: remoteAddr,
-				UserID:     req.Principal.UserID,
-				Agent:      rawReq.Agent,
-				ServerName: req.ServerName,
-				ToolName:   req.ToolName,
-				DurationMS: time.Since(start).Milliseconds(),
-				Status:     "success",
-			})
-		}
+		s.logResponse(meta, start, "success", "", "", "", nil)
 		writeJSON(w, http.StatusOK, pdpResp)
 	case "deny":
 		span.SetStatus(codes.Error, "denied by policy")
-		if s.activityLog != nil {
-			s.activityLog.LogResponse(activitylog.ResponseEntry{
-				SessionID:  req.SessionID,
-				TraceID:    traceID,
-				RemoteAddr: remoteAddr,
-				UserID:     req.Principal.UserID,
-				Agent:      rawReq.Agent,
-				ServerName: req.ServerName,
-				ToolName:   req.ToolName,
-				DurationMS: time.Since(start).Milliseconds(),
-				Status:     "denied",
-				Error:      pdpResp.Reason,
-			})
-		}
+		s.logResponse(meta, start, "denied", pdpResp.Reason, "", "", nil)
 		writeDeny(w, pdpResp.Reason, traceID)
 	case "escalate":
 		pendingJWT := ""
@@ -963,38 +698,11 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		if wfErr != nil {
 			span.SetStatus(codes.Error, wfErr.Error())
 			slog.ErrorContext(ctx, "workflow submit failed", "error", wfErr, "trace_id", traceID)
-			if s.activityLog != nil {
-				s.activityLog.LogResponse(activitylog.ResponseEntry{
-					SessionID:  req.SessionID,
-					TraceID:    traceID,
-					RemoteAddr: remoteAddr,
-					UserID:     req.Principal.UserID,
-					Agent:      rawReq.Agent,
-					ServerName: req.ServerName,
-					ToolName:   req.ToolName,
-					DurationMS: time.Since(start).Milliseconds(),
-					Status:     "backend_error",
-					Error:      "workflow submit failed: " + wfErr.Error(),
-				})
-			}
+			s.logResponse(meta, start, "backend_error", "workflow submit failed: "+wfErr.Error(), "", "", nil)
 			writeError(w, http.StatusInternalServerError, "failed to submit escalation")
 			return
 		}
-		if s.activityLog != nil {
-			s.activityLog.LogResponse(activitylog.ResponseEntry{
-				SessionID:     req.SessionID,
-				TraceID:       traceID,
-				RemoteAddr:    remoteAddr,
-				UserID:        req.Principal.UserID,
-				Agent:         rawReq.Agent,
-				ServerName:    req.ServerName,
-				ToolName:      req.ToolName,
-				DurationMS:        time.Since(start).Milliseconds(),
-				Status:            "escalation_pending",
-				EscalationJTI:     escalationJTI,
-				WorkflowReference: wfRef,
-			})
-		}
+		s.logResponse(meta, start, "escalation_pending", "", escalationJTI, wfRef, nil)
 		writeJSON(w, http.StatusAccepted, map[string]string{
 			"status":             "escalation_pending",
 			"reason":             pdpResp.Reason,
@@ -1005,20 +713,7 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		})
 	default:
 		span.SetStatus(codes.Error, "unknown decision")
-		if s.activityLog != nil {
-			s.activityLog.LogResponse(activitylog.ResponseEntry{
-				SessionID:  req.SessionID,
-				TraceID:    traceID,
-				RemoteAddr: remoteAddr,
-				UserID:     req.Principal.UserID,
-				Agent:      rawReq.Agent,
-				ServerName: req.ServerName,
-				ToolName:   req.ToolName,
-				DurationMS: time.Since(start).Milliseconds(),
-				Status:     "denied",
-				Error:      "unknown pdp decision",
-			})
-		}
+		s.logResponse(meta, start, "denied", "unknown pdp decision", "", "", nil)
 		writeDeny(w, "unsupported decision for authorize", traceID)
 	}
 }
@@ -1137,11 +832,15 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	body := map[string]any{
 		"status":            "ready",
 		"tools":             len(tools),
 		"signer_configured": s.signer != nil,
-	})
+	}
+	if s.activityLog != nil {
+		body["activity_log"] = s.activityLog.Stats()
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 func checkAPIVersion(v string) error {

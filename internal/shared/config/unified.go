@@ -238,35 +238,112 @@ func setupLogging(cfg LoggingConfig, mode, levelOverride string, w io.Writer) er
 // Activity log defaults. All are used by MCPActivityLogConfig.ApplyDefaults and
 // referenced directly by any code that needs a safe zero-guard fallback.
 const (
-	DefaultMaxPayloadBytes = 4096  // preview/truncation cap per record field
-	DefaultMaxSizeMB       = 100   // rotate log file after this many MB
-	DefaultMaxBackups      = 10    // number of rotated files to retain
-	DefaultMaxAgeDays      = 30    // delete rotated files older than this
-	DefaultBufferSize      = 10000 // async channel entries
+	DefaultMaxPayloadBytes     = 4096  // preview/truncation cap per record field
+	DefaultMaxSizeMB           = 100   // rotate log file after this many MB
+	DefaultMaxBackups          = 10    // number of rotated files to retain
+	DefaultMaxAgeDays          = 30    // delete rotated files older than this
+	DefaultBufferSize          = 10000 // async channel entries
+	DefaultBatchSize           = 100   // remote sink batch size
+	DefaultMaxQueuedBatches    = 10    // remote sink dispatcher queue depth
+	DefaultFlushIntervalMS     = 1000  // remote sink partial-batch flush interval
+	DefaultTimeoutMS           = 5000  // remote sink HTTP request timeout
+	DefaultMaxRetries          = 0     // remote sink retry count on 5xx / network errors; 0 = no retries
+	DefaultRetryBackoffMS      = 200   // remote sink inter-retry sleep
 )
+
+// HTTPActivityAuthConfig configures authentication for the HTTP and OTLP activity log sinks.
+type HTTPActivityAuthConfig struct {
+	// Type is the auth scheme: "splunk" (Splunk <token>), "bearer" (Bearer <token>), or "none".
+	Type  string `yaml:"type"`
+	// Token is the secret value. Supports envvar:// and vault:// URI schemes.
+	Token string `yaml:"token"`
+}
+
+// ActivityTLSConfig configures custom TLS for remote activity log sinks.
+type ActivityTLSConfig struct {
+	// CACertFile is the path to a PEM-encoded CA certificate file on disk.
+	CACertFile string `yaml:"ca_cert_file"`
+	// CACertPEM is a PEM-encoded CA certificate string. Supports envvar:// and vault:// URIs.
+	CACertPEM string `yaml:"ca_cert_pem"`
+	// InsecureSkipVerify disables TLS server certificate verification. For development only.
+	InsecureSkipVerify bool `yaml:"insecure_skip_verify"`
+}
+
+// HTTPActivitySinkConfig configures the HTTPS batch activity log sink.
+// Active when mcp_activity_log.sink is "http".
+type HTTPActivitySinkConfig struct {
+	// URL is the ingest endpoint (e.g. Splunk HEC raw endpoint or Logstash HTTP input).
+	URL string `yaml:"url"`
+	// Encoding is the batch wire format: "ndjson" (default) or "json_array".
+	Encoding         string                 `yaml:"encoding"`
+	Auth             HTTPActivityAuthConfig `yaml:"auth"`
+	Headers          map[string]string      `yaml:"headers"`
+	BatchSize        int                    `yaml:"batch_size"`
+	MaxQueuedBatches int                    `yaml:"max_queued_batches"`
+	FlushIntervalMS  int                    `yaml:"flush_interval_ms"`
+	TimeoutMS        int                    `yaml:"timeout_ms"`
+	MaxRetries       int                    `yaml:"max_retries"`
+	RetryBackoffMS   int                    `yaml:"retry_backoff_ms"`
+	TLS              ActivityTLSConfig      `yaml:"tls"`
+}
+
+// OTLPActivitySinkConfig configures the OpenTelemetry OTLP/HTTP activity log sink.
+// Active when mcp_activity_log.sink is "otlp".
+type OTLPActivitySinkConfig struct {
+	// Endpoint is the OTLP/HTTP logs endpoint (e.g. https://otel-collector:4318/v1/logs).
+	Endpoint         string                 `yaml:"endpoint"`
+	Auth             HTTPActivityAuthConfig `yaml:"auth"`
+	Headers          map[string]string      `yaml:"headers"`
+	BatchSize        int                    `yaml:"batch_size"`
+	MaxQueuedBatches int                    `yaml:"max_queued_batches"`
+	FlushIntervalMS  int                    `yaml:"flush_interval_ms"`
+	TimeoutMS        int                    `yaml:"timeout_ms"`
+	MaxRetries       int                    `yaml:"max_retries"`
+	RetryBackoffMS   int                    `yaml:"retry_backoff_ms"`
+	TLS              ActivityTLSConfig      `yaml:"tls"`
+}
 
 // MCPActivityLogConfig defines the Keep MCP activity log settings.
 // Set enabled: true to activate. All other fields have defaults applied by ApplyDefaults.
 type MCPActivityLogConfig struct {
-	Enabled bool   `yaml:"enabled"`
-	// File is the path to the rotating log file. Set to "stdout" to stream to stdout.
+	Enabled bool `yaml:"enabled"`
+	// Sink selects the output target: "file" (default), "stdout", "http", or "otlp".
+	Sink string `yaml:"sink"`
+	// File is the rotating log file path. Used when Sink is "file".
 	// Default: "/var/log/portcullis/mcp-activity.log"
-	File              string `yaml:"file"`
-	MaxSizeMB         int    `yaml:"max_size_mb"`
-	MaxBackups        int    `yaml:"max_backups"`
-	MaxAgeDays        int    `yaml:"max_age_days"`
-	// Compress controls gzip compression of rotated files. Default: false (set true in production).
-	Compress          bool   `yaml:"compress"`
+	File       string `yaml:"file"`
+	MaxSizeMB  int    `yaml:"max_size_mb"`
+	MaxBackups int    `yaml:"max_backups"`
+	MaxAgeDays int    `yaml:"max_age_days"`
+	// Compress controls gzip compression of rotated files. Default: false.
+	Compress bool `yaml:"compress"`
 	// IncludePDPDecision controls whether pdp_decision and pdp_reason appear in request records.
-	// Default: false (set true to include PDP verdicts in activity records).
+	// Default: false.
 	IncludePDPDecision bool   `yaml:"include_pdp_decision"`
 	TruncatePayloads   bool   `yaml:"truncate_payloads"`
 	MaxPayloadBytes    int    `yaml:"max_payload_bytes"`
 	BufferSize         int    `yaml:"buffer_size"`
+	HTTP               HTTPActivitySinkConfig  `yaml:"http"`
+	OTLP               OTLPActivitySinkConfig  `yaml:"otlp"`
+}
+
+// DefaultMCPActivityLogConfig returns an MCPActivityLogConfig with all defaults applied.
+func DefaultMCPActivityLogConfig() MCPActivityLogConfig {
+	c := MCPActivityLogConfig{}
+	c.ApplyDefaults()
+	return c
 }
 
 // ApplyDefaults fills zero-value fields with their service defaults.
 func (c *MCPActivityLogConfig) ApplyDefaults() {
+	if c.Sink == "" {
+		// Back-compat: if File was set to "stdout", honour it via the new Sink field.
+		if c.File == "stdout" {
+			c.Sink = "stdout"
+		} else {
+			c.Sink = "file"
+		}
+	}
 	if c.File == "" {
 		c.File = "/var/log/portcullis/mcp-activity.log"
 	}
@@ -285,4 +362,132 @@ func (c *MCPActivityLogConfig) ApplyDefaults() {
 	if c.BufferSize == 0 {
 		c.BufferSize = DefaultBufferSize
 	}
+	// HTTP sink defaults
+	if c.HTTP.Encoding == "" {
+		c.HTTP.Encoding = "ndjson"
+	}
+	if c.HTTP.Auth.Type == "" {
+		c.HTTP.Auth.Type = "none"
+	}
+	if c.HTTP.BatchSize == 0 {
+		c.HTTP.BatchSize = DefaultBatchSize
+	}
+	if c.HTTP.MaxQueuedBatches == 0 {
+		c.HTTP.MaxQueuedBatches = DefaultMaxQueuedBatches
+	}
+	if c.HTTP.FlushIntervalMS == 0 {
+		c.HTTP.FlushIntervalMS = DefaultFlushIntervalMS
+	}
+	if c.HTTP.TimeoutMS == 0 {
+		c.HTTP.TimeoutMS = DefaultTimeoutMS
+	}
+	if c.HTTP.RetryBackoffMS == 0 {
+		c.HTTP.RetryBackoffMS = DefaultRetryBackoffMS
+	}
+	// OTLP sink defaults
+	if c.OTLP.Auth.Type == "" {
+		c.OTLP.Auth.Type = "none"
+	}
+	if c.OTLP.BatchSize == 0 {
+		c.OTLP.BatchSize = DefaultBatchSize
+	}
+	if c.OTLP.MaxQueuedBatches == 0 {
+		c.OTLP.MaxQueuedBatches = DefaultMaxQueuedBatches
+	}
+	if c.OTLP.FlushIntervalMS == 0 {
+		c.OTLP.FlushIntervalMS = DefaultFlushIntervalMS
+	}
+	if c.OTLP.TimeoutMS == 0 {
+		c.OTLP.TimeoutMS = DefaultTimeoutMS
+	}
+	if c.OTLP.RetryBackoffMS == 0 {
+		c.OTLP.RetryBackoffMS = DefaultRetryBackoffMS
+	}
+}
+
+// Validate returns an error if the configuration is inconsistent or invalid.
+// ApplyDefaults must be called before Validate.
+func (c *MCPActivityLogConfig) Validate() error {
+	switch c.Sink {
+	case "file", "stdout", "http", "otlp":
+		// valid
+	default:
+		return fmt.Errorf("unknown sink type %q: must be \"file\", \"stdout\", \"http\", or \"otlp\"", c.Sink)
+	}
+	if c.Sink == "http" {
+		if err := validateHTTPSinkConfig(&c.HTTP); err != nil {
+			return fmt.Errorf("http sink: %w", err)
+		}
+	}
+	if c.Sink == "otlp" {
+		if err := validateOTLPSinkConfig(&c.OTLP); err != nil {
+			return fmt.Errorf("otlp sink: %w", err)
+		}
+	}
+	return nil
+}
+
+func validateHTTPSinkConfig(cfg *HTTPActivitySinkConfig) error {
+	if cfg.URL == "" {
+		return fmt.Errorf("http url is required")
+	}
+	switch cfg.Encoding {
+	case "ndjson", "json_array":
+		// valid
+	default:
+		return fmt.Errorf("invalid encoding %q: must be \"ndjson\" or \"json_array\"", cfg.Encoding)
+	}
+	if err := validateActivityAuthConfig(&cfg.Auth); err != nil {
+		return err
+	}
+	return validateNetworkSinkTuning(cfg.BatchSize, cfg.MaxQueuedBatches, cfg.FlushIntervalMS, cfg.TimeoutMS, cfg.MaxRetries, cfg.RetryBackoffMS)
+}
+
+func validateOTLPSinkConfig(cfg *OTLPActivitySinkConfig) error {
+	if cfg.Endpoint == "" {
+		return fmt.Errorf("otlp endpoint is required")
+	}
+	if err := validateActivityAuthConfig(&cfg.Auth); err != nil {
+		return err
+	}
+	return validateNetworkSinkTuning(cfg.BatchSize, cfg.MaxQueuedBatches, cfg.FlushIntervalMS, cfg.TimeoutMS, cfg.MaxRetries, cfg.RetryBackoffMS)
+}
+
+// validateNetworkSinkTuning checks the shared numeric tuning fields used by
+// both the HTTP and OTLP sinks. Values that would cause a panic at construction
+// time (non-positive channel capacity or ticker interval) are rejected.
+func validateNetworkSinkTuning(batchSize, maxQueuedBatches, flushIntervalMS, timeoutMS, maxRetries, retryBackoffMS int) error {
+	if batchSize <= 0 {
+		return fmt.Errorf("batch_size must be > 0")
+	}
+	if maxQueuedBatches <= 0 {
+		return fmt.Errorf("max_queued_batches must be > 0")
+	}
+	if flushIntervalMS <= 0 {
+		return fmt.Errorf("flush_interval_ms must be > 0")
+	}
+	if timeoutMS <= 0 {
+		return fmt.Errorf("timeout_ms must be > 0")
+	}
+	if maxRetries < 0 {
+		return fmt.Errorf("max_retries must be >= 0")
+	}
+	if retryBackoffMS < 0 {
+		return fmt.Errorf("retry_backoff_ms must be >= 0")
+	}
+	return nil
+}
+
+func validateActivityAuthConfig(cfg *HTTPActivityAuthConfig) error {
+	switch cfg.Type {
+	case "none", "":
+		// valid
+	case "splunk", "bearer":
+		if cfg.Token == "" {
+			return fmt.Errorf("auth token required when auth type is %q", cfg.Type)
+		}
+	default:
+		return fmt.Errorf("unsupported auth type %q: must be \"none\", \"splunk\", or \"bearer\"", cfg.Type)
+	}
+	return nil
 }

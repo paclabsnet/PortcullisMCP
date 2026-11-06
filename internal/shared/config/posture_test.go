@@ -256,6 +256,55 @@ func TestPostureReport_Log_DoesNotPanicWithFindings(t *testing.T) {
 	r.Log("gate")
 }
 
+func TestBuildPostureReport_RedactsMapChildPaths(t *testing.T) {
+	// Allowlisting a map parent path must redact all child keys beneath it.
+	// This mirrors the prefix-allowlisting rule in the secret resolver.
+	type Headers struct {
+		Values map[string]string `yaml:"values"`
+		Other  map[string]string `yaml:"other"`
+	}
+	cfg := Headers{
+		Values: map[string]string{
+			"Authorization": "Bearer secret-token",
+			"X-Request-ID":  "not-a-secret",
+		},
+		Other: map[string]string{
+			"Visible": "plain-value",
+		},
+	}
+	report := cfgloader.BuildPostureReport(cfg, nil, []string{"values"})
+
+	findFinding := func(prop string) *cfgloader.PostureFinding {
+		for i := range report.Findings {
+			if report.Findings[i].Property == prop {
+				return &report.Findings[i]
+			}
+		}
+		return nil
+	}
+
+	// Child keys under the allowlisted map must be redacted.
+	for _, key := range []string{"values.Authorization", "values.X-Request-ID"} {
+		f := findFinding(key)
+		if f == nil {
+			t.Errorf("missing finding for %q", key)
+			continue
+		}
+		if f.Value != "[REDACTED]" {
+			t.Errorf("%s: got value %q, want [REDACTED]", key, f.Value)
+		}
+	}
+
+	// Keys under a non-allowlisted map must NOT be redacted.
+	f := findFinding("other.Visible")
+	if f == nil {
+		t.Fatal("missing finding for other.Visible")
+	}
+	if f.Value != "plain-value" {
+		t.Errorf("other.Visible: got %q, want plain-value", f.Value)
+	}
+}
+
 // TestBuildPostureReport_WARNCountMatchesFindings verifies that SetStatus + Log
 // correctly tracks the number of WARN findings (behavior, not log output).
 func TestBuildPostureReport_WARNsCountedCorrectly(t *testing.T) {

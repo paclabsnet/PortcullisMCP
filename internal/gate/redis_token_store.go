@@ -24,6 +24,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
+	"github.com/paclabsnet/PortcullisMCP/internal/shared/oidcutil"
 )
 
 // RedisTokenStore is a Redis-backed implementation of EscalationTokenStore.
@@ -139,7 +140,7 @@ func (s *RedisTokenStore) Add(ctx context.Context, raw string) (shared.Escalatio
 
 	// Extract TTL from the JWT exp claim so the Redis key auto-expires.
 	ttl := 24 * time.Hour // conservative default
-	if claims, err := unsafeParseJWTClaims(raw); err == nil {
+	if claims, err := oidcutil.UnsafeParseJWTClaims(raw); err == nil {
 		if exp, ok := claims["exp"].(float64); ok {
 			if d := time.Until(time.Unix(int64(exp), 0)); d > 0 {
 				ttl = d

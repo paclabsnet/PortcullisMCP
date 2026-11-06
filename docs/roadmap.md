@@ -4,44 +4,6 @@ Some of these tasks were deferred from Phase 2 because they are complicated and 
 cloud resources
 
 
-### Task: MCP Activity Log: Keep should be able to log the MCP requests and responses for troubleshooting and monitoring
-
-#### Problem
-
-An organization that wants to keep track of what the agents are doing will naturally want to know the MCP tool requests and responses associated with each agent.  This allows us to better reverse engineer how an agent came to a particular decision, and also to detect
-how an agent might be trying to exploit a weakness to perform unauthorized activities
-
-#### Proposed Solution
-We will modify Keep in the following ways:
-1. We will get rid of the decision_log facility, it is not needed
-2. We will add an mcp_activity_log facility
-3. We will modify Gate to always include the agent information (type and version) as part of the EnrichedMCPRequest
-4. We will only log the MCP tool activity that goes through Keep - in other words, if the agent is using the localfs tool, we won't capture that (for now)
-
-#### Implementation
-MCP tool requests and responses are logged to a user-specified log file.  One line for each request and response, and we will enrich this with additional metadata about the user, the time and date and any other useful information.  The goal here is that it will be relatively easy to isolate the actions of a specific agent instance, so we can rebuild its entire "flight history"
-
-We will optionally include the PDP decision associated with the request as part of the tool request log entry (this will be a configuration setting)
-
-We will build this logging facility to be modular, so we can add 3rd party integrations in the future
-
-The logging facility should rotate automatically according to standard rotation rules
-
-We anticipate that the log records will be captured by an SIEM for later analysis, so the location of the log files and/or directory might be substantially different from the location used for logging the behavior of Keep itself.
-
-All of this should be configurable, with sensible defaults
-
-
-
-#### Open Questions
-
-1) if an agent spaws sub-agents, should we attribute all of this activity to the parent agent, or ensure that we can separate the sub-agent tool activity from the parent?
-
-2) including the localfs activity might be required for a high-security environment, we may need to capture this information in the future.  One way to do this would be for the gate instances to send json log records to Keep, which can accept them and output them to the logging system. These could be accumulated and compressed for bandwidth efficiency
-
-3) Alternatively, in a high-security environment, do we even want to let the tool use the local filesystem?
-
-4) Are there other "local" MCPs that should be managed, like MCPs for launching containers? In a high-security environment, you probably don't want the agent to be able to launch containers, because it would be a security nightmare
 
 
 
@@ -165,6 +127,8 @@ Using Figma as an example:
 
 #### Open Questions
 
+* Or, we could just fetch the tool list from figma (or whomever) through other mechanisms, and statically add them to Keep? These tool lists don't change often, this should be relatively manageable.   
+  * or does this not work? Does figma (et al) only demand credentials for a `tool-list` request?
 
 #### Goals
 
@@ -184,41 +148,17 @@ Using Figma as an example:
 
 
 
-### Task: Support 'escalate' in multi-tenant environments
-
-#### Problem
-We want multi-tenant Portcullis to optionally offer the `escalate` feature, in a presentation that is consistent with single-tenant `escalate`
-
-#### Proposed Solution
-
-* Store the escalation tokens and pending tokens in Portcullis-Gate per-tenant storage
-* Allow the escalate feature to be enabled/disabled globally
-
-
-#### Proposed Implementation
-* Create a Redis store in Gate for holding *Pending JWTs* and *Escalation Tokens*
-  * on a per-user basis
-  * with proper cleanup
-* Create a file-based Store interface in Go for the legacy filesystem-based storage
-* Add a config rule to the YAML
-* Update the management web page to present each user with their own custom view of the escalation tokens
-* Allow revoke on these Redis-stored tokens
-* Get rid of the cut-and-paste for JWTs (everywhere, not just in multi-tenant)
-* allow customers to create their own custom template for that page
-
-#### Interesting Questions
-* Do we have a top-level for escalation, or a toggle per system?
-* 
 
 
 
-
-priority: medium
 
 ### Task: Gate should keep track of 'unused' escalation approval URLs for a time
 When Gate receives an `escalate` response and passes that on to the Agent, there's no guarantee that the Agent will provide the link to the user.  We can include the link in the Gate management UI.  If the user creates the appropriate escalation-token, that's evidence that we can remove the link from the management UI.
 
 priority: medium
+
+
+
 
 ### Task: production YAML should not support unknown keys in the responsibility section
 
@@ -233,23 +173,12 @@ help avoid that issue.
              every call, instead of a list of absolute deny options
 
 
-### Task: Support vault:// secret resolution for map[string]string config fields
+### ~~Task: Support vault:// secret resolution for map[string]string config fields~~ DONE (v0.6.1)
 
-The secret resolver walks named struct fields via dot-notation and resolves secret
-URIs (`vault://`, `envvar://`, etc.) in string values. It does not currently traverse
-`map[string]string` values, so fields like `decision_logs.headers` and
-`webhook.headers` cannot use vault:// or envvar:// for individual header values
-(e.g. `Authorization: "envvar://SIEM_TOKEN"`).
-
-The example configs document this limitation with a note directing operators to
-populate these fields from external secrets tooling before startup.
-
-The fix is to extend the resolver to walk map values and apply secret resolution
-to each entry, subject to the same allowlist rules. Both Keep's
-`decision_logs.headers` and `webhook.headers` (and any future map-valued fields)
-would benefit.
-
-- priority: medium-high
+The secret resolver now supports prefix allowlisting for `map[string]string` config
+fields. Any allowlist entry that is a prefix of a child key (e.g. `mcp_activity_log.http.headers`
+covering `mcp_activity_log.http.headers.X-API-Key`) is accepted. Used by the new
+remote activity log sinks for per-header secret injection.
 
 
 
@@ -315,6 +244,16 @@ automatically deleted
 
 ### Task: Add performance monitoring to Portcullis-Keep
 Use the OpenTelemetry wrapper around HTTP calls to get detailed performance measurements
+- priority: medium
+
+
+
+
+### Task: Add /metrics endpoint to Keep, Guard, and Gate
+Expose a Prometheus-compatible `/metrics` endpoint on each component. At minimum,
+Keep should expose activity log delivery counters (`buffer_dropped`, `exported_entries`,
+`sink_dropped_batches`, `sink_dropped_entries`) currently surfaced temporarily via `/readyz`.
+Remove the `activity_log` field from `/readyz` once `/metrics` is in place.
 - priority: medium
 
 
