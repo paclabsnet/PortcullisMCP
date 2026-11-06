@@ -147,3 +147,5 @@ claude_mcp_logs
 
 policies/rego/build
 
+docs/development/tracking
+

@@ -67,7 +67,9 @@ func main() {
 
 	report.Log("portcullis-gate")
 
-	shutdownTelemetry, err := telemetry.Setup(ctx, cfg.Operations.Telemetry)
+	// Multi-tenant Gate exposes /metrics; single-tenant Gate never does.
+	metricsDefaultOn := cfg.Tenancy == "multi"
+	shutdownTelemetry, err := telemetry.Setup(ctx, cfg.Operations.Telemetry, metricsDefaultOn)
 	if err != nil {
 		slog.Error("init telemetry", "error", err)
 		// Telemetry is non-critical infrastructure; log and continue without it.

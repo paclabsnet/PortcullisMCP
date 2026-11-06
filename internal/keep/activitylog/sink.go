@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync/atomic"
 
 	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
 	"gopkg.in/natefinch/lumberjack.v2"
@@ -66,12 +67,17 @@ func newSink(cfg cfgloader.MCPActivityLogConfig) (ActivitySink, error) {
 }
 
 // fileSink writes JSON-lines records to a lumberjack rotating file.
+// It implements StatsSink to expose exported_entries counts to Prometheus.
 type fileSink struct {
-	lj io.WriteCloser
+	lj            io.WriteCloser
+	exportedCount atomic.Int64
 }
 
 func (s *fileSink) Write(line []byte) error {
 	_, err := s.lj.Write(line)
+	if err == nil {
+		s.exportedCount.Add(1)
+	}
 	return err
 }
 
@@ -79,13 +85,31 @@ func (s *fileSink) Close() error {
 	return s.lj.Close()
 }
 
+func (s *fileSink) Stats() map[string]any {
+	return map[string]any{
+		"exported_entries": s.exportedCount.Load(),
+	}
+}
+
 // stdoutSink writes JSON-lines records to os.Stdout.
 // Suitable for containerised deployments where a sidecar collector reads stdout.
-type stdoutSink struct{}
+// It implements StatsSink to expose exported_entries counts to Prometheus.
+type stdoutSink struct {
+	exportedCount atomic.Int64
+}
 
 func (s *stdoutSink) Write(line []byte) error {
 	_, err := os.Stdout.Write(line)
+	if err == nil {
+		s.exportedCount.Add(1)
+	}
 	return err
 }
 
 func (s *stdoutSink) Close() error { return nil }
+
+func (s *stdoutSink) Stats() map[string]any {
+	return map[string]any{
+		"exported_entries": s.exportedCount.Load(),
+	}
+}

@@ -23,15 +23,19 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
+	"github.com/paclabsnet/PortcullisMCP/internal/shared/middleware"
+	"github.com/paclabsnet/PortcullisMCP/internal/telemetry"
 )
 
 // MCPHTTPHandler wraps the SDK's StreamableHTTPHandler with Portcullis
-// middleware: health checks, authentication, and context injection.
+// middleware: health checks, authentication, context injection, and metrics.
 type MCPHTTPHandler struct {
 	provider       TenancyProvider
 	authType       string   // from endpoint.Auth.Type ("none", "bearer", "mtls")
 	forwardHeaders []string // from endpoint.ForwardHeaders; default ["*"]
 	sdkHandler     http.Handler
+	metricsPath    string               // e.g. "/metrics" — bypasses auth and serves Prometheus
+	httpMetrics    *middleware.HTTPMetrics
 }
 
 // credentialFingerprint returns a SHA-256 hash of the raw token string. This
@@ -60,11 +64,19 @@ func NewMCPHTTPHandler(
 		fwdHeaders = []string{"*"}
 	}
 
+	metricsPath := cfg.Operations.Telemetry.Metrics.EffectivePath()
+	httpM, err := middleware.NewHTTPMetrics(telemetry.Meter(shared.ServiceGate), "gate")
+	if err != nil {
+		httpM = nil // non-fatal: proceed without HTTP metrics
+	}
+
 	return &MCPHTTPHandler{
 		provider:       provider,
 		authType:       mcpEp.Auth.Type,
 		forwardHeaders: fwdHeaders,
 		sdkHandler:     sdkHandler,
+		metricsPath:    metricsPath,
+		httpMetrics:    httpM,
 	}
 }
 
@@ -78,7 +90,7 @@ func NewMCPHTTPHandler(
 // according to the tenancy mode. On success the session ID and raw token are
 // injected into the request context before delegating to the SDK handler.
 func (h *MCPHTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Health checks bypass all middleware.
+	// Health and metrics checks bypass all authentication middleware.
 	switch r.URL.Path {
 
 	// there's no 'spin-up' time for Gate, so no special case for
@@ -86,6 +98,14 @@ func (h *MCPHTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/healthz", "/readyz":
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
+		return
+	}
+
+	// Prometheus scrape endpoint: bypass session authentication so Prometheus
+	// can scrape without an MCP bearer token. Only GET is served; all other
+	// methods fall through to normal auth.
+	if r.Method == http.MethodGet && h.metricsPath != "" && r.URL.Path == h.metricsPath {
+		telemetry.MetricsHandler().ServeHTTP(w, r)
 		return
 	}
 

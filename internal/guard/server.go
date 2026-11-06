@@ -32,13 +32,70 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/mitchellh/mapstructure"
+	"go.opentelemetry.io/otel/attribute"
+	otelmetric "go.opentelemetry.io/otel/metric"
+
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared/middleware"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared/tlsutil"
+	"github.com/paclabsnet/PortcullisMCP/internal/telemetry"
 )
 
 //go:embed templates/*
 var templatesFS embed.FS
+
+// guardMetrics holds the OTel metric instruments for Guard.
+type guardMetrics struct {
+	httpUI          *middleware.HTTPMetrics
+	httpAPI         *middleware.HTTPMetrics
+	tokensCreated   otelmetric.Int64Counter
+	tokensClaimed   otelmetric.Int64Counter
+	pendingRequests otelmetric.Int64Counter
+}
+
+// newGuardMetrics creates all Guard metric instruments from the given meter.
+// Returns nil if any instrument creation fails.
+func newGuardMetrics(m otelmetric.Meter) *guardMetrics {
+	httpUI, err := middleware.NewHTTPMetrics(m, "guard")
+	if err != nil {
+		slog.Warn("guard: failed to create http metrics instruments", "error", err)
+		return nil
+	}
+	// Reuse same counter/histogram instruments for both listeners; listener label differentiates them.
+	httpAPI := httpUI
+
+	tokensCreated, err := m.Int64Counter("portcullis_guard_escalation_tokens_created_total",
+		otelmetric.WithDescription("Total signed escalation tokens generated."),
+		otelmetric.WithUnit("{token}"),
+	)
+	if err != nil {
+		slog.Warn("guard: failed to create tokens_created_total", "error", err)
+		return nil
+	}
+	tokensClaimed, err := m.Int64Counter("portcullis_guard_escalation_tokens_claimed_total",
+		otelmetric.WithDescription("Total token claim requests processed."),
+		otelmetric.WithUnit("{token}"),
+	)
+	if err != nil {
+		slog.Warn("guard: failed to create tokens_claimed_total", "error", err)
+		return nil
+	}
+	pendingRequests, err := m.Int64Counter("portcullis_guard_pending_requests_total",
+		otelmetric.WithDescription("Lifecycle events for pending escalation records."),
+		otelmetric.WithUnit("{request}"),
+	)
+	if err != nil {
+		slog.Warn("guard: failed to create pending_requests_total", "error", err)
+		return nil
+	}
+	return &guardMetrics{
+		httpUI:          httpUI,
+		httpAPI:         httpAPI,
+		tokensCreated:   tokensCreated,
+		tokensClaimed:   tokensClaimed,
+		pendingRequests: pendingRequests,
+	}
+}
 
 // Server is the portcullis-guard HTTP server.
 type Server struct {
@@ -59,6 +116,8 @@ type Server struct {
 	// uiReady and apiReady are set to true once each listener is successfully bound.
 	uiReady  atomic.Bool
 	apiReady atomic.Bool
+
+	metrics *guardMetrics
 }
 
 // NewServer creates a Guard server.
@@ -121,6 +180,7 @@ func NewServer(ctx context.Context, cfg Config) (*Server, error) {
 		keepKey:        []byte(cfg.Responsibility.Issuance.ApprovalRequestVerificationKey),
 		signingKey:     []byte(cfg.Responsibility.Issuance.SigningKey),
 		ttl:            ttl,
+		metrics:        newGuardMetrics(telemetry.Meter(shared.ServiceGuard)),
 	}
 
 	if cfg.Identity.Strategy == "oidc-login" {
@@ -156,9 +216,12 @@ func (s *Server) Run(ctx context.Context) error {
 		return fmt.Errorf("server.endpoints.token_api is required")
 	}
 
+	metricsPath := s.cfg.Operations.Telemetry.Metrics.EffectivePath()
+
 	uiMux := http.NewServeMux()
 	uiMux.HandleFunc("GET /healthz", s.handleHealthz)
 	uiMux.HandleFunc("GET /readyz", s.handleReadyz)
+	uiMux.Handle("GET "+metricsPath, telemetry.MetricsHandler())
 
 	if s.cfg.Identity.Strategy == "oidc-login" {
 		uiSecure := uiEndpoint.IsSecure()
@@ -177,20 +240,28 @@ func (s *Server) Run(ctx context.Context) error {
 	apiMux := http.NewServeMux()
 	apiMux.HandleFunc("GET /healthz", s.handleHealthz)
 	apiMux.HandleFunc("GET /readyz", s.handleReadyz)
+	apiMux.Handle("GET "+metricsPath, telemetry.MetricsHandler())
 	apiMux.Handle("POST /token/deposit", s.machineAuthMiddleware(s.handleTokenDeposit))
 	apiMux.Handle("POST /token/claim", s.machineAuthMiddleware(s.handleTokenClaim))
 	apiMux.Handle("POST /pending", s.machineAuthMiddleware(s.handlePendingStore))
 
 	go s.cleanupWorker(ctx)
 
+	// Wrap muxes with HTTP metrics middleware when metrics are enabled.
+	var uiHandler, apiHandler http.Handler = uiMux, apiMux
+	if s.metrics != nil {
+		uiHandler = s.metrics.httpUI.MiddlewareWithListener(middleware.GuardRouteNormalizer, "ui")(uiMux)
+		apiHandler = s.metrics.httpAPI.MiddlewareWithListener(middleware.GuardRouteNormalizer, "api")(apiMux)
+	}
+
 	uiSrv := &http.Server{
 		Addr:    uiEndpoint.Listen,
-		Handler: uiMux,
+		Handler: uiHandler,
 	}
 
 	apiSrv := &http.Server{
 		Addr:    apiEndpoint.Listen,
-		Handler: apiMux,
+		Handler: apiHandler,
 	}
 
 	// Apply TLS if configured
@@ -438,6 +509,7 @@ func (s *Server) handleApproveAction(w http.ResponseWriter, r *http.Request) {
 
 	escalationToken, expiry, err := s.issueEscalationToken(claims, claims.ID, scope)
 	if err != nil {
+		s.recordTokenCreated(r.Context(), "ui_approval", "failed")
 		http.Error(w, "failed to generate escalation token", http.StatusInternalServerError)
 		return
 	}
@@ -448,10 +520,13 @@ func (s *Server) handleApproveAction(w http.ResponseWriter, r *http.Request) {
 		Raw:       escalationToken,
 		ExpiresAt: expiry,
 	}); err != nil {
+		s.recordTokenCreated(r.Context(), "ui_approval", "failed")
 		slog.Error("failed to persist approved escalation token", "jti", claims.ID, "error", err)
 		http.Error(w, "failed to store approved token", http.StatusInternalServerError)
 		return
 	}
+	s.recordTokenCreated(r.Context(), "ui_approval", "success")
+	s.recordPendingRequest(r.Context(), "approved")
 
 	gatePort := s.cfg.Responsibility.Interface.GateManagementPort
 	var gateURL string
@@ -515,6 +590,7 @@ func (s *Server) handlePendingStore(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to store pending request", http.StatusInternalServerError)
 		return
 	}
+	s.recordPendingRequest(r.Context(), "stored")
 
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "registered", "jti": body.JTI})
@@ -560,6 +636,7 @@ func (s *Server) handleTokenDeposit(w http.ResponseWriter, r *http.Request) {
 
 	escalationToken, expiry, err := s.issueEscalationToken(claims, claims.ID, claims.Scope)
 	if err != nil {
+		s.recordTokenCreated(r.Context(), "direct_deposit", "failed")
 		http.Error(w, "failed to generate escalation token", http.StatusInternalServerError)
 		return
 	}
@@ -570,10 +647,12 @@ func (s *Server) handleTokenDeposit(w http.ResponseWriter, r *http.Request) {
 		Raw:       escalationToken,
 		ExpiresAt: expiry,
 	}); err != nil {
+		s.recordTokenCreated(r.Context(), "direct_deposit", "failed")
 		slog.Error("failed to persist deposited escalation token", "jti", claims.ID, "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to store deposited token"})
 		return
 	}
+	s.recordTokenCreated(r.Context(), "direct_deposit", "success")
 
 	writeJSON(w, http.StatusCreated, map[string]string{"status": "deposited", "jti": claims.ID})
 }
@@ -604,12 +683,54 @@ func (s *Server) handleTokenClaim(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if found == nil {
+		s.recordTokenClaimed(r.Context(), "not_found")
 		http.NotFound(w, r)
 		return
 	}
 
+	s.recordTokenClaimed(r.Context(), "success")
 	slog.Info("escalation token claimed", "jti", body.JTI, "user_id", found.UserID, "remote_addr", r.RemoteAddr)
 	writeJSON(w, http.StatusOK, map[string]string{"raw": found.Raw})
+}
+
+// recordTokenCreated increments the token creation counter.
+// method is "ui_approval" or "direct_deposit"; status is "success" or "failed".
+func (s *Server) recordTokenCreated(ctx context.Context, method, status string) {
+	if s.metrics == nil {
+		return
+	}
+	s.metrics.tokensCreated.Add(ctx, 1,
+		otelmetric.WithAttributes(
+			attribute.String("method", method),
+			attribute.String("status", status),
+		),
+	)
+}
+
+// recordTokenClaimed increments the token claim counter.
+// status is "success" or "not_found".
+func (s *Server) recordTokenClaimed(ctx context.Context, status string) {
+	if s.metrics == nil {
+		return
+	}
+	s.metrics.tokensClaimed.Add(ctx, 1,
+		otelmetric.WithAttributes(
+			attribute.String("status", status),
+		),
+	)
+}
+
+// recordPendingRequest increments the pending request lifecycle counter.
+// action is "stored" or "approved".
+func (s *Server) recordPendingRequest(ctx context.Context, action string) {
+	if s.metrics == nil {
+		return
+	}
+	s.metrics.pendingRequests.Add(ctx, 1,
+		otelmetric.WithAttributes(
+			attribute.String("action", action),
+		),
+	)
 }
 
 func (s *Server) cleanupWorker(ctx context.Context) {

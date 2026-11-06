@@ -279,6 +279,21 @@ func (al *ActivityLogger) DroppedCount() int64 {
 	return al.droppedCount.Load()
 }
 
+// SinkLabel returns a bounded string identifying the active sink type, suitable
+// for use as a Prometheus label. Returns "file", "stdout", "http", or "otlp".
+func (al *ActivityLogger) SinkLabel() string {
+	// Legacy back-compat: file sink configured via File=="stdout" uses sink="stdout".
+	if al.cfg.File == "stdout" && al.cfg.Sink == "file" {
+		return "stdout"
+	}
+	switch al.cfg.Sink {
+	case "http", "otlp", "stdout":
+		return al.cfg.Sink
+	default:
+		return "file"
+	}
+}
+
 // Stats returns diagnostic counters for the logger and, if the underlying sink
 // implements StatsSink, its delivery counters as well. The returned map always
 // contains "buffer_dropped" (events dropped at the logger channel). Remote sinks
