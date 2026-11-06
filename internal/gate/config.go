@@ -73,13 +73,8 @@ func (c *Config) Validate(sources cfgloader.SourceMap) (cfgloader.PostureReport,
 		if c.Identity.Strategy == "os" {
 			return cfgloader.PostureReport{}, fmt.Errorf("identity.strategy \"os\" is not allowed in production mode")
 		}
-		for name, ep := range c.Server.Endpoints {
-			if ep.Auth.Type == "none" {
-				return cfgloader.PostureReport{}, fmt.Errorf("auth.type \"none\" for endpoint %q is not allowed in production mode", name)
-			}
-			if !cfgloader.IsLoopback(ep.Listen) && !ep.IsSecure() {
-				return cfgloader.PostureReport{}, fmt.Errorf("TLS is required for non-loopback endpoint %q in production mode", name)
-			}
+		if err := cfgloader.ValidateEndpointSecurity(c.Server.Endpoints); err != nil {
+			return cfgloader.PostureReport{}, err
 		}
 	}
 
@@ -193,14 +188,7 @@ func (c *Config) Validate(sources cfgloader.SourceMap) (cfgloader.PostureReport,
 	if c.Identity.Strategy == "os" {
 		report.SetStatus("identity.strategy", "WARN", "OS identity is not suitable for production; use oidc-file or oidc-login")
 	}
-	for name, ep := range c.Server.Endpoints {
-		if ep.Auth.Type == "none" {
-			report.SetStatus("server.endpoints."+name+".auth.type", "WARN", "Configure authentication for this endpoint in production")
-		}
-		if !ep.IsSecure() {
-			report.SetStatus("server.endpoints."+name+".tls.cert", "WARN", "Enable TLS for this endpoint in production")
-		}
-	}
+	cfgloader.AnnotateEndpointPosture(&report, c.Server.Endpoints)
 
 	return report, nil
 }

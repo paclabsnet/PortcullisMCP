@@ -23,6 +23,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/paclabsnet/PortcullisMCP/internal/shared/oidcutil"
 )
 
 // newTestOIDCServer starts a minimal fake OIDC provider backed by httptest.
@@ -442,7 +444,7 @@ func TestPKCEChallenge(t *testing.T) {
 	// (RFC 7636 appendix B)
 	verifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
 	want := "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
-	if got := pkceChallenge(verifier); got != want {
+	if got := oidcutil.PKCEChallenge(verifier); got != want {
 		t.Errorf("pkceChallenge = %q, want %q", got, want)
 	}
 }

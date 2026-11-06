@@ -16,9 +16,6 @@ package guard
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -28,6 +25,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/paclabsnet/PortcullisMCP/internal/shared/oidcutil"
 )
 
 const pkceStateExpiry = 10 * time.Minute
@@ -57,15 +56,15 @@ func (m *OIDCManager) StartLogin(ctx context.Context, returnPath string) (authUR
 		return "", PKCEState{}, fmt.Errorf("OIDC discovery: %w", err)
 	}
 
-	verifier, err := generateRandomString(64)
+	verifier, err := oidcutil.GenerateRandomString(64)
 	if err != nil {
 		return "", PKCEState{}, fmt.Errorf("generate code verifier: %w", err)
 	}
-	stateParam, err := generateRandomString(32)
+	stateParam, err := oidcutil.GenerateRandomString(32)
 	if err != nil {
 		return "", PKCEState{}, fmt.Errorf("generate state: %w", err)
 	}
-	nonce, err := generateRandomString(32)
+	nonce, err := oidcutil.GenerateRandomString(32)
 	if err != nil {
 		return "", PKCEState{}, fmt.Errorf("generate nonce: %w", err)
 	}
@@ -90,7 +89,7 @@ func (m *OIDCManager) StartLogin(ctx context.Context, returnPath string) (authUR
 		"scope":                 {strings.Join(scopes, " ")},
 		"state":                 {stateParam},
 		"nonce":                 {nonce},
-		"code_challenge":        {pkceChallenge(verifier)},
+		"code_challenge":        {oidcutil.PKCEChallenge(verifier)},
 		"code_challenge_method": {"S256"},
 	}
 
@@ -107,7 +106,7 @@ func (m *OIDCManager) HandleCallback(ctx context.Context, code, codeVerifier, no
 		return nil, "", "", fmt.Errorf("token exchange: %w", err)
 	}
 
-	claims, err := unsafeParseJWTClaims(tokens.IDToken)
+	claims, err := oidcutil.UnsafeParseJWTClaims(tokens.IDToken)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("parse id_token: %w", err)
 	}
@@ -335,35 +334,3 @@ func (m *OIDCManager) exchangeCode(ctx context.Context, code, codeVerifier strin
 	}, nil
 }
 
-// generateRandomString returns a URL-safe base64-encoded random string of n bytes.
-func generateRandomString(n int) (string, error) {
-	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(b), nil
-}
-
-// pkceChallenge computes the S256 PKCE code challenge from a verifier.
-func pkceChallenge(verifier string) string {
-	h := sha256.Sum256([]byte(verifier))
-	return base64.RawURLEncoding.EncodeToString(h[:])
-}
-
-// unsafeParseJWTClaims decodes the payload of a JWT without verifying the
-// signature. Used only to extract display claims (sub, name, nonce).
-func unsafeParseJWTClaims(token string) (map[string]any, error) {
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		return nil, fmt.Errorf("not a JWT: expected 3 parts, got %d", len(parts))
-	}
-	decoded, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return nil, fmt.Errorf("decode jwt payload: %w", err)
-	}
-	var claims map[string]any
-	if err := json.Unmarshal(decoded, &claims); err != nil {
-		return nil, fmt.Errorf("unmarshal jwt claims: %w", err)
-	}
-	return claims, nil
-}

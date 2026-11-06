@@ -163,7 +163,7 @@ func resolveWithSource(ctx context.Context, raw, path string, allowset map[strin
 		val, resolveErr := resolveFileVar(u)
 		return "file", val, resolveErr
 	case restrictedSchemes[u.Scheme]:
-		if !allowset[path] {
+		if !IsFieldAllowlisted(path, allowset) {
 			return "", "", fmt.Errorf("secrets: %s:// URI is not permitted at field %q — only allowed on: %v",
 				u.Scheme, path, allowlistKeys(allowset))
 		}
@@ -182,6 +182,23 @@ func resolveRestricted(ctx context.Context, u *url.URL) (string, error) {
 	default:
 		return "", fmt.Errorf("secrets: scheme %q is reserved for future use and not yet implemented", u.Scheme)
 	}
+}
+
+// IsFieldAllowlisted returns true if path is explicitly in the allowset or if
+// any allowset entry is a prefix of path (i.e. path is a child key of an
+// allowlisted map field, e.g. path "mcp_activity_log.http.headers.X-Token"
+// is permitted when "mcp_activity_log.http.headers" is allowlisted).
+// It is exported so that posture reporting can apply the same rule.
+func IsFieldAllowlisted(path string, allowset map[string]bool) bool {
+	if allowset[path] {
+		return true
+	}
+	for p := range allowset {
+		if strings.HasPrefix(path, p+".") {
+			return true
+		}
+	}
+	return false
 }
 
 // allowlistKeys returns field paths from the allowset for error messages.

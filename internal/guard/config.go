@@ -21,6 +21,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/mitchellh/mapstructure"
 	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
+	"github.com/paclabsnet/PortcullisMCP/internal/shared/redisutil"
 )
 
 // SecretAllowlist lists the config fields eligible for vault:// and other
@@ -108,13 +109,8 @@ func (c *Config) Validate(sources cfgloader.SourceMap) (cfgloader.PostureReport,
 	}
 
 	if c.Mode == cfgloader.ModeProduction {
-		for name, ep := range c.Server.Endpoints {
-			if ep.Auth.Type == "none" {
-				return cfgloader.PostureReport{}, fmt.Errorf("auth.type \"none\" for endpoint %q is not allowed in production mode", name)
-			}
-			if !cfgloader.IsLoopback(ep.Listen) && !ep.IsSecure() {
-				return cfgloader.PostureReport{}, fmt.Errorf("TLS is required for non-loopback endpoint %q in production mode", name)
-			}
+		if err := cfgloader.ValidateEndpointSecurity(c.Server.Endpoints); err != nil {
+			return cfgloader.PostureReport{}, err
 		}
 	}
 
@@ -165,14 +161,7 @@ func (c *Config) Validate(sources cfgloader.SourceMap) (cfgloader.PostureReport,
 	if c.Mode != cfgloader.ModeProduction {
 		report.SetStatus("mode", "WARN", "Use production mode for deployments")
 	}
-	for name, ep := range c.Server.Endpoints {
-		if ep.Auth.Type == "none" {
-			report.SetStatus("server.endpoints."+name+".auth.type", "WARN", "Configure authentication for this endpoint in production")
-		}
-		if !ep.IsSecure() {
-			report.SetStatus("server.endpoints."+name+".tls.cert", "WARN", "Enable TLS for this endpoint in production")
-		}
-	}
+	cfgloader.AnnotateEndpointPosture(&report, c.Server.Endpoints)
 
 	return report, nil
 }
@@ -217,15 +206,8 @@ func (l *LimitsConfig) ApplyDefaults() {
 }
 
 // RedisConfig holds connection and security settings for the Redis token store.
-type RedisConfig struct {
-	Addr          string `yaml:"addr" mapstructure:"addr"`
-	Password      string `yaml:"password" mapstructure:"password"`
-	DB            int    `yaml:"db" mapstructure:"db"`
-	TLSEnabled    bool   `yaml:"tls_enabled" mapstructure:"tls_enabled"`
-	TLSSkipVerify bool   `yaml:"tls_skip_verify" mapstructure:"tls_skip_verify"`
-	TLSCACert     string `yaml:"tls_ca_cert" mapstructure:"tls_ca_cert"`
-	KeyPrefix     string `yaml:"key_prefix" mapstructure:"key_prefix"`
-}
+// This is a type alias for redisutil.Config; construction is handled by redisutil.NewClient.
+type RedisConfig = redisutil.Config
 
 type portcullisClaims struct {
 	Reason          string           `json:"reason"`

@@ -16,17 +16,15 @@ package guard
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/paclabsnet/PortcullisMCP/internal/shared/redisutil"
 )
 
 // defaultKeyPrefix is prepended to every Redis key Guard writes.
@@ -56,41 +54,9 @@ return 1
 `)
 
 // NewRedisClient constructs and validates a Redis client from cfg.
-// Returns an error immediately if the Redis server cannot be reached.
+// Returns an error if TLS configuration is invalid or the server cannot be reached.
 func NewRedisClient(ctx context.Context, cfg RedisConfig) (*redis.Client, error) {
-	opts := &redis.Options{
-		Addr:     cfg.Addr,
-		Password: cfg.Password,
-		DB:       cfg.DB,
-	}
-
-	if cfg.TLSEnabled {
-		tlsCfg := &tls.Config{
-			InsecureSkipVerify: cfg.TLSSkipVerify, //nolint:gosec — user-controlled; warn below
-		}
-		if cfg.TLSSkipVerify {
-			slog.Warn("redis TLS certificate verification is disabled — do not use in production")
-		}
-		if cfg.TLSCACert != "" {
-			pem, err := os.ReadFile(cfg.TLSCACert)
-			if err != nil {
-				return nil, fmt.Errorf("read redis TLS CA cert %q: %w", cfg.TLSCACert, err)
-			}
-			pool := x509.NewCertPool()
-			if !pool.AppendCertsFromPEM(pem) {
-				return nil, fmt.Errorf("parse redis TLS CA cert %q: no valid PEM blocks found", cfg.TLSCACert)
-			}
-			tlsCfg.RootCAs = pool
-		}
-		opts.TLSConfig = tlsCfg
-	}
-
-	client := redis.NewClient(opts)
-	if err := client.Ping(ctx).Err(); err != nil {
-		_ = client.Close()
-		return nil, fmt.Errorf("connect to redis at %q: %w", cfg.Addr, err)
-	}
-	return client, nil
+	return redisutil.NewClient(ctx, cfg)
 }
 
 // ---- RedisPendingStore ------------------------------------------------------

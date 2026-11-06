@@ -16,8 +16,6 @@ package gate
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -27,6 +25,7 @@ import (
 	"time"
 
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
+	"github.com/paclabsnet/PortcullisMCP/internal/shared/oidcutil"
 )
 
 const identityRefreshTTL = 60 * time.Second
@@ -229,7 +228,7 @@ func resolveIdentity(ctx context.Context, cfg IdentityConfig) (shared.UserIdenti
 // Warns if the token is already expired or expiring within 5 minutes, but
 // still returns the identity so the PDP can make the authoritative decision.
 func identityFromJWT(token string) (shared.UserIdentity, time.Time, error) {
-	claims, err := unsafeParseJWTClaims(token)
+	claims, err := oidcutil.UnsafeParseJWTClaims(token)
 	if err != nil {
 		return shared.UserIdentity{}, time.Time{}, fmt.Errorf("parse jwt claims: %w", err)
 	}
@@ -354,20 +353,3 @@ func resolveOSIdentity(cfg IdentityConfig) (shared.UserIdentity, error) {
 	}, nil
 }
 
-// unsafeParseJWTClaims decodes the payload of a JWT without verifying the
-// signature. Used only to extract display claims; the PDP must verify.
-func unsafeParseJWTClaims(token string) (map[string]any, error) {
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		return nil, fmt.Errorf("not a JWT: expected 3 parts, got %d", len(parts))
-	}
-	decoded, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return nil, fmt.Errorf("decode jwt payload: %w", err)
-	}
-	var claims map[string]any
-	if err := json.Unmarshal(decoded, &claims); err != nil {
-		return nil, fmt.Errorf("unmarshal jwt claims: %w", err)
-	}
-	return claims, nil
-}
