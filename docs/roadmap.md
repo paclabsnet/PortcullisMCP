@@ -252,6 +252,21 @@ low
 
 
 
+### Task: Demo smoke test suite
+
+A self-contained test harness run against a live demo stack after implementing a new feature, to confirm that all components are still wired together correctly and no regressions have been introduced. The suite should exercise allow, deny, and escalate-returns-pending-response outcomes, identity injection, the metrics endpoints, and health/readiness probes. Escalation approval and retry are out of scope (requires human interaction by design). Workflow outcome is also out of scope for now.
+
+#### Key questions to resolve in the design spec
+
+- Authentication strategy: fixed test identities with known groups to drive predictable allow/deny/escalate outcomes
+- Delivery: Go integration tests tagged `//go:build smoketest`, run with `go test -tags smoketest -v ./smoketest/...`; config (endpoint URLs, bearer token, test identities) passed via a YAML file pointed to by an env var or `-config` flag in `TestMain`.
+
+#### priority
+high
+
+
+
+
 ### Task: Add performance monitoring to Portcullis
 Use the OpenTelemetry wrapper around HTTP calls to get detailed performance measurements.
 * Keep should report metrics around usage, PDP response types (allow/deny/escalate/workflow) and failures (failures to connect to remote MCPs, failures to deliver activity logs to SIEM destinations, etc)
