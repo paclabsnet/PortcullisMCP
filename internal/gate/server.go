@@ -33,9 +33,11 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	otelmetric "go.opentelemetry.io/otel/metric"
 
 	"github.com/paclabsnet/PortcullisMCP/internal/gate/localfs"
 	"github.com/paclabsnet/PortcullisMCP/internal/shared"
+	"github.com/paclabsnet/PortcullisMCP/internal/shared/middleware"
 	"github.com/paclabsnet/PortcullisMCP/internal/telemetry"
 	"github.com/paclabsnet/PortcullisMCP/internal/version"
 )
@@ -117,6 +119,14 @@ type GuardSource interface {
 	ClaimToken(ctx context.Context, jti string) (string, error)
 }
 
+// gateMetrics holds the OTel metric instruments for Gate.
+type gateMetrics struct {
+	toolCallsTotal    otelmetric.Int64Counter
+	toolCallDuration  otelmetric.Float64Histogram
+	escalationClaims  otelmetric.Int64Counter
+	activeSessions    otelmetric.Int64UpDownCounter
+}
+
 // Gate is the portcullis-gate MCP proxy server.
 type Gate struct {
 	cfg             Config
@@ -138,6 +148,92 @@ type Gate struct {
 	stateMachine *StateMachine
 	oidcLogin    *OIDCLoginManager
 	isSecondary  bool // true when duplicate_mcp_hack mode is active and this instance could not bind the management port
+
+	// metrics is nil for single-tenant gate (metrics disabled by design).
+	metrics *gateMetrics
+}
+
+// newGateMetrics creates metric instruments for Multi-Tenant Gate.
+// Returns nil when any instrument creation fails so the caller can proceed without metrics.
+func newGateMetrics(m otelmetric.Meter) *gateMetrics {
+	toolCalls, err := m.Int64Counter("portcullis_gate_tool_calls_total",
+		otelmetric.WithDescription("Total tool calls processed by Gate."),
+		otelmetric.WithUnit("{call}"),
+	)
+	if err != nil {
+		slog.Warn("gate: failed to create tool_calls_total", "error", err)
+		return nil
+	}
+	toolDuration, err := m.Float64Histogram("portcullis_gate_tool_call_duration_seconds",
+		otelmetric.WithDescription("End-to-end tool call latency as observed by Gate."),
+		otelmetric.WithUnit("s"),
+	)
+	if err != nil {
+		slog.Warn("gate: failed to create tool_call_duration_seconds", "error", err)
+		return nil
+	}
+	escalationClaims, err := m.Int64Counter("portcullis_gate_escalation_claims_total",
+		otelmetric.WithDescription("Outcomes of escalation token claim attempts."),
+		otelmetric.WithUnit("{claim}"),
+	)
+	if err != nil {
+		slog.Warn("gate: failed to create escalation_claims_total", "error", err)
+		return nil
+	}
+	activeSessions, err := m.Int64UpDownCounter("portcullis_gate_active_sessions",
+		otelmetric.WithDescription("Number of currently tracked active client sessions (per-process)."),
+		otelmetric.WithUnit("{session}"),
+	)
+	if err != nil {
+		slog.Warn("gate: failed to create active_sessions", "error", err)
+		return nil
+	}
+	return &gateMetrics{
+		toolCallsTotal:   toolCalls,
+		toolCallDuration: toolDuration,
+		escalationClaims: escalationClaims,
+		activeSessions:   activeSessions,
+	}
+}
+
+// decisionFromError maps a policy error to the decision label used in metrics.
+// escalation → "escalate", deny/ErrDenied → "deny", anything else → "error".
+func decisionFromError(err error) string {
+	var escalationErr *shared.EscalationPendingError
+	var denyErr *shared.DenyError
+	if errors.As(err, &escalationErr) {
+		return "escalate"
+	}
+	if errors.As(err, &denyErr) || errors.Is(err, shared.ErrDenied) {
+		return "deny"
+	}
+	return "error"
+}
+
+// recordToolCall increments the tool call counter and records the duration.
+// No-ops when metrics are disabled (single-tenant mode).
+func (g *Gate) recordToolCall(ctx context.Context, toolName, decision, source string, durationSecs float64) {
+	if g.metrics == nil {
+		return
+	}
+	// Normalize to the known bounded set; "unknown" guards against arbitrary label cardinality.
+	safeName := toolName
+	if _, inKeep := g.toolServerMap[toolName]; !inKeep && !g.localFSTools[toolName] {
+		safeName = "unknown"
+	}
+	g.metrics.toolCallsTotal.Add(ctx, 1,
+		otelmetric.WithAttributes(
+			attribute.String("tool_name", safeName),
+			attribute.String("decision", decision),
+			attribute.String("source", source),
+		),
+	)
+	g.metrics.toolCallDuration.Record(ctx, durationSecs,
+		otelmetric.WithAttributes(
+			attribute.String("tool_name", safeName),
+			attribute.String("decision", decision),
+		),
+	)
 }
 
 // New creates a Gate from the given config.
@@ -308,6 +404,11 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 		sm.SetAuthenticated()
 	}
 
+	var gm *gateMetrics
+	if cfg.Tenancy == "multi" {
+		gm = newGateMetrics(telemetry.Meter(shared.ServiceGate))
+	}
+
 	g := &Gate{
 		cfg:           cfg,
 		sessions:      sessionStore,
@@ -317,6 +418,7 @@ func New(ctx context.Context, cfg Config) (*Gate, error) {
 		escalationMgr: escalationMgr,
 		localFS:       localFSSession,
 		localFSServer: localFSServer,
+		metrics:       gm,
 		localFSPolicy: initialLocalFSPolicy,
 		sessionID:     "0",
 		toolServerMap: make(map[string]string),
@@ -570,7 +672,15 @@ func (g *Gate) Run(ctx context.Context) error {
 		if redisStore, ok := g.sessions.(*RedisSessionStore); ok {
 			sdkOpts = &mcp.StreamableHTTPOptions{EventStore: redisStore}
 		}
-		httpHandler := NewMCPHTTPHandler(g.server, sdkOpts, g.cfg, g.provider)
+		mcpHTTPHandler := NewMCPHTTPHandler(g.server, sdkOpts, g.cfg, g.provider)
+
+		// Wrap with HTTP metrics middleware when in multi-tenant mode.
+		var httpHandler http.Handler = mcpHTTPHandler
+		if mcpHTTPHandler.httpMetrics != nil && g.cfg.Tenancy == "multi" {
+			httpHandler = mcpHTTPHandler.httpMetrics.Middleware(
+				middleware.GateRouteNormalizer,
+			)(mcpHTTPHandler)
+		}
 
 		httpSrv := &http.Server{
 			Addr:    mcpEp.Listen,
@@ -625,6 +735,15 @@ func (g *Gate) registerTool(tool *mcp.Tool) {
 }
 
 func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[string]any) (*mcp.CallToolResult, error) {
+	callStart := time.Now()
+
+	// Metric labels accumulate across the function; defer records them once on return.
+	decision := "error"
+	source := "keep"
+	defer func() {
+		g.recordToolCall(ctx, toolName, decision, source, time.Since(callStart).Seconds())
+	}()
+
 	// Ensure a sessionID is in context. In single-tenant mode the Gate has one
 	// global session; in multi-tenant mode the HTTP middleware injects it first.
 	if _, hasSession := SessionIDFromContext(ctx); !hasSession {
@@ -692,6 +811,8 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 
 	switch fpResult {
 	case FastPathAllow:
+		decision = "allow"
+		source = "fastpath"
 		span.SetAttributes(attribute.String("pdp.decision", "allow"), attribute.String("pdp.source", "fastpath"))
 		slog.InfoContext(ctx, "fast-path allow", "tool", toolName, "path", path, "trace_id", traceID)
 
@@ -704,6 +825,8 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 		})
 
 	case FastPathDeny:
+		decision = "deny"
+		source = "fastpath"
 		span.SetAttributes(attribute.String("pdp.decision", "deny"), attribute.String("pdp.source", "fastpath"))
 		span.SetStatus(codes.Error, "fast-path deny")
 		slog.InfoContext(ctx, "fast-path deny", "tool", toolName, "path", path, "trace_id", traceID)
@@ -727,11 +850,13 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 			TraceID:          traceID,
 		}
 		if err := g.forwarder.Authorize(ctx, enriched); err != nil {
+			decision = decisionFromError(err)
 			if storeErr := g.escalationMgr.StorePending(ctx, shared.LocalFSServerName, toolName, err); storeErr != nil {
 				return g.policyErrToResult(ctx, storeErr, toolName, traceID)
 			}
 			return g.policyErrToResult(ctx, err, toolName, traceID)
 		}
+		decision = "allow"
 		if g.localFS == nil {
 			return nil, fmt.Errorf("local filesystem server not configured")
 		}
@@ -760,11 +885,13 @@ func (g *Gate) handleToolCall(ctx context.Context, toolName string, args map[str
 	}
 	result, err := g.forwarder.CallTool(ctx, enriched)
 	if err != nil {
+		decision = decisionFromError(err)
 		if storeErr := g.escalationMgr.StorePending(ctx, serverName, toolName, err); storeErr != nil {
 			return g.policyErrToResult(ctx, storeErr, toolName, traceID)
 		}
 		return g.policyErrToResult(ctx, err, toolName, traceID)
 	}
+	decision = "allow"
 	if result != nil && result.IsError {
 		result = g.enrichBackendAuthChallenge(result, serverName, toolName)
 	}

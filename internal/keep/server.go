@@ -30,6 +30,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	otelmetric "go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/oauth2"
@@ -121,6 +122,66 @@ type MCPRouter interface {
 	IsHiddenToolName(serverName, toolName string) bool
 }
 
+// keepMetrics holds the OTel metric instruments for Keep.
+type keepMetrics struct {
+	http            *middleware.HTTPMetrics
+	pdpDecisions    otelmetric.Int64Counter
+	pdpDuration     otelmetric.Float64Histogram
+	backendCalls    otelmetric.Int64Counter
+	backendDuration otelmetric.Float64Histogram
+	// activity log observable counters — registered as callbacks on the meter
+	activityLogRegistration otelmetric.Registration
+}
+
+// newKeepMetrics creates all Keep metric instruments from the global meter.
+// Returns nil when any instrument creation fails so the caller can proceed without metrics.
+func newKeepMetrics(m otelmetric.Meter) *keepMetrics {
+	httpM, err := middleware.NewHTTPMetrics(m, "keep")
+	if err != nil {
+		slog.Warn("keep: failed to create http metrics instruments", "error", err)
+		return nil
+	}
+	pdpDecisions, err := m.Int64Counter("portcullis_keep_pdp_decisions_total",
+		otelmetric.WithDescription("Total authorization decisions evaluated."),
+		otelmetric.WithUnit("{decision}"),
+	)
+	if err != nil {
+		slog.Warn("keep: failed to create pdp_decisions_total", "error", err)
+		return nil
+	}
+	pdpDuration, err := m.Float64Histogram("portcullis_keep_pdp_duration_seconds",
+		otelmetric.WithDescription("Evaluation duration for PDP authorization checks."),
+		otelmetric.WithUnit("s"),
+	)
+	if err != nil {
+		slog.Warn("keep: failed to create pdp_duration_seconds", "error", err)
+		return nil
+	}
+	backendCalls, err := m.Int64Counter("portcullis_keep_mcp_backend_calls_total",
+		otelmetric.WithDescription("Total forwarded requests to destination MCP servers."),
+		otelmetric.WithUnit("{call}"),
+	)
+	if err != nil {
+		slog.Warn("keep: failed to create mcp_backend_calls_total", "error", err)
+		return nil
+	}
+	backendDuration, err := m.Float64Histogram("portcullis_keep_mcp_backend_duration_seconds",
+		otelmetric.WithDescription("Execution latency of remote MCP backend tool calls."),
+		otelmetric.WithUnit("s"),
+	)
+	if err != nil {
+		slog.Warn("keep: failed to create mcp_backend_duration_seconds", "error", err)
+		return nil
+	}
+	return &keepMetrics{
+		http:            httpM,
+		pdpDecisions:    pdpDecisions,
+		pdpDuration:     pdpDuration,
+		backendCalls:    backendCalls,
+		backendDuration: backendDuration,
+	}
+}
+
 // Server is the portcullis-keep HTTP server.
 type Server struct {
 	cfg           Config
@@ -132,6 +193,7 @@ type Server struct {
 	signer        *EscalationSigner
 	activityLog   *activitylog.ActivityLogger
 	normalizer    IdentityNormalizer
+	metrics       *keepMetrics
 }
 
 // NewServer creates a Keep server.
@@ -183,6 +245,7 @@ func NewServer(ctx context.Context, cfg Config) (*Server, error) {
 	}
 
 	al := initActivityLogger(cfg)
+	m := newKeepMetrics(telemetry.Meter(shared.ServiceKeep))
 
 	return &Server{
 		cfg:           cfg,
@@ -194,6 +257,7 @@ func NewServer(ctx context.Context, cfg Config) (*Server, error) {
 		signer:        signer,
 		activityLog:   al,
 		normalizer:    normalizer,
+		metrics:       m,
 	}, nil
 }
 
@@ -435,9 +499,19 @@ func (s *Server) Run(ctx context.Context) error {
 	// user's browser after the authorization server redirects them back.
 	mux.HandleFunc("GET /oauth/callback", s.handleOAuthCallback)
 
+	// Mount Prometheus scrape endpoint when metrics are enabled.
+	metricsPath := s.cfg.Operations.Telemetry.Metrics.EffectivePath()
+	mux.Handle("GET "+metricsPath, telemetry.MetricsHandler())
+
+	// Register activity log observable counters (must be done after the meter provider is set).
+	s.registerActivityLogCounters()
+
 	var handler http.Handler = mux
+	if s.metrics != nil && s.metrics.http != nil {
+		handler = s.metrics.http.Middleware(middleware.KeepRouteNormalizer)(mux)
+	}
 	if mainEndpoint.Auth.Credentials.BearerToken != "" {
-		handler = s.authMiddleware(mux)
+		handler = s.authMiddleware(handler)
 	}
 
 	srv := &http.Server{
@@ -511,8 +585,11 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 	req := NewAuthorizedRequest(rawReq, principal)
 	meta := newActivityMeta(req, rawReq.Agent, traceID, remoteAddr)
 
+	pdpStart := time.Now()
 	pdpResp, err := s.pdp.Evaluate(ctx, req)
+	pdpElapsed := time.Since(pdpStart).Seconds()
 	if err != nil {
+		s.recordPDPDecision(ctx, "error", pdpElapsed)
 		span.SetStatus(codes.Error, err.Error())
 		slog.ErrorContext(ctx, "pdp evaluate failed", "error", err, "trace_id", traceID)
 		s.logRequest(meta, req.Arguments, "error", err.Error(), nil)
@@ -521,6 +598,7 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.recordPDPDecision(ctx, pdpResp.Decision, pdpElapsed)
 	span.SetAttributes(attribute.String("pdp.decision", pdpResp.Decision))
 	slog.InfoContext(ctx, "pdp decision",
 		"decision", pdpResp.Decision,
@@ -533,8 +611,11 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 
 	switch pdpResp.Decision {
 	case "allow":
+		backendStart := time.Now()
 		result, err := s.router.CallTool(ctx, req.ServerName, req.ToolName, req.Arguments)
+		backendElapsed := time.Since(backendStart).Seconds()
 		if err != nil {
+			s.recordBackendCall(ctx, req.ServerName, "error", backendElapsed)
 			span.SetStatus(codes.Error, err.Error())
 			slog.ErrorContext(ctx, "backend call failed", "error", err, "server", req.ServerName, "tool", req.ToolName, "trace_id", traceID)
 			s.logResponse(meta, start, "backend_error", err.Error(), "", "", nil)
@@ -545,6 +626,11 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		if result != nil && result.IsError {
 			toolStatus, toolErr = "tool_error", "tool returned an error result"
 		}
+		backendStatus := "success"
+		if toolStatus == "tool_error" {
+			backendStatus = "error"
+		}
+		s.recordBackendCall(ctx, req.ServerName, backendStatus, backendElapsed)
 		s.logResponse(meta, start, toolStatus, toolErr, "", "", result)
 		writeJSON(w, http.StatusOK, result)
 
@@ -656,8 +742,11 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	req := NewAuthorizedRequest(rawReq, principal)
 	meta := newActivityMeta(req, rawReq.Agent, traceID, remoteAddr)
 
+	pdpStart2 := time.Now()
 	pdpResp, err := s.pdp.Evaluate(ctx, req)
+	pdpElapsed2 := time.Since(pdpStart2).Seconds()
 	if err != nil {
+		s.recordPDPDecision(ctx, "error", pdpElapsed2)
 		span.SetStatus(codes.Error, err.Error())
 		slog.ErrorContext(ctx, "pdp evaluate failed", "error", err, "trace_id", traceID)
 		s.logRequest(meta, req.Arguments, "error", err.Error(), nil)
@@ -666,6 +755,7 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.recordPDPDecision(ctx, pdpResp.Decision, pdpElapsed2)
 	span.SetAttributes(attribute.String("pdp.decision", pdpResp.Decision))
 	slog.InfoContext(ctx, "pdp decision",
 		"decision", pdpResp.Decision,
@@ -819,6 +909,56 @@ func writeDeny(w http.ResponseWriter, reason, traceID string) {
 	writeJSON(w, http.StatusForbidden, body)
 }
 
+// policyEngineLabel returns the bounded policy_engine label for the configured PDP.
+func (s *Server) policyEngineLabel() string {
+	switch s.cfg.Responsibility.Policy.Strategy {
+	case "opa", "":
+		return "opa"
+	case "noop":
+		return "noop"
+	default:
+		return "other"
+	}
+}
+
+// recordPDPDecision increments the PDP decision counter and records duration.
+func (s *Server) recordPDPDecision(ctx context.Context, decision string, durationSecs float64) {
+	if s.metrics == nil {
+		return
+	}
+	engine := s.policyEngineLabel()
+	s.metrics.pdpDecisions.Add(ctx, 1,
+		otelmetric.WithAttributes(
+			attribute.String("decision", decision),
+			attribute.String("policy_engine", engine),
+		),
+	)
+	s.metrics.pdpDuration.Record(ctx, durationSecs,
+		otelmetric.WithAttributes(
+			attribute.String("decision", decision),
+			attribute.String("policy_engine", engine),
+		),
+	)
+}
+
+// recordBackendCall increments the backend call counter and records duration.
+func (s *Server) recordBackendCall(ctx context.Context, backendID, status string, durationSecs float64) {
+	if s.metrics == nil {
+		return
+	}
+	s.metrics.backendCalls.Add(ctx, 1,
+		otelmetric.WithAttributes(
+			attribute.String("backend_id", backendID),
+			attribute.String("status", status),
+		),
+	)
+	s.metrics.backendDuration.Record(ctx, durationSecs,
+		otelmetric.WithAttributes(
+			attribute.String("backend_id", backendID),
+		),
+	)
+}
+
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
@@ -832,15 +972,97 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	body := map[string]any{
+	writeJSON(w, http.StatusOK, map[string]any{
 		"status":            "ready",
 		"tools":             len(tools),
 		"signer_configured": s.signer != nil,
+	})
+}
+
+// registerActivityLogCounters registers OTel observable counters that expose
+// activity log delivery statistics via Prometheus. This is a no-op when either
+// metrics or the activity logger are disabled.
+func (s *Server) registerActivityLogCounters() {
+	if s.metrics == nil || s.activityLog == nil {
+		return
 	}
-	if s.activityLog != nil {
-		body["activity_log"] = s.activityLog.Stats()
+	meter := telemetry.Meter(shared.ServiceKeep)
+
+	bufDropped, err := meter.Int64ObservableCounter(
+		"portcullis_keep_activity_log_buffer_dropped_total",
+		otelmetric.WithDescription("Entries dropped due to full in-memory buffer channel."),
+		otelmetric.WithUnit("{entry}"),
+	)
+	if err != nil {
+		slog.Warn("keep: failed to create activity_log_buffer_dropped_total", "error", err)
+		return
 	}
-	writeJSON(w, http.StatusOK, body)
+
+	exportedEntries, err := meter.Int64ObservableCounter(
+		"portcullis_keep_activity_log_exported_entries_total",
+		otelmetric.WithDescription("Total entries successfully delivered to the active sink."),
+		otelmetric.WithUnit("{entry}"),
+	)
+	if err != nil {
+		slog.Warn("keep: failed to create activity_log_exported_entries_total", "error", err)
+		return
+	}
+
+	sinkDroppedBatches, err := meter.Int64ObservableCounter(
+		"portcullis_keep_activity_log_sink_dropped_batches_total",
+		otelmetric.WithDescription("Batches dropped by remote sinks due to queue overflow or delivery error."),
+		otelmetric.WithUnit("{batch}"),
+	)
+	if err != nil {
+		slog.Warn("keep: failed to create activity_log_sink_dropped_batches_total", "error", err)
+		return
+	}
+
+	sinkDroppedEntries, err := meter.Int64ObservableCounter(
+		"portcullis_keep_activity_log_sink_dropped_entries_total",
+		otelmetric.WithDescription("Entries dropped by remote sinks due to network exhaustion or delivery error."),
+		otelmetric.WithUnit("{entry}"),
+	)
+	if err != nil {
+		slog.Warn("keep: failed to create activity_log_sink_dropped_entries_total", "error", err)
+		return
+	}
+
+	al := s.activityLog
+	sinkLabel := attribute.String("sink", al.SinkLabel())
+
+	reg, regErr := meter.RegisterCallback(
+		func(_ context.Context, o otelmetric.Observer) error {
+			stats := al.Stats()
+			if v, ok := stats["buffer_dropped"].(int64); ok {
+				o.ObserveInt64(bufDropped, v)
+			}
+			if v, ok := stats["exported_entries"].(int64); ok {
+				o.ObserveInt64(exportedEntries, v, otelmetric.WithAttributeSet(
+					attribute.NewSet(sinkLabel),
+				))
+			}
+			if v, ok := stats["sink_dropped_batches"].(int64); ok {
+				o.ObserveInt64(sinkDroppedBatches, v, otelmetric.WithAttributeSet(
+					attribute.NewSet(sinkLabel),
+				))
+			}
+			if v, ok := stats["sink_dropped_entries"].(int64); ok {
+				o.ObserveInt64(sinkDroppedEntries, v, otelmetric.WithAttributeSet(
+					attribute.NewSet(sinkLabel),
+				))
+			}
+			return nil
+		},
+		bufDropped, exportedEntries, sinkDroppedBatches, sinkDroppedEntries,
+	)
+	if regErr != nil {
+		slog.Warn("keep: failed to register activity log observable callbacks", "error", regErr)
+		return
+	}
+	if s.metrics != nil {
+		s.metrics.activityLogRegistration = reg
+	}
 }
 
 func checkAPIVersion(v string) error {
@@ -1059,9 +1281,10 @@ func (c *capWriter) Write(p []byte) (int, error) {
 
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	mainEndpoint := s.cfg.Server.Endpoints["main"]
+	metricsPath := s.cfg.Operations.Telemetry.Metrics.EffectivePath()
 	return middleware.BearerAuth(middleware.AuthConfig{
 		BearerToken: mainEndpoint.Auth.Credentials.BearerToken,
-		SkipPaths:   []string{"/healthz", "/readyz", "/oauth/callback"},
+		SkipPaths:   []string{"/healthz", "/readyz", "/oauth/callback", metricsPath},
 		Realm:       "portcullis-keep",
 	})(next)
 }

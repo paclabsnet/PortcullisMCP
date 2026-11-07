@@ -7,6 +7,9 @@ cloud resources
 
 
 
+
+
+
 ### Task: Send the MCP response to the PDP for approval before passing it back to the agent
 
 #### Problem
@@ -27,6 +30,8 @@ that the request was approved, but the MCP response was not authorized.
 2. The PDP policy will need to be written carefully - generally speaking, since the MCP request was authorized, the response policy should default to allow, and only deny for specific reasons.  But this is a per-implementation decision, not something that Portcullis has to 
 manage
 
+#### Priority
+medium-low
 
 
 
@@ -119,8 +124,7 @@ Using Figma as an example:
 * The agents will include MCP-specific auth credentials in the headers of the MCP requests (both tool calls and tool list calls). We need to make sure that we pass all of the headers from the Agent to the destination MCP, and we also need to make sure to pass all of the headers from the destination MCP back to the Agent.
   * IMPORTANT: we also need to make sure that the existing tool call flow properly handles all of the headers in both directions
 
-
-#### Fail Closed
+##### Fail Closed
 
 * If there is no tool call policy for a given MCP tool, we don't forward the request
 
@@ -136,7 +140,7 @@ Using Figma as an example:
 
 
 #### Priority
-- priority: high
+high
 
 
 
@@ -155,30 +159,14 @@ Using Figma as an example:
 ### Task: Gate should keep track of 'unused' escalation approval URLs for a time
 When Gate receives an `escalate` response and passes that on to the Agent, there's no guarantee that the Agent will provide the link to the user.  We can include the link in the Gate management UI.  If the user creates the appropriate escalation-token, that's evidence that we can remove the link from the management UI.
 
-priority: medium
+#### priority
+medium-low
 
 
 
 
-### Task: production YAML should not support unknown keys in the responsibility section
-
-If the portcullis-localfs tool configuration is incorrect, it could allow the agent access to sensitive
-areas of the user's filesystem.  Ensuring that there are no unknown keys in the config YAML will 
-help avoid that issue.
-
-- priority: very low
-
-2026-05-05 : I have no idea what this means. What are unknown keys in this context???
-2026-05-11 : Perhaps this means that bad YAML defaults the localfs tool to escalate for
-             every call, instead of a list of absolute deny options
 
 
-### ~~Task: Support vault:// secret resolution for map[string]string config fields~~ DONE (v0.6.1)
-
-The secret resolver now supports prefix allowlisting for `map[string]string` config
-fields. Any allowlist entry that is a prefix of a child key (e.g. `mcp_activity_log.http.headers`
-covering `mcp_activity_log.http.headers.X-API-Key`) is accepted. Used by the new
-remote activity log sinks for per-header secret injection.
 
 
 
@@ -194,10 +182,16 @@ keep the scope of the first release a little more manageable
 2. gcpsec://: GCP Secret Manager.
 3. azkv://: Azure Key Vault.
 
-- priority: low
+#### priority
+low
+
+#### comments
 - comment: this is potentially expensive to implement, and it make sense to wait until we actually see someone using
   this solution
 - comment: also, these names aren't standard, so we have to write adapters in any case
+
+
+
 
 
 
@@ -211,7 +205,10 @@ different types of requests - for example, by MCP, or even perhaps by Tool.
 We need to modify the Keep config to allow different workflow plugins to be invoked
 for different service / tool combos
 
-- priority: low
+#### priority
+low
+
+#### comments
 - comment: this is probably interesting, but we don't have any enterprise-scale 
   workflow tools to use for testing purposes, which makes this challenging to design, difficult to implement and impossible to test
 
@@ -223,7 +220,11 @@ for different service / tool combos
 
 ### Task: Optionally create a Portcullis-Gate API to collect the list of DENY responses, along with trace/session information
 not sure if this is necessary. It might be helpful for troubleshooting
-- priority: very low
+
+#### priority
+very low
+
+#### comments
 - comment: not sure if the juice is worth the squeeze
 
 
@@ -232,29 +233,53 @@ not sure if this is necessary. It might be helpful for troubleshooting
 
 ### Task: Consider some mechanism to explain the escalation claims in human language
 This might be very tricky, given how complex some MCP requests can be.
-- priority: low
+
+#### priority
+low
 
 
 ### Task: Potential for limited-use of the escalation tokens at Portcullis-Gate
 Configuration option at Portculils-Gate to allow escalation tokens to be used a limited number of times before being
 automatically deleted
-- priority: low
+
+#### priority
+low
+
+#### comments
 - comment: this might be a feature for auditors? Not sure
 
 
-### Task: Add performance monitoring to Portcullis-Keep
-Use the OpenTelemetry wrapper around HTTP calls to get detailed performance measurements
-- priority: medium
+
+
+
+### Task: Demo smoke test suite
+
+A self-contained test harness run against a live demo stack after implementing a new feature, to confirm that all components are still wired together correctly and no regressions have been introduced. The suite should exercise allow, deny, and escalate-returns-pending-response outcomes, identity injection, the metrics endpoints, and health/readiness probes. Escalation approval and retry are out of scope (requires human interaction by design). Workflow outcome is also out of scope for now.
+
+#### Key questions to resolve in the design spec
+
+- Authentication strategy: fixed test identities with known groups to drive predictable allow/deny/escalate outcomes
+- Delivery: Go integration tests tagged `//go:build smoketest`, run with `go test -tags smoketest -v ./smoketest/...`; config (endpoint URLs, bearer token, test identities) passed via a YAML file pointed to by an env var or `-config` flag in `TestMain`.
+
+#### priority
+high
 
 
 
 
-### Task: Add /metrics endpoint to Keep, Guard, and Gate
-Expose a Prometheus-compatible `/metrics` endpoint on each component. At minimum,
-Keep should expose activity log delivery counters (`buffer_dropped`, `exported_entries`,
-`sink_dropped_batches`, `sink_dropped_entries`) currently surfaced temporarily via `/readyz`.
-Remove the `activity_log` field from `/readyz` once `/metrics` is in place.
-- priority: medium
+### Task: Add performance monitoring to Portcullis
+Use the OpenTelemetry wrapper around HTTP calls to get detailed performance measurements.
+* Keep should report metrics around usage, PDP response types (allow/deny/escalate/workflow) and failures (failures to connect to remote MCPs, failures to deliver activity logs to SIEM destinations, etc)
+* Guard should report metrics around escalation token creation
+* Multi-Tenant Gate should report metrics around usage and PDP decision responses from Keep
+* Single-Tenant Gate will not report metrics.  
+
+We should use OpenTelemetry, and offer a `/metrics` endpoint .
+
+We should move data from the response to `/readyz` if it makes more sense in `/metrics`
+
+#### priority
+medium
 
 
 
@@ -266,7 +291,9 @@ Remove the `activity_log` field from `/readyz` once `/metrics` is in place.
 Right now, the denial reason is fairly generic. But in the Rego reference implementation, we could include a reason as
 part of the response,
 potentially customized to each rule, which could then be echoed to the user.
-- priority: low
+
+#### priority
+low
 
 
 
@@ -280,7 +307,9 @@ This is a config consistency issue - Gate has configuration that lets IT customi
 the messages delivered to the User for escalation and deny results.  But instead of
 calling it `escalate`, we're calling it `requires_approval`.  Which is simultaneously
 more informative and less consistent.
-- priority: low
+
+#### priority
+low
 
 
 
@@ -294,7 +323,11 @@ is a security violation.  Then we've added a few 'supression' flags to keep
 the system from generating a particular warning.  All of these flags should
 be moved to be "under" the `mode: dev` flag, so the developers who don't need
 to see the flags can turn them on and off easily.  
-- priority: low
+
+#### priority
+low
+
+#### comments
 - comment: this is mostly a feature of convenience
 
 
@@ -306,8 +339,31 @@ to see the flags can turn them on and off easily.
 ### Task: Allow Portcullis-Keep to add extra data to MCP server calls
 if the MCP server requires a secret or some sort of certificate in order to accept MCP requests, Keep can be
 modified
-- priority: medium-low
+
+#### priority
+medium-low
+
+#### comments
 - comment: this could be really tricky to implement properly, need a lot of examples first
+
+
+
+
+
+### Task: production YAML should not support unknown keys in the responsibility section
+
+If the portcullis-localfs tool configuration is incorrect, it could allow the agent access to sensitive
+areas of the user's filesystem.  Ensuring that there are no unknown keys in the config YAML will 
+help avoid that issue.
+
+#### priority
+very low
+
+#### comments
+2026-05-05 : I have no idea what this means. What are unknown keys in this context???
+2026-05-11 : Perhaps this means that bad YAML defaults the localfs tool to escalate for
+             every call, instead of a list of absolute deny options
+
 
 
 
@@ -321,6 +377,38 @@ These tasks seem unnecessarily complex and not worth doing
 Full config reload via admin API — extend Keep's `POST /admin/reload` and add an
 equivalent Guard endpoint to re-resolve all secrets (including `vault://` URIs)
 without a process restart, enabling zero-downtime secret rotation
-- priority: medium-low
+
+#### priority
+medium-low
 
 
+
+
+
+
+### Task: Fine-grained control over MCP request and response data logging
+
+#### Problem
+
+Some privacy rules and security concerns impact activity logging.  Instead of global rules about activity logging,
+customers might prefer more nuanced logging policy
+
+#### Proposed Solution(s)
+
+1. We expand the configuration around activity logging, so there's a default, and then each service / tool combo can have a custom policy - full, truncated, none, metadata, hash
+
+
+* full:  log everything
+* truncated: reduce content to a specified maximum length
+* none: do not log this activity
+* metadata: only log the information about the activity, not the actual activity (user identity, date, time, size of response, etc)
+* hash: log the metadata and a cryptographic hash of the activity, not the actual activity
+
+
+2. We send the activity data to a PDP, and the PDP logs it as part of the PDP's normal decision log
+
+3. We send the activity directly to an SIEM sink, so we don't log it locally at all
+
+
+#### priority
+low

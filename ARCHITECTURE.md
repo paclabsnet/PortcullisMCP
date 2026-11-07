@@ -54,21 +54,70 @@ A web-based service where users or administrators approve pending escalation req
 
 Runs on the developer's machine alongside the agent.
 
-- **MCP proxy** — presents itself as an MCP server (stdio or UDS). Aggregates tool schemas from Keep.
+- **MCP proxy** — presents itself as an MCP server (stdio or HTTP). Aggregates tool schemas from Keep.
 - **Structural fast-path** — local rules for sandbox containment and protected path denial.
 - **User identity collection** — resolves identity via OIDC (preferred) or OS-identity.
-- **Escalation token store** — local JSON file (`~/.portcullis/tokens.json`) for persistence.
-- **Management API** — localhost HTTP server for token CRUD.
-- **Decision Log Batching** — buffered channel for non-blocking audit logging to Keep.
+- **Escalation token store** — local JSON file (`~/.portcullis/tokens.json`) for single-tenant; Redis-backed for multi-tenant.
+- **Management API** — localhost HTTP server for token CRUD (single-tenant only).
+- **Metrics** — Prometheus scrape endpoint (`/metrics`) for Multi-Tenant Gate; Single-Tenant Gate does not expose metrics.
 
 ### portcullis-keep
 
 Central enterprise service.
 
-- **PDPClient interface** — pluggable. Primary implementation calls OPA REST API.
+- **PDPClient interface** — pluggable. Primary implementation calls OPA REST API (`opa`); `noop` skips evaluation.
 - **MCPRouter** — maintains connections to registered MCP backend servers.
 - **WorkflowHandler interface** — pluggable (ServiceNow, Webhook, URL).
-- **Decision Logger** — batches and forwards logs to SIEM/audit systems.
+- **ActivityLogger** — asynchronous bounded-memory audit log for MCP requests and responses; writes to file, stdout, HTTP (NDJSON/JSON array), or OTLP sinks.
+- **Metrics** — Prometheus scrape endpoint (`/metrics`) with PDP decisions, backend call durations, and activity log delivery counters.
+
+## Observability
+
+PortcullisMCP uses OpenTelemetry (OTel) for both distributed tracing and Prometheus metrics. The two concerns are
+independently configured: disabling or omitting the trace exporter does not affect metrics, and vice versa.
+
+### Metrics
+
+Metrics are enabled by default for Keep, Guard, and Multi-Tenant Gate; they are force-disabled for Single-Tenant Gate.
+Each component exposes a Prometheus scrape endpoint (default `/metrics`).
+
+| Component | Endpoint | Auth |
+|-----------|----------|------|
+| Keep | `GET /metrics` | subject to Keep's existing auth middleware |
+| Guard | `GET /metrics` on both UI and API listeners | no extra auth — rely on network controls |
+| Multi-Tenant Gate | `GET /metrics` on the MCP listener | bypasses MCP session auth; subject to TLS/network controls |
+
+**Keep metrics** (`portcullis_keep_*`)
+- `http_requests_total` / `http_request_duration_seconds` — per route/method/status
+- `pdp_decisions_total` / `pdp_decision_duration_seconds` — per engine (`opa`/`noop`) and decision
+- `backend_calls_total` / `backend_call_duration_seconds` — per backend server and status
+- `activity_log_buffer_dropped_total` / `exported_entries_total` / `sink_dropped_batches_total` / `sink_dropped_entries_total` — activity log delivery counters (observable callbacks)
+
+**Guard metrics** (`portcullis_guard_*`)
+- `http_requests_total` / `http_request_duration_seconds` — per route/method/status/listener
+- `tokens_created_total` — per method (`ui_approval`/`direct_deposit`) and status (`success`/`failed`)
+- `tokens_claimed_total` — per status (`success`/`not_found`)
+- `pending_requests_total` — per action (`stored`/`approved`)
+
+**Gate metrics** (`portcullis_gate_*`, multi-tenant only)
+- `http_requests_total` / `http_request_duration_seconds` — per route/method/status
+- `tool_calls_total` / `tool_call_duration_seconds` — per tool name, decision (`allow`/`deny`/`escalate`/`error`), and source (`fastpath`/`keep`)
+- `escalation_claims_total` — per status
+- `active_sessions` — per-process UpDownCounter (not authoritative for clustered deployments)
+
+**Configuration** (`operations.telemetry.metrics`)
+```yaml
+operations:
+  telemetry:
+    metrics:
+      enabled: true      # omit to use component default (true for Keep/Guard/MT-Gate)
+      path: /metrics     # default; must start with /
+```
+
+### Tracing
+
+Distributed traces use W3C TraceContext propagation. The `exporter` field under `operations.telemetry` controls the
+OTLP trace exporter; `noop` (or omitting the field) disables trace export without affecting metrics.
 
 ## Key Go Types
 

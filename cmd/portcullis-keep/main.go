@@ -82,7 +82,7 @@ func main() {
 
 	report.Log("portcullis-keep")
 
-	shutdownTelemetry, err := telemetry.Setup(ctx, cfg.Operations.Telemetry)
+	shutdownTelemetry, err := telemetry.Setup(ctx, cfg.Operations.Telemetry, true)
 	if err != nil {
 		slog.Error("init telemetry", "error", err)
 		os.Exit(1)

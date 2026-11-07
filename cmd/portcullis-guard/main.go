@@ -24,6 +24,7 @@ import (
 
 	"github.com/paclabsnet/PortcullisMCP/internal/guard"
 	cfgloader "github.com/paclabsnet/PortcullisMCP/internal/shared/config"
+	"github.com/paclabsnet/PortcullisMCP/internal/telemetry"
 	"github.com/paclabsnet/PortcullisMCP/internal/version"
 )
 
@@ -80,6 +81,13 @@ func main() {
 	}
 
 	report.Log("portcullis-guard")
+
+	shutdownTelemetry, err := telemetry.Setup(ctx, cfg.Operations.Telemetry, true)
+	if err != nil {
+		slog.Error("init telemetry", "error", err)
+		os.Exit(1)
+	}
+	defer func() { _ = shutdownTelemetry(context.Background()) }()
 
 	srv, err := guard.NewServer(ctx, cfg)
 	if err != nil {
