@@ -1,3 +1,15 @@
+## [0.6.3]
+
+### Added
+- logging for MCP responses
+- support for SIEM streaming (http and oltp)
+- added prometheus metrics endpoint /metrics to the various servers (not the single-tenant gate)
+
+### Fixed
+- various security fixes and updates
+- updated the MCP go SDK to 1.4.1
+
+
 ## [0.5.2]
 
 ### Added
