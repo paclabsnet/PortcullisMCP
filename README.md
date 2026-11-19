@@ -16,6 +16,7 @@ Portcullis is built and maintained by [PAC.Labs](https://paclabs.io), who provid
 
 ```mermaid
 flowchart LR
+    User["User"]
     Agent["AI Agent"]
     Gate["portcullis-gate"]
     Keep["portcullis-keep"]
@@ -23,9 +24,11 @@ flowchart LR
     Backends["MCP Backends"]
     Guard["portcullis-guard"]
 
-    Agent --> Gate --> Keep --> PDP
+    User --> Agent
+    Agent -->|MCP| Gate --> Keep --> PDP
     Keep --> Backends
-    Guard -. escalation .-> Gate
+    Gate <-->|escalation token API| Guard
+    User -->|approves escalations| Guard
 
     style Guard fill:#f8f8ff,stroke:#9999cc
 ```
