@@ -127,6 +127,16 @@ Three components form the system:
 
 For a detailed walkthrough of the escalation flow, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
+## Security model
+
+**Agent self-approval.** The most important production hardening step is placing Guard behind a corporate SSO proxy (Cloudflare Access, Pomerium, nginx + oauth2-proxy, etc.). An agent that receives an escalation approval URL cannot complete an interactive SSO login — only a human can. Without an SSO proxy, a sufficiently capable agent could visit the approval URL itself and self-approve. See [docs/guard-sso-proxy.md](docs/guard-sso-proxy.md) for deployment examples.
+
+**Escalation tokens are argument-bound.** Approval for `DROP TABLE temp_logs` generates a JWT that only authorizes that exact call. An attempt to reuse the token for `DROP TABLE users` is denied. Tokens carry a mandatory TTL and can be revoked at any time from the Gate management UI.
+
+**Fails closed.** If Keep cannot reach the PDP, no tool call proceeds. There is no allow-by-default fallback.
+
+**Backend isolation.** In production, MCP backends should accept connections only from Keep (via mTLS or firewall rules), so policy cannot be bypassed by connecting an agent directly to a backend.
+
 ## Documentation
 
 | Topic | Link |
@@ -148,7 +158,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Security
 
-To report a vulnerability, see [SECURITY.md](SECURITY.md). For Guard deployment hardening (preventing agent self-approval), see [docs/guard-sso-proxy.md](docs/guard-sso-proxy.md).
+To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## License
 
