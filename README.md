@@ -2,11 +2,15 @@
 
 Authorization gateway for AI agents using MCP. Every tool call is policy-checked. Sensitive actions require human approval. Everything is logged.
 
-- **Policy-as-Code**: OPA (or any PDP) evaluates each MCP request and returns allow / deny / escalate
-- **Human-in-the-Loop**: escalation tokens bind approval to exact arguments; an agent cannot reuse them for different calls
-- **Complete audit trail**: identity, tool call, policy decision, and tool response — exportable to your SIEM
-- **No credentials in the agent**: identity and secrets are injected by Portcullis
-- **Fails closed**: if the PDP is unreachable, nothing runs
+| Problem | How Portcullis solves it | Component |
+|---------|--------------------------|-----------|
+| Agents get all-or-nothing access — if they can call a tool, they can call it without limits | Policy evaluated on every call; allow, deny, or escalate based on tool, arguments, and user identity | Keep + OPA |
+| Agents take irreversible actions without human review | Sensitive calls pause for explicit human approval; escalation tokens bind approval to the exact arguments the human reviewed | Keep + Guard |
+| No record of what the agent did or why it was permitted | Every tool call, policy decision, and response logged with a trace ID, exportable to your SIEM | Keep + OPA |
+| Secrets and credentials accumulate in agent context | User identity is injected by Gate from your IdP; secrets are held by Keep — the agent never sees them | Gate + Keep |
+| An agent acting for a user inherits that user's full permissions | Policy explicitly separates user access from agent access — agents get only what policy grants them, regardless of the user's own rights | Keep + OPA |
+
+If the PDP is unreachable, no tool call proceeds. There is no allow-by-default fallback.
 
 ## Enterprise support
 
