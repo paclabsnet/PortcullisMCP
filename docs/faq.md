@@ -76,7 +76,12 @@ Yes. Portcullis has no external dependencies by default. Use a local OPA instanc
 
 **What about telemetry and monitoring?**
 
-OpenTelemetry is embedded in all three components. Keep, Guard, and multi-tenant Gate expose `/metrics` (Prometheus scrape), `/healthz`, and `/readyz`. Decision logs from OPA can be directed to any SIEM.
+OpenTelemetry is embedded in all three components. Keep, Guard, and multi-tenant Gate expose `/metrics` (Prometheus scrape), `/healthz`, and `/readyz`.
+
+For audit logging, there are two complementary mechanisms:
+
+- **OPA decision log** — records every policy decision (allow/deny/escalate) with structured metadata, configurable via standard OPA decision log plugins.
+- **Keep MCP Activity Log** — records every MCP request, policy decision, and tool response payload passing through Keep. Supports a rotating local file sink, an HTTP batch sink (Splunk HEC, custom ingest), and an OTLP sink. See [configuration.md](configuration.md) for details.
 
 **What happens if a user approves an escalation by mistake? Can it be revoked?**
 
@@ -97,7 +102,7 @@ The OIDC token proves who you are (Alice). The escalation token proves what Alic
 
 **Auditors want to know that Portcullis is capturing everything.**
 
-Every OPA decision is logged in SIEM-friendly formats. The only actions not currently captured by decision logs are agent-driven reads of approved local storage areas — that is on the roadmap.
+Keep's MCP Activity Log records every request and response payload passing through it, including the PDP decision for each call. OPA's decision log provides a parallel, policy-engine-level record of every evaluation. The only current gap is Gate's local filesystem fast-path — reads and writes handled there do not pass through Keep and therefore do not appear in the Keep activity log. That gap is on the roadmap.
 
 **Will this solution run well in a multi-region enterprise?**
 
@@ -137,7 +142,7 @@ Keep and the PDP scale horizontally. You can have geographically disparate Keep 
 
 **Guard maintains user state, so it can't scale.**
 
-Guard supports distributed state via Redis, so it can be deployed as a cluster.
+Guard uses Redis for distributed escalation state and can be deployed as a cluster. Keep also uses Redis for multi-tenant escalation token storage, with context-partitioned keys that keep each user's state isolated.
 
 **I can't have MCP servers in my network.**
 

@@ -64,6 +64,43 @@ Example configs in `config/`:
 make run-keep
 ```
 
+### Redis (Keep)
+
+Keep uses Redis for multi-tenant escalation state (pending escalation store and issued escalation token store). Redis 6.2+ is required for the `GETDEL` command used for atomic single-use token retrieval. See [system-requirements.md](system-requirements.md).
+
+### Escalation scoping (multi-tenant)
+
+In multi-tenant mode, Keep's `escalation` config key controls how escalation state is partitioned across users:
+
+```yaml
+escalation: "session"       # scope pending state to the user's session (default)
+# escalation: "fingerprint" # scope to a stable fingerprint of the user's identity
+# escalation: "disabled"    # disable escalation entirely
+```
+
+### MCP Activity Log
+
+Keep logs every MCP request, policy decision, and tool response to a configurable sink. This is independent of OPA's decision log and captures the full request and response payloads.
+
+```yaml
+mcp_activity_log:
+  enabled: true
+  file: "/var/log/portcullis/activity.log"   # lumberjack rotating file sink
+  max_size_mb: 100
+  max_backups: 5
+  max_age_days: 30
+  include_pdp_decision: true    # include the full PDP response in each log entry
+  truncate_payloads: true        # truncate large payloads to a configured maximum
+  buffer_size: 1000              # async buffer depth
+```
+
+**Remote sinks** are also supported for zero-disk or SIEM-forwarding deployments:
+
+- **HTTP batch sink** — posts log entries as `ndjson` or `json_array` to any HTTP endpoint (Splunk HEC, custom ingest, etc.)
+- **OTLP sink** — sends log entries as OpenTelemetry log records to any OTLP-compatible backend
+
+PDP errors always produce a log entry with `pdp_decision: "error"` regardless of the `include_pdp_decision` setting.
+
 ### Admin reload
 
 Keep exposes `POST /admin/reload`, which re-reads `keep.yaml` from disk and reconnects to all configured backends. Useful for adding or removing MCP backends without a full restart. Protected by an `X-Api-Key` header matching the `admin.token` value in config.

@@ -50,3 +50,7 @@ process.
 ## License
 
 By contributing, you agree that your contributions will be licensed under the Apache License 2.0.
+
+## AI tooling
+
+The architecture, Rego policies, and Raygun tests are human-authored. AI coding assistants (Claude, Copilot, Gemini) contributed to implementation work including error handling, cryptographic processing, config validation, logging, and input sanitization.
