@@ -39,11 +39,14 @@ flowchart LR
 
 ### Try without a Go toolchain (Docker only)
 
-**Prerequisites:** Docker, `make`
+**Prerequisites:** Docker
 
 ```sh
 git clone https://github.com/paclabsnet/PortcullisMCP.git
 cd PortcullisMCP
+docker compose -f deploy/docker-singletenant/docker-compose.yml up -d --build
+
+# or, if you have make:
 make demo-start
 ```
 
@@ -93,7 +96,10 @@ Please use Portcullis to update order O001 status to shipped
 The last request triggers an escalation. The agent will present a link — click it, review the exact tool arguments on the Guard approval page at `http://localhost:8444`, and approve. Ask the agent to retry; it should succeed.
 
 ```sh
-make demo-stop   # stop the demo stack
+docker compose -f deploy/docker-singletenant/docker-compose.yml down
+
+# or, if you have make:
+make demo-stop
 ```
 
 ### Build from source (contributors)
