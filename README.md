@@ -2,16 +2,20 @@
 
 ## What is it?
 
-PortcullisMCP is a policy enforcement gateway/firewall for MCP-based AI agents. It sits between AI agents and an organization's MCP tools to enforce identity-aware policy on every tool call, so teams can adopt MCP safely without giving up control, auditability, or least-privilege access.
+PortcullisMCP is an open-source authorization gateway for AI Agents using MCP.
 
-   - Fine-Grained Policy Control: Use Policy-as-Code to define exactly which tools an agent can use,
-     on which resources, and under what conditions.
-   - Human-in-the-Loop Escalation: Automatically pause sensitive operations and request human approval before
-     the agent can proceed.
-   - Audit & Visibility: Centrally log every tool call, decision, and identity for full compliance and troubleshooting.
-   - Identity injection: The system can inject identity information for the actual MCP requests, so the Agent is no longer in the loop
+Every tool call is checked against policy. Sensitive actions can be escalated for human approval. Every MCP request, response and policy decision is logged to your SIEM.
 
-PortcullisMCP is managed by [PAC.Labs](https://paclabs.io), and is designed to be compatible with virtually any fine-grained authorization platform.
+* *Policy-as-Code*: A pluggable PDP (OPA by default) analyzes each MCP request, returning allow / deny / escalate
+* *Human-in-the-Loop*: approvals are bound to the exact arguments, so an agent can't get approval for one request and execute another
+* *Complete audit trail*: the identity of the user, the tool call, the policy decision and the tool response, exportable to your SIEM
+* *No credentials in the agent*: identity and secrets are injected by Portcullis, the agent never sees them
+* *Fails closed*: if the PDP is unreachable, nothing runs
+
+## Enterprise support
+
+Portcullis is built and maintained by [PAC.Labs](https://paclabs.io), who provide production support (SLA-backed outage response and fixes) and implementation services for OPA, and Portcullis deployments in finance, healthcare and government.
+
 
 ## What problem does it solve?
 
@@ -105,8 +109,6 @@ Agent <--> portcullis-gate <--> portcullis-keep <--> PDP (OPA or custom)
 
 
 ### Explain 'escalation'
-
-(*Note*: this is in the context of the single-tenant mode)
 
 Imagine you have a database MCP. That MCP might have a mechanism to allow Agents to drop tables. You can use the policy
 at Portcullis-Keep to govern how that drop action is used:
